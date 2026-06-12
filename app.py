@@ -23,6 +23,7 @@ from pages.carteira       import bp as carteira_bp
 from pages.repetir_posicoes import bp as repetir_posicoes_bp
 from pages.precificacao   import bp as precificacao_bp
 from pages.fundos         import bp as fundos_bp
+from pages.teste          import bp as teste_bp
 import db as db_module
 import db_profiler
 import auth
@@ -64,6 +65,7 @@ app.register_blueprint(carteira_bp)
 app.register_blueprint(repetir_posicoes_bp)
 app.register_blueprint(precificacao_bp)
 app.register_blueprint(fundos_bp)
+app.register_blueprint(teste_bp)
 
 
 @app.route("/")
