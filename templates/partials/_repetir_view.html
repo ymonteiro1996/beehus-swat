@@ -1,0 +1,588 @@
+{# ── Repetir Pos view ─────────────────────────────────────────────────
+   Painel + modais do "Posição Projetada". Wrapper `<div id="repetir-view"
+   class="hidden-view">` permite o controlpanel.html alternar visibilidade
+   via `Repetir.open()` / `Repetir.close()` (mesmo padrão de Strip). Na
+   página standalone /repetir-posicoes, o CSS neutraliza `.hidden-view`
+   pra que o painel já nasça visível. #}
+<div id="repetir-view" class="hidden-view">
+
+{# Stylesheet vazio populado em runtime por `Repetir._applyColumnVisibility`.
+   Cada coluna escondida vira uma regra `[data-col="X"]{display:none}` aqui.
+   PRECISA existir antes de qualquer prévia ser renderizada — sem ele, o JS
+   faz early-return e o checkbox "Colunas" não tem efeito visível. #}
+<style id="rp-hidden-cols-style"></style>
+
+<div class="px-6 py-5 space-y-4">
+
+  <!-- ── Top bar: tabs (esquerda) + menu de ações (direita) ────────
+       Padrão visual herdado do `/controlpanel` (`.fb-chip`).
+       Esquerda: 3 abas (Posição projetada / Seleção de Wallets / Regras).
+       Direita: ações de prévia (Revisar/Voltar/B1/Logs/Colunas/Diff).
+       O menu da direita só faz sentido com prévia ativa — os botões
+       já vêm `disabled` por default e são habilitados via JS após a
+       prévia ser gerada. -->
+  <div class="rp-tabs-bar rp-topbar">
+    <!-- Tabs (esquerda) -->
+    <button type="button" class="fb-chip active" id="rp-tab-projetada-btn" data-tab="projetada" data-kind="nav" onclick="Repetir.switchTab('projetada')">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h18M3 21h18M5 7h14M5 11h14M5 15h14M5 19h14"/></svg>Posição projetada
+    </button>
+    <button type="button" class="fb-chip" id="rp-tab-config-btn" data-tab="config" data-kind="nav" onclick="Repetir.switchTab('config')">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>Seleção de Wallets
+    </button>
+    <button type="button" class="fb-chip" id="rp-tab-regras-btn" data-tab="regras" data-kind="nav" onclick="Repetir.switchTab('regras')">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>Regras
+    </button>
+    <div class="rp-topbar-divider"></div>
+    <!-- Menu de utilidades que faz sentido independente de prévia
+         estar aberta. Ações **da prévia** (Voltar / Só com
+         divergência / B1 / Revisar / Executar) ficam no header
+         dinâmico da prévia, ao lado do nome da carteira. -->
+    <button type="button" class="fb-chip" id="rp-logs-btn" data-kind="nav"
+            onclick="Repetir.openLogsList()"
+            title="Histórico de execuções (lê data/repeat_positions_logs/).">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Ver logs
+    </button>
+    <button type="button" class="fb-chip" id="rp-columns-btn" data-kind="nav"
+            onclick="Repetir.openColumnsModal()"
+            title="Mostrar / ocultar colunas da prévia (config persiste em data/posicao_projetada_columns.json).">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>Colunas
+    </button>
+    <!-- Botão "Voltar" da prévia — fica no header principal pra ficar
+         sempre acessível. Permanece `hidden` até a prévia abrir; visível
+         a partir de `runPreviewFor` → `_togglePreviewMode(true)` e
+         escondido por `closePreview`. -->
+    <button type="button" class="fb-chip hidden" id="rp-back-btn" data-kind="nav"
+            onclick="Repetir.closePreview()"
+            title="Fecha a prévia atual e volta para a seleção de carteiras.">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>Voltar
+    </button>
+    <!-- Status da prévia (carregando/carregada/erro). Ancorado à
+         direita via `margin-left:auto`. -->
+    <span id="rp-preview-status" class="text-[11px] text-gray-500" style="margin-left:auto"></span>
+  </div>
+
+  <!-- ── Tab: Posição projetada (preview per wallet) ──────────────────── -->
+  <!-- Each row in the roster carries its own "Última posição" / "Data
+       alvo" inputs and a dedicated "Gerar prévia" button. Preview runs
+       **one wallet at a time** for individual analysis — the result
+       panel below the table is replaced per click. -->
+  <section id="rp-tab-projetada" class="space-y-3">
+
+    <!-- Listas a incluir (checkboxes) — same as before; drives the
+         daily roster query. Wrapped in #rp-picker-section so we can
+         hide it together with the roster when a prévia is open. -->
+    <section id="rp-picker-section" class="bg-white rounded-xl shadow p-4">
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Listas a incluir</p>
+        <div class="flex items-center gap-3 text-[11px]">
+          <button class="text-blue-600 hover:text-blue-800" onclick="Repetir.toggleAllLists(true)">Selecionar todas</button>
+          <span class="text-gray-300">·</span>
+          <button class="text-gray-500 hover:text-gray-700" onclick="Repetir.toggleAllLists(false)">Limpar</button>
+          <span id="rp-status" class="text-[11px] text-gray-500 ml-3"></span>
+        </div>
+      </div>
+      <div id="rp-list-picker">
+        <p class="text-xs text-gray-300 italic">Nenhuma lista salva — crie em "Seleção de Wallets".</p>
+      </div>
+    </section>
+
+    <!-- Wallet roster — hidden once a prévia is open (operator is
+         focused on the active wallet's analysis). "Voltar para a
+         seleção" in the action bar restores both. -->
+    <div id="rp-roster-section" class="bg-white rounded-xl shadow overflow-hidden">
+      <table class="rp-tbl">
+        <thead>
+          <tr>
+            <th class="rp-tbl-left">Empresa</th>
+            <th class="rp-tbl-left">Carteira</th>
+            <th>Última posição</th>
+            <th>Data atual</th>
+            <th style="width:120px">Ação</th>
+          </tr>
+        </thead>
+        <tbody id="rp-daily-tbody">
+          <tr><td colspan="5" class="rp-tbl-left" style="text-align:center; color:#9ca3af; padding:14px 0">Marque pelo menos uma lista acima para carregar carteiras.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── Conciliação NAV — atalho para rodar prévia ─────────────────
+         Réplica enxuta do step-1 do /conciliacao. O operador pode
+         filtrar por empresa + data final + limiar e ver, em uma grade
+         de 10 datas, quantas carteiras têm divergência |retNAV − retContrib|.
+         Clicando numa data, carrega as carteiras com divergência;
+         clicando numa carteira, dispara `runPreviewFor` com:
+            target_date = data selecionada
+            source_date = formerDate da carteira (última navPackage anterior)
+         Reusa os endpoints existentes /api/conciliacao/dates e /rows. -->
+    <section id="rp-conciliacao-section" class="bg-white rounded-xl shadow p-4 mt-4">
+      <h2 class="text-sm font-semibold text-gray-800 mb-3">Carteiras com divergência (Conciliação NAV)</h2>
+
+      <div class="flex items-end gap-4 flex-wrap pb-2">
+        <div>
+          <label class="block text-[10px] text-gray-500 mb-1">Empresa</label>
+          <select id="rp-cl-company"
+                  onchange="Repetir.conciliacaoOnCompanyChange()"
+                  class="border rounded px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[220px]">
+            <option value="">Selecione uma empresa...</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-[10px] text-gray-500 mb-1">Data final</label>
+          <input id="rp-cl-end-date" type="date"
+                 onchange="Repetir.conciliacaoLoadDates()"
+                 class="border rounded px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        </div>
+        <div>
+          <label class="block text-[10px] text-gray-500 mb-1" title="Carteiras com |returnNavPerShare − returnContribution| acima deste valor são listadas.">
+            Limiar |Δ| (%)
+          </label>
+          <input id="rp-cl-threshold" type="number" step="0.001" min="0" max="100" value="0.01"
+                 onchange="Repetir.conciliacaoLoadDates()"
+                 class="border rounded px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 w-24" />
+        </div>
+        <span id="rp-cl-status" class="text-[10px] text-gray-400 self-center"></span>
+      </div>
+
+      <!-- Date cards grid -->
+      <div id="rp-cl-dates" class="grid grid-cols-10 gap-2 mt-2 hidden"></div>
+
+      <!-- Wallets table -->
+      <div id="rp-cl-wallets" class="mt-3 hidden">
+        <p class="text-[10px] text-gray-500 mb-1">Carteiras com divergência <span id="rp-cl-wallets-count" class="text-gray-400"></span>. Clique para rodar prévia.</p>
+        <div class="bg-white rounded-xl border overflow-hidden" style="max-height:420px; overflow-y:auto">
+          <table class="rp-tbl">
+            <thead>
+              <tr>
+                <th class="rp-tbl-left">Carteira</th>
+                <th style="text-align:right">NAV</th>
+                <th style="text-align:right">Δ Rent.</th>
+                <th style="text-align:right">Novo Gap %</th>
+                <th class="rp-tbl-left" style="width:140px">Última pos. anterior</th>
+                <th style="width:110px; text-align:center">Ação</th>
+              </tr>
+            </thead>
+            <tbody id="rp-cl-wallets-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Status da prévia agora vive no `rp-topbar` (alinhado à
+         direita ao lado dos chips de ação). -->
+
+
+    <!-- Single-wallet preview area. The preview block contains, in
+         this order: cabeçalho + tabela de securities + bloco
+         Transações (CRUD) + bloco Provisões (CRUD), todos escopados
+         à carteira ativa. Caixa e Provisões também são linhas dentro
+         da tabela da prévia (display-only); os blocos abaixo são CRUD
+         interativo. -->
+    <div id="rp-preview-results" class="space-y-4"></div>
+  </section>
+
+  <!-- ── Tab: Regras (read-only documentation) ─────────────────────────── -->
+  <section id="rp-tab-regras" class="hidden bg-white rounded-xl shadow p-5 text-xs text-gray-700 space-y-3">
+    <p>
+      A projeção é gerada aplicando um <strong>rule chain</strong> em
+      ordem fixa sobre cada security do <code>processedPosition</code>
+      da data de origem. As regras compartilham um contexto comum
+      (transactions, security metadata, preços) — cada regra só vê o
+      estado já transformado pelas anteriores. As regras estão
+      implementadas em
+      <code>pages/repetir_posicoes.py</code> (objeto <code>_RULES</code>).
+    </p>
+
+    <div class="space-y-2">
+      <details class="bg-gray-50 rounded-md p-3" open>
+        <summary class="cursor-pointer font-semibold text-gray-800">1. RULE_TARGET_PROCESSED_PRICE</summary>
+        <p class="mt-1 text-gray-600">
+          Quando <code>processedPosition</code> já existe para a data
+          alvo, o PU dessa snapshot vence sobre qualquer cálculo. É a
+          fonte autoritativa. Sem entrada na target → no-op (próxima
+          regra entra). Adiciona a flag <code>targetPrice</code>.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">2. RULE_CURVA_PRICE</summary>
+        <p class="mt-1 text-gray-600">
+          Fallback de PU: consulta o template salvo em "Preços na
+          Curva" (<code>data/precificacao_lists.json</code>) usando a
+          chave estrita <code>walletId|securityId|targetDate</code>. Sem
+          fallback agnóstico — entradas sem <code>walletId</code> são
+          ignoradas. Pulada quando <code>targetPrice</code> já marcou a
+          linha. Adiciona a flag <code>curvaPrice</code>.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">3. RULE_BUYSELL_QTY (transações)</summary>
+        <p class="mt-1 text-gray-600">
+          Soma os <code>delta</code> das transações
+          <code>buySell</code> liquidando na data alvo, com
+          <strong>sinal invertido</strong> em relação ao cash flow
+          (<em>compra</em> em caixa = negativo, mas a posição
+          aumenta).
+        </p>
+        <ul class="mt-1 ml-4 list-disc text-gray-600">
+          <li>Se <code>tx.quantity</code> existe → <code>delta = -tx.quantity</code>.</li>
+          <li>Senão, se <code>tx.balance</code> existe e <code>row.pu &gt; 0</code> → <code>delta = -tx.balance / row.pu</code>.</li>
+          <li>Senão, transação é ignorada (sem info suficiente).</li>
+        </ul>
+        <p class="mt-1 text-gray-600">
+          Resultado: <code>new_qty = row.qty + Σ delta</code>,
+          <code>balance = new_qty × pu</code>. Adiciona a flag
+          <code>buySell</code> e anexa cada transação ao bloco
+          "Transação" da prévia.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">4. RULE_MATURITY (vencimento)</summary>
+        <p class="mt-1 text-gray-600">
+          Quando <code>security.maturityDate == targetDate</code>,
+          a quantidade vai a zero e o saldo também. A linha é mantida
+          no payload (com qty 0) para o upstream registrar a baixa
+          explicitamente — não é removida. Vence sobre buySell na
+          mesma data. Adiciona a flag <code>maturity</code>.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">5. RULE_PRICE (tagging final)</summary>
+        <p class="mt-1 text-gray-600">
+          Apenas etiqueta o tipo de precificação herdado quando nenhuma
+          das regras de preço anteriores marcou a linha: pricingType
+          <code>B1</code> → <code>priceUnchanged</code>; <code>C3</code> →
+          <code>pendingPrice</code>; outros → <code>priceUnchanged</code>.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">Caixa (`cashAccounts`)</summary>
+        <p class="mt-1 text-gray-600">
+          <code>caixa(target) = caixa(source) + Σ transactions.balance</code>
+          onde <code>liquidationDate ∈ (sourceDate, targetDate]</code>
+          (qualquer tipo, <code>trashed != true</code>). Inclui rendimentos,
+          taxas, depósitos/retiradas — mesma lógica do
+          <strong>Painel de Controle &gt; Carteira</strong>.
+          Aparece na linha "Caixa" da prévia (banda verde) e vai como
+          <code>Caixa = "Sim"</code> no <code>.xlsx</code> de upload.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">Provisões</summary>
+        <p class="mt-1 text-gray-600">
+          Lista as <code>provisions</code> cuja janela <code>[initialDate,
+          liquidationDate)</code> cobre a data alvo. Cada provisão
+          aparece como uma linha separada na prévia (banda âmbar).
+          Display-only: não vai no upload.
+        </p>
+      </details>
+
+      <details class="bg-gray-50 rounded-md p-3">
+        <summary class="cursor-pointer font-semibold text-gray-800">Filtro de origem</summary>
+        <p class="mt-1 text-gray-600">
+          Ativos com <code>quantity == 0</code> no source (já liquidados
+          em datas anteriores) são descartados. Ativos <code>isNew</code>
+          (apenas em transactions na data alvo) continuam.
+        </p>
+      </details>
+    </div>
+  </section>
+
+
+  <!-- ── Tab: Seleção de Wallets ──────────────────────────────────────── -->
+  <section id="rp-tab-config" class="hidden bg-white rounded-xl shadow p-5">
+    <p class="text-[11px] text-gray-500 mb-3">
+      Crie e gerencie <strong>listas nomeadas</strong> de carteiras.
+      A rotina diária roda sobre a união dos walletIds das listas que
+      o operador marcar na aba "Rotina diária". O filtro de empresa
+      abaixo serve apenas para ajudar a popular o pane "Disponíveis".
+      Listas são persistidas em <code>data/repeat_positions_config.json</code>.
+    </p>
+    <div class="mb-3 max-w-md">
+      <label class="rp-label">Empresa (filtro auxiliar)</label>
+      <select id="rp-company" class="rp-input" onchange="Repetir.onCompanyChange()">
+        <option value="">Carregando...</option>
+      </select>
+    </div>
+    <div class="rp-xfer">
+      <div class="rp-xfer-pane">
+        <h4>Disponíveis <span id="rp-wal-available-count">0</span></h4>
+        <input type="search" id="rp-wal-available-search" class="rp-input mb-1"
+               placeholder="Filtrar por nome..."
+               oninput="Repetir.onSearchChange('available', this.value)" />
+        <select id="rp-wal-available" multiple ondblclick="Repetir.addWalletSelected()"></select>
+      </div>
+      <div class="rp-xfer-actions">
+        <button onclick="Repetir.addWalletSelected()" title="Adicionar">→</button>
+        <button onclick="Repetir.addWalletAll()"      title="Adicionar todas (filtradas)">»</button>
+        <button onclick="Repetir.removeWalletSelected()" title="Remover">←</button>
+        <button onclick="Repetir.removeWalletAll()"      title="Limpar todas (filtradas)">«</button>
+      </div>
+      <div class="rp-xfer-pane">
+        <h4>Selecionadas <span id="rp-wal-selected-count">0</span></h4>
+        <input type="search" id="rp-wal-selected-search" class="rp-input mb-1"
+               placeholder="Filtrar por nome / empresa..."
+               oninput="Repetir.onSearchChange('selected', this.value)" />
+        <select id="rp-wal-selected" multiple ondblclick="Repetir.removeWalletSelected()"></select>
+      </div>
+    </div>
+    <div class="mt-3 flex items-center gap-2">
+      <button class="rp-btn rp-btn-primary" onclick="Repetir.openSaveListModal()"
+              title="Salva a seleção atual como uma lista nomeada (ou substitui uma existente)">Salvar como lista...</button>
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.clearSelection()"
+              title="Limpa o pane 'Selecionadas' (não exclui listas salvas)">Limpar seleção</button>
+      <span id="rp-config-status" class="text-[11px] text-gray-500"></span>
+    </div>
+
+    <!-- ── Listas Salvas ─────────────────────────────────────────────── -->
+    <!-- Clicking a list LOADS its walletIds into the transfer-list above
+         for editing. Saving (via "Salvar como lista...") with the same
+         name overwrites the loaded list. The × button deletes the
+         preset entirely. -->
+    <div class="mt-5 pt-4 border-t border-gray-200">
+      <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">Listas Salvas</p>
+      <div id="rp-wallet-lists-body">
+        <p class="text-xs text-gray-300 italic">Nenhuma lista salva.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- "Preços na curva" tab removed — agora vive como página dedicada no
+       sidebar ("Preços na Curva" → /precificacao). A regra de PU pela curva
+       continua sendo aplicada automaticamente pelo backend em
+       /api/repetir-posicoes/preview (ver _rule_curva_price em
+       pages/repetir_posicoes.py): ao clicar "Gerar prévia", o servidor
+       carrega o template global salvo em /precificacao e usa o PU
+       resultante. -->
+</div>
+
+<!-- ── Save-as-list modal ─────────────────────────────────────────────── -->
+<div id="rp-save-list-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal" style="width:480px">
+    <div class="rp-modal-head">Salvar seleção como lista</div>
+    <div class="rp-modal-body" style="max-height:60vh">
+      <p class="text-xs text-gray-600 mb-3">
+        A lista guarda apenas os <strong>walletIds</strong> selecionados.
+        Usar um nome existente <strong>substitui</strong> a lista; um nome
+        novo cria. A rotina diária só roda sobre listas marcadas na aba
+        "Rotina diária".
+      </p>
+      <label class="rp-label">Nome da lista</label>
+      <input id="rp-save-list-name" type="text" class="rp-input"
+             placeholder="Ex: Carteiras HTM, Cliente XYZ..." />
+      <p id="rp-save-list-hint" class="hidden mt-1 text-[10px] text-amber-600">
+        Já existe uma lista com este nome — será substituída ao salvar.
+      </p>
+      <div class="mt-3">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">Listas existentes</p>
+        <div id="rp-save-list-existing" class="text-[10px] text-gray-500 flex flex-wrap gap-1.5">
+          <span class="italic text-gray-300">Nenhuma.</span>
+        </div>
+      </div>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.closeSaveListModal()">Cancelar</button>
+      <button class="rp-btn rp-btn-primary" onclick="Repetir.saveWalletList()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Logs history modal ─────────────────────────────────────────────── -->
+<!-- Lists past runs via /api/repetir-posicoes/logs. Clicking a row
+     fetches the full report and opens the existing
+     "Relatório de execução" modal with the persisted data. -->
+<div id="rp-logs-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal" style="width:820px">
+    <div class="rp-modal-head" style="display:flex; align-items:baseline; gap:10px">
+      <span>Histórico de execuções</span>
+      <span id="rp-logs-status" class="text-[11px] text-gray-400 ml-auto"></span>
+    </div>
+    <div class="rp-modal-body" style="max-height:70vh">
+      <div id="rp-logs-list">
+        <p class="text-xs text-gray-400 text-center py-4">Carregando...</p>
+      </div>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.refreshLogsList()">Atualizar</button>
+      <button class="rp-btn rp-btn-primary" onclick="Repetir.closeLogsList()">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Diff log report modal ──────────────────────────────────────────── -->
+<!-- Shown after both /apply paths (direct and preview→confirm). Renders
+     the per-run diff report returned by the backend (`diffReport` /
+     `runId`). The persisted JSON copy lives under
+     `data/repeat_positions_logs/<runId>.json` and is reachable via
+     `/api/repetir-posicoes/logs/<runId>`. -->
+<div id="rp-log-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal" style="width:1000px">
+    <div class="rp-modal-head" style="display:flex; align-items:baseline; gap:10px">
+      <span>Relatório de execução</span>
+      <span id="rp-log-runid" class="text-[11px] text-gray-400" style="font-family:ui-monospace,Consolas,monospace"></span>
+      <span id="rp-log-status" class="text-[11px] ml-auto"></span>
+    </div>
+    <div class="rp-modal-body">
+      <div id="rp-log-summary" class="text-xs text-gray-700 mb-3"></div>
+      <div id="rp-log-body" class="space-y-3"></div>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.downloadLog()"
+              title="Baixar o arquivo JSON do relatório (data/repeat_positions_logs/<runId>.json)">Baixar JSON</button>
+      <button class="rp-btn rp-btn-primary" onclick="Repetir.closeLogModal()">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Confirmation modal ─────────────────────────────────────────────── -->
+<div id="rp-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal">
+    <div class="rp-modal-head">Confirmar repetição de posições</div>
+    <div class="rp-modal-body">
+      <p class="text-xs text-gray-600 mb-3">
+        Você está prestes a enviar os ativos abaixo como
+        <code>unprocessedSecurityPositions</code> para o upstream.
+        Um arquivo <strong>.xlsx por empresa</strong> é gerado (carteiras da
+        mesma empresa viajam juntas). Revise antes de confirmar.
+      </p>
+      <div id="rp-modal-summary" class="space-y-3"></div>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.closeModal()">Cancelar</button>
+      <button class="rp-btn rp-btn-success" id="rp-modal-confirm" onclick="Repetir.confirmApply()">Confirmar e enviar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Transação editor modal ─────────────────────────────────────────── -->
+<div id="rp-txn-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal" style="width:620px">
+    <div class="rp-modal-head" id="rp-txn-modal-head">Nova transação</div>
+    <div class="rp-modal-body space-y-2 text-xs">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="rp-label">Tipo (beehusTransactionType)</label>
+          <select id="rp-txn-type" class="rp-input">
+            <option value="">Selecione...</option>
+          </select>
+        </div>
+        <div>
+          <label class="rp-label">Liquidação</label>
+          <input id="rp-txn-liq" type="date" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Operação</label>
+          <input id="rp-txn-op" type="date" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Saldo (balance)</label>
+          <input id="rp-txn-balance" type="number" step="0.01" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Quantidade (opcional)</label>
+          <input id="rp-txn-qty" type="number" step="0.000001" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Moeda</label>
+          <input id="rp-txn-currency" type="text" class="rp-input" value="BRL" />
+        </div>
+        <div class="col-span-2">
+          <label class="rp-label">Ativo (securityId) <span id="rp-txn-sec-required" class="text-red-600 hidden">obrigatório para este tipo</span></label>
+          <input id="rp-txn-sec" type="text" class="rp-input" placeholder="ObjectId do security" />
+        </div>
+        <div class="col-span-2">
+          <label class="rp-label">Entidade (entityId)</label>
+          <input id="rp-txn-entity" type="text" class="rp-input" placeholder="ObjectId da entity" />
+        </div>
+        <div class="col-span-2">
+          <label class="rp-label">Descrição</label>
+          <input id="rp-txn-desc" type="text" class="rp-input" />
+        </div>
+      </div>
+      <p id="rp-txn-modal-status" class="text-[11px] text-gray-500 mt-2"></p>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.closeTxnEditor()">Cancelar</button>
+      <button class="rp-btn rp-btn-primary" id="rp-txn-modal-save" onclick="Repetir.saveTxnEditor()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Provisão editor modal ──────────────────────────────────────────── -->
+<div id="rp-prov-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal" style="width:620px">
+    <div class="rp-modal-head">Nova provisão</div>
+    <div class="rp-modal-body space-y-2 text-xs">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="rp-label">Tipo (provisionType)</label>
+          <input id="rp-prov-type" type="text" class="rp-input" placeholder="ex: amortization, coupon, taxes…" />
+        </div>
+        <div>
+          <label class="rp-label">Source (provisionSource)</label>
+          <input id="rp-prov-source" type="text" class="rp-input" placeholder="ex: manual" value="manual" />
+        </div>
+        <div>
+          <label class="rp-label">Início (initialDate)</label>
+          <input id="rp-prov-initial" type="date" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Liquidação</label>
+          <input id="rp-prov-liq" type="date" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Saldo (balance)</label>
+          <input id="rp-prov-balance" type="number" step="0.01" class="rp-input" />
+        </div>
+        <div>
+          <label class="rp-label">Moeda</label>
+          <input id="rp-prov-currency" type="text" class="rp-input" value="BRL" />
+        </div>
+        <div class="col-span-2">
+          <label class="rp-label">Ativo (securityId, opcional)</label>
+          <input id="rp-prov-sec" type="text" class="rp-input" placeholder="ObjectId do security" />
+        </div>
+        <div class="col-span-2">
+          <label class="rp-label">Descrição</label>
+          <input id="rp-prov-desc" type="text" class="rp-input" />
+        </div>
+      </div>
+      <p id="rp-prov-modal-status" class="text-[11px] text-gray-500 mt-2"></p>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.closeProvEditor()">Cancelar</button>
+      <button class="rp-btn rp-btn-primary" onclick="Repetir.saveProvEditor()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Columns toggle modal ───────────────────────────────────────────── -->
+<!-- Drives `data/posicao_projetada_columns.json` via
+     /api/repetir-posicoes/columns. Checkbox = show; unchecked = hide.
+     Save persists to disk and rebuilds the dynamic stylesheet at
+     #rp-hidden-cols-style. -->
+<div id="rp-columns-modal" class="rp-modal-overlay hidden">
+  <div class="rp-modal" style="width:520px">
+    <div class="rp-modal-head">Colunas da prévia</div>
+    <div class="rp-modal-body text-xs">
+      <p class="text-gray-600 mb-3">
+        Marque para mostrar a coluna; desmarque para ocultar. A escolha
+        persiste em <code>data/posicao_projetada_columns.json</code> e
+        vale para qualquer prévia gerada depois.
+      </p>
+      <div id="rp-columns-list" class="grid grid-cols-2 gap-1.5"></div>
+      <p id="rp-columns-status" class="text-[11px] text-gray-500 mt-3"></p>
+    </div>
+    <div class="rp-modal-foot">
+      <button class="rp-btn rp-btn-muted" onclick="Repetir.closeColumnsModal()">Cancelar</button>
+      <button class="rp-btn rp-btn-primary" onclick="Repetir.saveColumnsConfig()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+</div>

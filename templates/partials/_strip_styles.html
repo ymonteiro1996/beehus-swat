@@ -1,0 +1,178 @@
+  /* ── Strip (Position Stripping) — in-page port of /excecoes list + wizard.
+     Scoped under `.sp-` so the styles can't bleed into the Funções iframe
+     contents or into Day-trade's `.dt-` classes. Visual identity matches the
+     `.dt-` pill / step-num set so the two ports feel like siblings. */
+  .sp-pill         { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+  .sp-pill-info    { background: #dbeafe; color: #1e40af; }
+  .sp-pill-warn    { background: #fef3c7; color: #92400e; }
+  .sp-pill-success { background: #dcfce7; color: #166534; }
+  .sp-pill-error   { background: #fee2e2; color: #991b1b; }
+  .sp-pill-muted   { background: #f3f4f6; color: #4b5563; }
+  html.dark .sp-pill-info    { background: #1e3a8a; color: #bfdbfe; }
+  html.dark .sp-pill-warn    { background: #78350f; color: #fde68a; }
+  html.dark .sp-pill-success { background: #14532d; color: #bbf7d0; }
+  html.dark .sp-pill-error   { background: #7f1d1d; color: #fecaca; }
+  html.dark .sp-pill-muted   { background: #374151; color: #d1d5db; }
+  .sp-step-num     { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #2563eb; color: white; font-size: 11px; font-weight: 700; margin-right: 8px; }
+  /* Setup + apply modals sit on top of the favorites bar (z:30) and any
+     iframe tool (z:1); z:80 mirrors the Token / ApiLog modal stack so the
+     overlay always wins. */
+  .sp-modal-body   { overflow-y: auto; max-height: calc(92vh - 120px); }
+  /* Strip list: only horizontal scroll inside the wrap. Vertical scroll is
+     delegated to the page so a long listing scrolls together with the
+     toolbar / apply-inline / results panels below it — avoids the prior
+     double-scroll where the outer scrollbar didn't reach the table rows
+     trapped inside an inner `max-height`. The thead keeps its Tailwind
+     `sticky top-0` (sticks to viewport top when scrolled past); we don't
+     override `top` because a non-zero `top` on `<thead position:sticky>`
+     reorders rendering inside the table on Chromium. */
+  .sp-table-wrap   { overflow-x: auto; }
+
+  /* class_strip wizard — dual-pane transfer pickers ported from the NAV
+     Wallets / Excluir Txn shape (`.wallets-transfer` in beehus_console.html)
+     so the operator sees the same grouping/wallet UX as the Painel de
+     Controle pipelines. Prefixed `.sp-pick-` to avoid colliding with the
+     beehus-console classes when both partials live in the same iframe. */
+  .sp-pick-transfer  { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.75rem; align-items: stretch; }
+  .sp-pick-pane      { display: flex; flex-direction: column; border: 1px solid #e5e7eb; border-radius: 0.5rem; background: white; min-height: 200px; }
+  html.dark .sp-pick-pane { background: #1f2937; border-color: #374151; }
+  .sp-pick-pane-header { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.65rem; border-bottom: 1px solid #f3f4f6; background: #fafafa; border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; font-size: 0.6875rem; color: #4b5563; }
+  html.dark .sp-pick-pane-header { background: #111827; border-color: #374151; color: #d1d5db; }
+  .sp-pick-list      { flex: 1; width: 100%; border: none; padding: 0.25rem; font-size: 0.75rem; outline: none; background: transparent; color: inherit; min-height: 180px; max-height: 45vh; overflow-y: auto; }
+  .sp-pick-list:focus { box-shadow: 0 0 0 2px #93c5fd inset; border-radius: 0.5rem; }
+  .sp-pick-actions   { display: flex; flex-direction: column; justify-content: center; gap: 0.4rem; }
+  .sp-pick-actions button { min-width: 2.25rem; padding: 0.3rem 0.5rem; }
+
+  /* managed_portfolio — A4 printable analysis modal.
+
+     Screen sizing: `.sp-a4` is 21cm wide so the operator sees what the
+     printed page will look like. `box-sizing: border-box` is mandatory
+     because the on-screen `.sp-a4` uses internal padding to mimic the
+     printed margin — without border-box the 21cm width PLUS the padding
+     overflows past A4 and Chrome adds a horizontal scrollbar.
+
+     Print sizing: the @page margin (0.8cm) IS the physical paper margin.
+     On print the `.sp-a4` padding is reset to 0 so the two don't
+     double-count — otherwise Chrome scales the rendered canvas down to
+     fit between @page margins and the layout looks squished. */
+  .sp-a4 {
+    width: 21cm;
+    box-sizing: border-box;
+    /* On-screen padding matches the print @page margin (0.9cm) so the
+       preview reflects the actual paper layout — i.e. ~19.2cm of usable
+       content width. Without parity the operator sees more breathing
+       room on screen than they'll get on paper. */
+    padding: 0.9cm;
+    font-size: 9.5pt;
+    color: #111827;
+    line-height: 1.4;
+  }
+  .sp-a4 h2 { font-size: 13pt; font-weight: 700; margin: 0 0 0.3rem 0; }
+  .sp-a4 h3 { font-size: 10.5pt; font-weight: 600; margin: 0.75rem 0 0.35rem 0; }
+  .sp-a4 table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+  .sp-a4 thead th { text-align: left; border-bottom: 1px solid #6b7280; padding: 3px 5px; font-weight: 600; }
+  .sp-a4 tbody td { border-bottom: 1px solid #e5e7eb; padding: 3px 5px; }
+  .sp-a4 tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Section gap. Tailwind's `.space-y-4` (1rem) was the original; we
+     previously squeezed it to 0.35rem to fit on one page, but the
+     report is now intentionally 2 pages with comfortable budget, so
+     restore breathing room. 0.75rem keeps sections visually distinct
+     without floating apart. */
+  .sp-a4.space-y-4 > * + * { margin-top: 0.75rem !important; }
+
+  /* Forced page break — used to push the second-page tables (latest
+     transactions + holdings) onto a fresh sheet. On screen we draw a
+     dashed rule so the operator sees where the print boundary will be
+     and can sanity-check that nothing got orphaned. */
+  .sp-a4 .sp-page-break {
+    border-top: 1px dashed #9ca3af;
+    margin: 0.6cm 0 0.4cm 0;
+    padding-top: 0.2cm;
+    color: #9ca3af;
+    font-size: 7pt;
+    text-align: center;
+    break-before: page;
+    page-break-before: always;
+  }
+  .sp-a4 .sp-page-break::before { content: "── Página 2 ──"; }
+  @media print {
+    .sp-a4 .sp-page-break {
+      border: 0;
+      margin: 0;
+      padding: 0;
+      color: transparent;
+      height: 0;
+    }
+    .sp-a4 .sp-page-break::before { content: ""; }
+  }
+
+  /* Chart wrappers — must use cm/mm units so the canvas honours the same
+     physical size on screen and on paper. Chart.js with
+     `maintainAspectRatio:false` draws into the parent's box. */
+  .sp-a4 .sp-chart-box { position: relative; width: 100%; }
+
+  /* Force every direct child block to stay on the same page when
+     possible — otherwise Chrome may slice a chart across two A4 pages.
+     The header (h3) is glued to the section it labels via `break-after:
+     avoid` so we don't end up with a heading at the bottom of one page
+     and the chart on the next. */
+  .sp-a4 > * { break-inside: avoid; page-break-inside: avoid; }
+  .sp-a4 h3 { break-after: avoid; page-break-after: avoid; }
+
+  @media print {
+    /* 1) Hide the entire app, then re-show the report subtree.
+       `visibility` keeps layout/scroll boxes intact (so `position:
+       absolute` repositioning works), unlike `display:none` which
+       would collapse parent dimensions. */
+    html, body { background: white !important; margin: 0 !important; padding: 0 !important; }
+    body * { visibility: hidden !important; }
+    #sp-managed-report, #sp-managed-report * { visibility: visible !important; }
+
+    /* 2) Detach the report from the modal overlay so the dark-bg + flex
+       centering don't leak into the printed page. Static positioning at
+       (0,0) lets the page flow naturally across multiple A4 sheets. */
+    #sp-managed-report {
+      position: absolute !important;
+      inset: 0 !important;
+      background: white !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      overflow: visible !important;
+      display: block !important;
+      height: auto !important;
+    }
+    #sp-managed-report > div {
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      width: auto !important;
+      max-width: none !important;
+      min-height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      display: block !important;
+    }
+
+    /* 3) The printable canvas itself — full content width with NO
+       padding (the @page margin handles the physical paper margin). */
+    .sp-a4 {
+      width: 100% !important;
+      min-height: 0 !important;
+      padding: 0 !important;
+      box-shadow: none !important;
+    }
+
+    /* 4) Chrome respects @page only when no body margin is fighting it.
+       0.9cm matches the on-screen `.sp-a4` padding so the preview and
+       the printed PDF have identical content area (~19.2cm × 27.9cm). */
+    @page { size: A4 portrait; margin: 0.9cm; }
+
+    .no-print { display: none !important; }
+
+    /* 5) Chart.js sets canvas width/height inline based on the parent at
+       paint time. On print, the parent reflows (full A4 width) but the
+       canvas DOM attributes don't auto-update — we resize in JS via
+       beforeprint, but force the rendered <canvas> to never exceed the
+       page either way. */
+    canvas { max-width: 100% !important; height: auto !important; }
+  }
+

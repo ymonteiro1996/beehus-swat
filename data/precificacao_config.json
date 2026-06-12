@@ -1,0 +1,12 @@
+{
+  "benchmarks": [
+    {
+      "id": "66fc4a71e88f2f542b805639",
+      "name": "CDI"
+    },
+    {
+      "id": "66fc4ab9e88f2f542b80563d",
+      "name": "IPCA"
+    }
+  ]
+}

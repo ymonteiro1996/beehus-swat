@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Operações - Beehus</title>
+
+  <!-- Restore dark mode before first paint -->
+  <script>if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark');</script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+
+  <style>
+    html.dark body { background-color: #111827; }
+    .nav-link[data-active="true"] { background: rgba(255,255,255,0.1); color: white; font-weight: 500; }
+
+    /* ── Sidebar collapse (rail pattern) ──────────────────────────────────
+       Shrinks the sidebar to a 4rem icon-only rail instead of hiding it.
+       Text labels are wrapped in <span class="nav-text"> and hidden when
+       the body carries .sidebar-collapsed; icons stay centred. State is
+       persisted to localStorage so the choice survives reloads. */
+    aside.app-sidebar { transition: width .2s ease; overflow: hidden; }
+    body.sidebar-collapsed aside.app-sidebar { width: 4rem; }
+    #frame-container { transition: left .2s ease; }
+    body.sidebar-collapsed #frame-container { left: 4rem !important; }
+
+    /* Hide text labels and centre the SVG icons when collapsed. The nav
+       items already use flex+gap-3 — we override gap and justify so a
+       lone icon sits in the middle of the rail without leftover space. */
+    body.sidebar-collapsed aside.app-sidebar .nav-text { display: none; }
+    body.sidebar-collapsed aside.app-sidebar .nav-link,
+    body.sidebar-collapsed aside.app-sidebar nav button,
+    body.sidebar-collapsed aside.app-sidebar .nav-bottom button {
+      justify-content: center;
+      gap: 0;
+      padding-left: 0.5rem;
+      padding-right: 0.5rem;
+    }
+    /* Logo: visible when expanded, hidden in the rail — but the wrapper
+       keeps its original padding + border so the icons below don't shift
+       up when collapsing. We hide the <img> only; the wrapper acts as a
+       spacer so the nav stays vertically aligned in both states. */
+    body.sidebar-collapsed aside.app-sidebar .logo-wrap img { visibility: hidden; }
+
+    /* Section headers (Processamento / Validações / Upload correções) collapse
+       to zero when the rail is active — otherwise the empty padding would
+       leave odd gaps between blocks. */
+    body.sidebar-collapsed aside.app-sidebar .nav-section-label { display: none; }
+
+    /* Floating toggle. Always visible, always above the sidebar (z-30 vs
+       sidebar z-20). Sits at the right edge of the sidebar in both states
+       so it slides with the rail rather than jumping across the viewport. */
+    #sidebar-toggle {
+      position: fixed; top: 0.5rem; z-index: 30;
+      width: 1.75rem; height: 1.75rem;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 0.375rem;
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.85);
+      border: 1px solid rgba(255,255,255,0.12);
+      cursor: pointer;
+      transition: left .2s ease, background-color .15s ease;
+      left: calc(14rem - 2.25rem);
+    }
+    #sidebar-toggle:hover { background: rgba(255,255,255,0.18); color: #fff; }
+    body.sidebar-collapsed #sidebar-toggle { left: calc(4rem - 2.25rem); }
+    /* Flip the chevron based on state. */
+    body.sidebar-collapsed #sidebar-toggle .chev { transform: rotate(180deg); }
+    #sidebar-toggle .chev { transition: transform .2s ease; }
+
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans text-sm flex">
+
+  <!-- ── Sidebar toggle ────────────────────────────────────────────────────
+       Always-visible floating chevron. Lives outside the sidebar so it stays
+       reachable when the sidebar slides off-screen. -->
+  <button id="sidebar-toggle" type="button" title="Mostrar/ocultar menu" onclick="toggleSidebar()">
+    <svg class="chev w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+  </button>
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────────── -->
+  <aside class="app-sidebar w-56 min-h-screen bg-black flex flex-col shrink-0 fixed top-0 left-0 h-full z-20">
+    <div class="logo-wrap px-5 py-6 border-b border-white/10">
+      <img src="/static/logo.png" alt="Beehus" class="h-16 w-auto" />
+    </div>
+    <nav class="flex-1 px-3 py-4 space-y-4 overflow-y-auto">
+
+      <!-- ── Bloco 1: Processamento ─────────────────────────────────────────── -->
+      <div class="space-y-1">
+        <div class="nav-section-label px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Processamento</div>
+
+        <a href="#controlpanel" data-page="controlpanel" onclick="navigateTo('controlpanel'); return false;"
+           title="Painel de Controle"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+          <span class="nav-text">Painel de Controle</span>
+        </a>
+
+        <a href="#stripping" data-page="stripping" onclick="navigateTo('stripping'); return false;"
+           title="Stripping — Position Stripping e Fatiar carteira (mesma funcionalidade do chip Stripping no Painel de Controle)"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121M9.121 9.121a3 3 0 10-4.242 4.242 3 3 0 004.242-4.242zM14.121 14.121a3 3 0 104.242 4.242 3 3 0 00-4.242-4.242z"/></svg>
+          <span class="nav-text">Stripping</span>
+        </a>
+
+        <a href="#repetir_posicoes" data-page="repetir_posicoes" onclick="navigateTo('repetir_posicoes'); return false;"
+           title="Posição Projetada"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0114-5M20 14a8 8 0 01-14 5"/></svg>
+          <span class="nav-text">Posição Projetada</span>
+        </a>
+
+        <a href="#precificacao" data-page="precificacao" onclick="navigateTo('precificacao'); return false;"
+           title="Preços na Curva"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17c3 0 3-10 6-10s3 10 6 10 3-10 6-10"/></svg>
+          <span class="nav-text">Preços na Curva</span>
+        </a>
+
+        <a href="#parceiro" data-page="parceiro" onclick="navigateTo('parceiro'); return false;"
+           title="Parceiro"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-5.13a4 4 0 11-8 0 4 4 0 018 0zm6 0a4 4 0 01-4 4"/></svg>
+          <span class="nav-text">Parceiro</span>
+        </a>
+
+        <a href="#fundos" data-page="fundos" onclick="navigateTo('fundos'); return false;"
+           title="Fundos — Upload XML Anbima (4.0 / 5.0) com normalização para o pipeline de Posições"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          <span class="nav-text">Fundos</span>
+        </a>
+      </div>
+
+      <!-- ── Bloco 2: Validações ────────────────────────────────────────────── -->
+      <div class="space-y-1">
+        <div class="nav-section-label px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Validações</div>
+
+        <a href="#painel" data-page="painel" onclick="navigateTo('painel'); return false;"
+           title="Rotinas de Verificação"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10-2a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z"/></svg>
+          <span class="nav-text">Rotinas de Verificação</span>
+        </a>
+
+        <a href="#conciliacao" data-page="conciliacao" onclick="navigateTo('conciliacao'); return false;"
+           title="Conciliação"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+          <span class="nav-text">Conciliação</span>
+        </a>
+
+        <a href="#validacao_rentabilidades" data-page="validacao_rentabilidades" onclick="navigateTo('validacao_rentabilidades'); return false;"
+           title="Validação Rentab."
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          <span class="nav-text">Validação Rentab.</span>
+        </a>
+
+        <a href="#posicoes" data-page="posicoes" onclick="navigateTo('posicoes'); return false;"
+           title="Validação Proc."
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+          <span class="nav-text">Validação Proc.</span>
+        </a>
+
+        <a href="#caixa" data-page="caixa" onclick="navigateTo('caixa'); return false;"
+           title="Validação Caixa"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="nav-text">Validação Caixa</span>
+        </a>
+      </div>
+
+      <!-- ── Bloco 3: Upload correções ──────────────────────────────────────── -->
+      <div class="space-y-1">
+        <div class="nav-section-label px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Upload correções</div>
+
+        <a href="#correcoes" data-page="correcoes" onclick="navigateTo('correcoes'); return false;"
+           title="Correções"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-3-3v6m9-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="nav-text">Correções</span>
+        </a>
+
+        <a href="#fundos" data-page="fundos" onclick="navigateTo('fundos'); return false;"
+           title="Fundos — Upload de XML Anbima 4.0 / 5.0 (posições + caixa + provisões)"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>
+          <span class="nav-text">Fundos</span>
+        </a>
+      </div>
+
+      <!-- "Funções" sidebar entry removed — every Beehus tool now launches
+           from the collapsible favorites-bar at the top of the Issues page.
+           The /beehus page itself still exists and is reachable via the
+           favorites-bar chips (which post a `navigate` message with a
+           `deep` view to this shell). -->
+
+    </nav>
+    <div class="nav-bottom px-3 py-4 border-t border-white/10 space-y-1">
+
+      <!-- Dark mode toggle -->
+      <button onclick="toggleDark()" title="Alternar modo escuro/claro"
+              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+        <svg id="icon-moon" class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/>
+        </svg>
+        <svg id="icon-sun" class="w-4 h-4 shrink-0 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m8.66-9H21M3 12H2m15.07-6.07l-.71.71M6.64 17.36l-.71.71m12.02 0l-.71-.71M6.64 6.64l-.71-.71M12 5a7 7 0 100 14A7 7 0 0012 5z"/>
+        </svg>
+        <span id="dark-label" class="nav-text">Modo Escuro</span>
+      </button>
+
+      <a href="#setup" data-page="setup" onclick="navigateTo('setup'); return false;"
+         title="Conexao DB"
+         class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10M8 7v10M4 12h4M12 5v14M16 7v10M20 7v10M16 12h4"/></svg>
+        <span class="nav-text">Conexao DB</span>
+      </a>
+
+    </div>
+  </aside>
+
+  <!-- ── Iframe container (fixed position for bulletproof sizing) ──────────────
+       `left` is set in CSS so the sidebar-collapsed body class can override
+       it cleanly via a transition. -->
+  <div id="frame-container" style="position:fixed;top:0;right:0;bottom:0;left:14rem;overflow:hidden;"></div>
+
+  <script>
+    /* ── Page registry ────────────────────────────────────────────────────────── */
+    const PAGES = {
+      controlpanel:             '/controlpanel',
+      painel:                   '/painel',
+      conciliacao:              '/conciliacao',
+      validacao_rentabilidades: '/validacao-rentabilidades',
+      posicoes:                 '/posicoes',
+      caixa:                    '/caixa',
+      correcoes:                '/correcoes',
+      // `stripping` é o novo entry-point oficial do sidebar (Position
+      // Stripping + Fatiar carteira) — usa os mesmos partials que o chip
+      // "Stripping" do Painel de Controle. `excecoes` segue mapeado para
+      // backwards-compat de bookmarks / URL direta (renderiza a tela
+      // antiga em excecoes.html, com o botão "Ajustes day-trade").
+      stripping:                '/stripping',
+      excecoes:                 '/excecoes',
+      repetir_posicoes:         '/repetir-posicoes',
+      precificacao:             '/precificacao',
+      fundos:                   '/fundos',
+      beehus:                   '/beehus',
+      parceiro:                 '/parceiro',
+      settings:                 '/settings',
+      setup:                    '/setup',
+    };
+
+    const PATH_TO_KEY = {};
+    for (const [k, v] of Object.entries(PAGES)) PATH_TO_KEY[v] = k;
+
+    const _iframes  = {};
+    const _lastDeep = {};   // per-page deep view (e.g. {beehus: 'delete-prov'})
+    let _activePage = null;
+
+    /* ── URL-hash format: `#<key>` or `#<key>/<deepView>` ─────────────────────── */
+    function _parseHash() {
+      const raw = location.hash.slice(1);
+      const slash = raw.indexOf('/');
+      if (slash < 0) return {key: raw, deep: ''};
+      return {key: raw.slice(0, slash), deep: raw.slice(slash + 1)};
+    }
+    function _writeHash(key, deep) {
+      const target = deep ? `${key}/${deep}` : key;
+      if (location.hash.slice(1) !== target) {
+        // replaceState avoids a hashchange event firing for our own write.
+        history.replaceState(null, '', '#' + target);
+      }
+    }
+
+    /* ── Navigation ───────────────────────────────────────────────────────────── */
+    function navigateTo(key, extraParams) {
+      if (!(key in PAGES)) return;
+
+      // Hide all iframes
+      for (const f of Object.values(_iframes)) f.style.display = 'none';
+
+      const deep = _lastDeep[key] || '';
+      const base = PAGES[key] + '?_frame=1';
+      // Append the deep hash to the iframe URL so state survives any reload
+      // of the iframe (and the very first creation after a full page reload).
+      // Drill-downs with extraParams ignore the deep hash by design — they're
+      // an explicit context switch.
+      const url  = extraParams
+        ? `${base}&${extraParams}`
+        : (deep ? `${base}#${deep}` : base);
+
+      if (!_iframes[key]) {
+        // First visit — create and load iframe
+        const iframe = document.createElement('iframe');
+        iframe.src = url;
+        iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+        iframe.addEventListener('load', () => syncDarkToFrame(iframe));
+        document.getElementById('frame-container').appendChild(iframe);
+        _iframes[key] = iframe;
+      } else if (extraParams) {
+        // Drill-down with new context — reload iframe
+        _iframes[key].src = url;
+      }
+      // else: just show the existing iframe (state preserved)
+
+      _iframes[key].style.display = 'block';
+      _activePage = key;
+      _writeHash(key, _lastDeep[key]);
+      updateSidebar(key);
+    }
+
+    /* ── Sidebar highlight ────────────────────────────────────────────────────── */
+    function updateSidebar(key) {
+      document.querySelectorAll('.nav-link').forEach(el => {
+        el.dataset.active = (el.dataset.page === key).toString();
+      });
+    }
+
+    /* ── Dark mode ────────────────────────────────────────────────────────────── */
+    function toggleDark() {
+      const isDark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      _updateToggleUI(isDark);
+      for (const f of Object.values(_iframes)) syncDarkToFrame(f, isDark);
+    }
+
+    function syncDarkToFrame(iframe, isDark) {
+      isDark = isDark ?? document.documentElement.classList.contains('dark');
+      try { iframe.contentDocument.documentElement.classList.toggle('dark', isDark); } catch (e) {}
+    }
+
+    function _updateToggleUI(isDark) {
+      document.getElementById('icon-moon').classList.toggle('hidden', isDark);
+      document.getElementById('icon-sun').classList.toggle('hidden', !isDark);
+      document.getElementById('dark-label').textContent = isDark ? 'Modo Claro' : 'Modo Escuro';
+    }
+    _updateToggleUI(document.documentElement.classList.contains('dark'));
+
+    /* ── Beehus Token / Log sidebar buttons ──────────────────────────────────
+       The visible buttons live in this shell; the modals live inside the
+       active iframe (templates/controlpanel.html or templates/beehus_console.html).
+       Clicks postMessage the iframe to open the right modal; the iframe
+       postMessages back with state changes so the badge text + count stay
+       in sync. */
+    function _activeFrame() {
+      return _activePage && _iframes[_activePage] || null;
+    }
+    function _postToActive(msg) {
+      const f = _activeFrame();
+      if (f && f.contentWindow) f.contentWindow.postMessage(msg, '*');
+    }
+    function openBeehusToken() { _postToActive({type: 'beehus-shell-cmd', cmd: 'open-token'}); }
+    function openBeehusLog()   { _postToActive({type: 'beehus-shell-cmd', cmd: 'open-log'}); }
+
+    /* ── Cross-frame messaging ────────────────────────────────────────────────── */
+    window.addEventListener('message', e => {
+      // Token state mirror from active iframe.
+      if (e.data?.type === 'beehus-token-state') {
+        const badge = document.getElementById('shell-token-badge');
+        if (badge) {
+          if (e.data.loaded) {
+            badge.textContent = `${e.data.ageMin || 0}m`;
+            badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-100';
+            badge.title = `Token ativo há ${e.data.ageMin || 0} minuto(s).`;
+          } else {
+            badge.textContent = '—';
+            badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-100';
+            badge.title = 'Nenhum token carregado.';
+          }
+        }
+        return;
+      }
+      // Log count mirror.
+      if (e.data?.type === 'beehus-log-count') {
+        const c = document.getElementById('shell-log-count');
+        if (c) {
+          c.textContent = String(e.data.total ?? 0);
+          c.title = `${e.data.total ?? 0} chamada(s) nesta sessão`;
+        }
+        return;
+      }
+      // Cache message mirror (text + visibility).
+      if (e.data?.type === 'beehus-cache-msg') {
+        const el = document.getElementById('shell-cache-msg');
+        if (el) {
+          if (e.data.text) {
+            el.textContent = e.data.text;
+            el.classList.remove('hidden');
+          } else {
+            el.textContent = '';
+            el.classList.add('hidden');
+          }
+        }
+        return;
+      }
+      // Drill-down from a child page: navigate to another page with params.
+      if (e.data?.type === 'navigate') {
+        const key = PATH_TO_KEY[e.data.path];
+        if (!key) return;
+        // `deep` lets a child frame open the destination at a specific
+        // sub-view without abusing the extraParams escape hatch (which
+        // would force an iframe reload and skip the hash mechanism). We
+        // pre-seed _lastDeep so navigateTo's normal path appends `#deep`
+        // when it builds/reuses the iframe URL.
+        if (typeof e.data.deep === 'string') {
+          _lastDeep[key] = e.data.deep;
+          // If the destination iframe already exists, force a reload so
+          // the new deep view actually activates — without this, a cached
+          // iframe just gets shown as-is.
+          if (_iframes[key]) {
+            const base = PAGES[key] + '?_frame=1';
+            _iframes[key].src = e.data.deep ? `${base}#${e.data.deep}` : base;
+          }
+        }
+        navigateTo(key, e.data.params);
+        return;
+      }
+      // Deep-view change from a child: remember it so subsequent reloads /
+      // sidebar round-trips restore the same view.
+      if (e.data?.type === 'viewChange') {
+        for (const [pkey, frame] of Object.entries(_iframes)) {
+          if (frame.contentWindow === e.source) {
+            const v = (e.data.view || '').toString();
+            _lastDeep[pkey] = v;
+            if (pkey === _activePage) _writeHash(pkey, v);
+            return;
+          }
+        }
+      }
+    });
+
+    /* ── Browser back / forward ───────────────────────────────────────────────── */
+    window.addEventListener('hashchange', () => {
+      const {key, deep} = _parseHash();
+      const target = key || 'controlpanel';
+      if (deep) _lastDeep[target] = deep;
+      if (target !== _activePage && target in PAGES) navigateTo(target);
+    });
+
+    /* ── Sidebar collapse toggle ──────────────────────────────────────────────── */
+    const SIDEBAR_KEY = 'shell.sidebarCollapsed';
+    function toggleSidebar() {
+      const collapsed = !document.body.classList.contains('sidebar-collapsed');
+      document.body.classList.toggle('sidebar-collapsed', collapsed);
+      try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (e) {}
+    }
+    // Restore sidebar collapse state from localStorage before first paint.
+    try {
+      if (localStorage.getItem(SIDEBAR_KEY) === '1') {
+        document.body.classList.add('sidebar-collapsed');
+      }
+    } catch (e) {}
+
+    // Load the first page from URL hash (defaults to controlpanel).
+    {
+      const _init = _parseHash();
+      const _initKey = _init.key || 'controlpanel';
+      if (_init.deep) _lastDeep[_initKey] = _init.deep;
+      navigateTo(_initKey);
+    }
+  </script>
+
+</body>
+</html>

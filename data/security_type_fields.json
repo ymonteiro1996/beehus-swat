@@ -1,0 +1,44 @@
+{
+  "_comment": "Define os campos EDITÁVEIS (linha inferior do modal 'Cadastrar ativos' em /controlpanel) por securityType. 'beehusName' e 'securityType' são estruturais e SEMPRE aparecem — NÃO os liste aqui. Preencha os tipos não-bond conforme a especificação (hoje só 'bond' está definido). Editar este JSON é suficiente: o frontend renderiza os campos e gera o JSON de cadastro a partir daqui, sem mexer em código.",
+  "_fieldSchema": {
+    "key": "nome do campo no JSON de cadastro Beehus — e também a chave de armazenamento do valor",
+    "label": "rótulo curto exibido acima do input",
+    "input": "text | date | number",
+    "default": "valor inicial opcional (string/number)",
+    "include": "always (sempre envia, mesmo vazio/zero) | ifPresent (só envia quando preenchido) — default: ifPresent",
+    "transform": "upperIndexer (opcional) — normaliza para MAIÚSCULAS e IPC-A→IPCA",
+    "width": "min-width do input em px (opcional)",
+    "title": "tooltip para rótulos abreviados (opcional)"
+  },
+  "types": {
+    "bond": {
+      "label": "Bond (Renda Fixa)",
+      "fields": [
+        { "key": "type",         "label": "type",      "input": "text",   "include": "always",    "width": 70 },
+        { "key": "ticker",       "label": "ticker",    "input": "text",   "include": "ifPresent", "width": 120 },
+        { "key": "maturityDate", "label": "maturity",  "input": "date",   "include": "always",    "width": 140 },
+        { "key": "indexer",      "label": "indexer",   "input": "text",   "include": "ifPresent", "transform": "upperIndexer", "width": 70 },
+        { "key": "indexerPercentual", "label": "idxPct", "input": "number", "include": "ifPresent", "width": 70, "title": "indexerPercentual" },
+        { "key": "yield",        "label": "yield",     "input": "number", "include": "ifPresent", "width": 70 },
+        { "key": "currency",     "label": "currency",  "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "country",      "label": "country",   "input": "text",   "include": "always",    "default": "BR",  "width": 56 },
+        { "key": "subscriptionSettlementDays", "label": "subSD", "input": "number", "include": "always", "default": 0, "width": 64, "title": "subscriptionSettlementDays" },
+        { "key": "subscriptionNAVDays",        "label": "subND", "input": "number", "include": "always", "default": 0, "width": 64, "title": "subscriptionNAVDays" },
+        { "key": "redemptionNAVDays",          "label": "redND", "input": "number", "include": "always", "default": 0, "width": 64, "title": "redemptionNAVDays" },
+        { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "default": 0, "width": 64, "title": "redemptionSettlementDays" }
+      ]
+    },
+    "brazilianFund":           { "label": "Fundo Brasileiro",          "fields": [] },
+    "fund":                    { "label": "Fundo",                     "fields": [] },
+    "stockEtf":                { "label": "Ação / ETF",                "fields": [] },
+    "options":                 { "label": "Opções",                    "fields": [] },
+    "futures":                 { "label": "Futuros",                   "fields": [] },
+    "otc":                     { "label": "OTC",                       "fields": [] },
+    "privateMarket":           { "label": "Mercado Privado",           "fields": [] },
+    "realAssets":              { "label": "Ativos Reais",              "fields": [] },
+    "brazilianGovernmentBond": { "label": "Título Público (BR)",       "fields": [] },
+    "sovereignBonds":          { "label": "Título Soberano",           "fields": [] },
+    "brazilianRepo":           { "label": "Compromissada (BR)",        "fields": [] },
+    "poc":                     { "label": "POC",                       "fields": [] }
+  }
+}

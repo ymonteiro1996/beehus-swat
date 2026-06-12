@@ -1,0 +1,4795 @@
+from flask import Blueprint, render_template, jsonify, request
+from db import (db, get_biz_dates, get_company_filter, valid_wallet_ids, atomic_write_json,
+                atomic_write_text, company_visible, get_company_names, get_wallet_names,
+                resolve_wallet, sum_cash_by_dates as _sum_cash_by_dates, sum_cash as _sum_cash)
+from bson import ObjectId as _OID
+from datetime import date as _date, timedelta, datetime as _dt, timezone
+import json, math, os, re, statistics, subprocess, shutil, sys
+
+# Pending corrections stored by the Correções page are injected into the
+# diagnostic pipeline so gaps, flags and listings reflect the "post-correction"
+# view without touching the database.
+from pages.correcoes import (load_corrections_for_wallet, append_rows_for_wallet,
+                             load_active_pending_provisions,
+                             load_all_pending_provisions,
+                             load_all_pending_provisions_by_wallet,
+                             load_pending_execution_prices,
+                             _iter_wallet_files)
+from beehus_api import (delete_transaction as _api_delete_transaction,
+                        update_transaction as _api_update_transaction,
+                        delete_provision as _api_delete_provision,
+                        update_provision as _api_update_provision,
+                        calculate_nav_wallets as _api_calculate_nav_wallets,
+                        BeehusAPIError, BeehusAuthError)
+
+
+def _wallet_company(wallet_id):
+    """Resolve the companyId for a given walletId. Returns '' if unknown.
+    Used to scope pending-correction lookups from wallet-only endpoints."""
+    w = resolve_wallet(wallet_id, {"companyId": 1})
+    return str(w.get("companyId", "")) if w else ""
+
+
+def _require_visible_wallet(wallet_id):
+    """Resolve `wallet_id`'s company and check it's within the user's company filter.
+
+    Returns (company_id, None) on success — caller can use company_id directly.
+    Returns ("", error_response_tuple) on failure — caller should return it as-is.
+
+    Closes the cross-company info-leak path on every endpoint that accepts a
+    walletId from the request: a user whose company_filter excludes company X
+    cannot read X's wallets just by guessing a walletId.
+    """
+    if not wallet_id:
+        return "", (jsonify({"error": "walletId obrigatório"}), 400)
+    company_id = _wallet_company(wallet_id)
+    if not company_id:
+        return "", (jsonify({"error": "wallet não encontrada"}), 404)
+    if not company_visible(company_id):
+        return "", (jsonify({"error": "acesso negado"}), 403)
+    return company_id, None
+
+
+def _next_biz_day(d):
+    """Next business day (Mon–Fri) strictly after `d` (a datetime.date).
+
+    Weekday-only — no holiday calendar, matching the convention used elsewhere
+    in this codebase (`get_biz_dates`, `biz_days_between`)."""
+    d = d + timedelta(days=1)
+    while d.weekday() >= 5:   # 5=Sat, 6=Sun
+        d += timedelta(days=1)
+    return d
+
+
+def _prov_dates(date_str, offset):
+    """Provision window anchored on the analyzed navPackage date `date_str`,
+    spanning |offset| calendar days. The liquidation date is ALWAYS
+    `navPackage date + offset` (per spec) — never the wall-clock "today".
+
+      offset > 0 (liquidação futura): initial=date,         liquidation=date+offset
+      offset < 0 (nav futuro):        initial=date+offset,   liquidation=date
+      offset == 0:                    initial=date,          liquidation=date
+
+    **Minimum liquidation:** a provision must always settle at least 1 business
+    day after the navPackage date — `liquidation = max(computed, navDate + 1
+    dia útil)`. This guards the offset ≤ 0 paths (offset 0, WRONG_PROVISION_AMOUNT,
+    "+ Provisão" manual) that would otherwise produce a same-day or past
+    liquidation, which is invalid for a forward-looking provision.
+
+    Returns (initialDate, liquidationDate) as ISO strings. Falls back to
+    (date_str, date_str) when `date_str` is not a parseable ISO date.
+    """
+    try:
+        offset = int(offset or 0)
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        base = _date.fromisoformat(date_str)
+    except (TypeError, ValueError):
+        return date_str, date_str
+
+    if offset > 0:
+        init_d, liq_d = base, base + timedelta(days=offset)
+    elif offset < 0:
+        init_d, liq_d = base + timedelta(days=offset), base
+    else:
+        init_d, liq_d = base, base
+
+    # Enforce the minimum: liquidation ≥ navDate + 1 business day.
+    floor = _next_biz_day(base)
+    if liq_d < floor:
+        liq_d = floor
+    return init_d.isoformat(), liq_d.isoformat()
+
+
+def _safe_num(v):
+    """Replace Infinity / NaN with None so jsonify produces valid JSON."""
+    if isinstance(v, float) and (math.isinf(v) or math.isnan(v)):
+        return None
+    return v
+
+
+def _sanitize(obj):
+    """Recursively replace Infinity / NaN with None in dicts / lists."""
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return _safe_num(obj)
+from pages.bayesian import (extract_factors, score_combinations, compute_summary,
+                            optimize_with_validation, _load_config as _load_bayesian_config)
+
+_THRESHOLDS_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "rentability_thresholds.json")
+
+# ── Conciliação config (editable diff threshold) ──────────────────────────────
+_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "conciliacao_config.json")
+_DEFAULT_DIFF_THRESHOLD_PCT = 0.01  # 0.01% = 1 basis point (matches legacy visual cue)
+
+
+def _load_conciliacao_config():
+    """Return dict with user-editable settings. Falls back to defaults when missing/corrupt."""
+    defaults = {"diffThresholdPct": _DEFAULT_DIFF_THRESHOLD_PCT}
+    if not os.path.exists(_CONFIG_FILE):
+        return defaults
+    try:
+        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        return {**defaults, **data}
+    except Exception:
+        return defaults
+
+
+def _save_conciliacao_config(cfg):
+    """Persist conciliação config. Returns (ok, error_message)."""
+    try:
+        atomic_write_json(_CONFIG_FILE, cfg)
+        return True, ""
+    except Exception as exc:
+        # OneDrive-synced paths occasionally throw PermissionError during
+        # background sync — surface a friendly message instead of a 500.
+        # Never echo `str(exc)` to callers: PermissionError on Windows
+        # contains the absolute filesystem path (home dir, OneDrive tenant,
+        # username) which would then leak into a JSON response in the browser.
+        import logging
+        logging.getLogger(__name__).error("failed to save conciliacao config: %s", exc)
+        return False, "verifique sincronização do OneDrive e tente novamente"
+
+
+def _diff_threshold_decimal(request_obj=None):
+    """Resolve the |returnNavPerShare - returnContribution| threshold in decimal form.
+
+    Priority: explicit ?threshold=<pct> query param → config file → default.
+    """
+    pct = None
+    if request_obj is not None:
+        raw = (request_obj.args.get("threshold") or "").strip()
+        if raw:
+            try:
+                pct = float(raw)
+            except ValueError:
+                pct = None
+    if pct is None:
+        pct = float(_load_conciliacao_config().get("diffThresholdPct", _DEFAULT_DIFF_THRESHOLD_PCT))
+    # stored/UI unit is percent (e.g. 0.01 = 0.01%). Mongo compares decimals.
+    return max(0.0, pct / 100.0)
+
+
+def _load_thresholds():
+    if not os.path.exists(_THRESHOLDS_FILE):
+        return {}
+    with open(_THRESHOLDS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+bp = Blueprint("conciliacao", __name__)
+
+_NUM_DATES = 10
+
+
+_valid_wallet_ids = valid_wallet_ids
+
+
+def _mismatch_query(company_id, valid_wallet_ids, date=None, threshold=0.0):
+    """MongoDB query for navPackages where |returnNavPerShare - returnContribution| > threshold.
+
+    threshold is in decimal form (e.g. 0.0001 = 0.01%). When threshold <= 0 we keep
+    the historical strict-inequality behavior so 0 still filters equal pairs.
+
+    Null/null edge case: when threshold > 0 we coerce nulls to 0 via $ifNull, so a
+    package where *both* fields are null evaluates to |0-0|=0 and is excluded.
+    When threshold == 0 the $ne path excludes null/null pairs too (null == null in
+    $ne is false). Behavior is therefore consistent across the 0 boundary; do not
+    remove the $ifNull without re-checking this invariant.
+
+    `valid_wallet_ids` may be None when the caller has already scoped by
+    companyId — the (companyId, ...) index is sufficient and the extra
+    `walletId: $in [<every wallet>]` clause just bloats the BSON query.
+    """
+    q = {
+        "companyId": company_id,
+        "trashed":   {"$ne": True},
+    }
+    if valid_wallet_ids is not None:
+        q["walletId"] = {"$in": list(valid_wallet_ids)}
+    else:
+        # companyId-scoped path: exclude navPackages without a wallet
+        # (walletId null / missing / empty). These can't be attributed to a
+        # wallet and would surface as phantom "None" rows mirroring real
+        # wallets in the per-wallet listing. `$nin: [None, ""]` also excludes
+        # documents where the field is missing.
+        q["walletId"] = {"$nin": [None, ""]}
+    if threshold and threshold > 0:
+        q["$expr"] = {"$gt": [
+            {"$abs": {"$subtract": [
+                {"$ifNull": ["$returnNavPerShare", 0]},
+                {"$ifNull": ["$returnContribution", 0]},
+            ]}},
+            float(threshold),
+        ]}
+    else:
+        q["$expr"] = {"$ne": ["$returnNavPerShare", "$returnContribution"]}
+    if date is not None:
+        if isinstance(date, list):
+            q["positionDate"] = {"$in": date}
+        else:
+            q["positionDate"] = date
+    return q
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
+
+@bp.route("/conciliacao")
+def index():
+    companies = sorted(
+        [{"id": cid, "name": name or cid} for cid, name in get_company_names().items()],
+        key=lambda c: c["name"],
+    )
+    cf = get_company_filter()
+    if cf:
+        companies = [c for c in companies if c["id"] in cf]
+    return render_template("conciliacao.html", companies=companies)
+
+
+@bp.route("/api/conciliacao/dates")
+def get_dates():
+    company_id = request.args.get("companyId", "")
+    end_date   = request.args.get("endDate") or None
+    if not company_visible(company_id):
+        return jsonify({"cards": []})
+    threshold  = _diff_threshold_decimal(request)
+
+    # If no explicit endDate, use the most recent navPackages date for this company's wallets
+    if not end_date:
+        latest = db.navPackages.find_one(
+            {"companyId": company_id, "trashed": {"$ne": True}},
+            {"positionDate": 1},
+            sort=[("positionDate", -1)]
+        )
+        if latest and latest.get("positionDate"):
+            end_date = str(latest["positionDate"])[:10]
+
+    dates = get_biz_dates(_NUM_DATES, end_date)
+
+    totals = {}
+    for doc in db.navPackages.aggregate([
+        {"$match": _mismatch_query(company_id, None, dates, threshold=threshold)},
+        {"$group": {"_id": "$positionDate", "n": {"$sum": 1}}},
+    ]):
+        d = str(doc["_id"])[:10]
+        if d:
+            totals[d] = doc["n"]
+
+    cards = [{"date": d, "total": totals.get(d, 0)} for d in dates]
+    return jsonify({"cards": cards})
+
+
+@bp.route("/api/conciliacao/config", methods=["GET"])
+def get_config():
+    """Return current conciliação settings (diffThresholdPct in percent units)."""
+    return jsonify(_load_conciliacao_config())
+
+
+@bp.route("/api/conciliacao/config", methods=["PUT", "POST"])
+def update_config():
+    """Update conciliação settings. Body: { diffThresholdPct: number }."""
+    body = request.get_json(force=True, silent=True) or {}
+    cfg  = _load_conciliacao_config()
+    if "diffThresholdPct" in body:
+        try:
+            pct = float(body["diffThresholdPct"])
+            # Unit is percent points on the return diff. Values above ~10% are
+            # meaningless (returns are typically in -1..+1). Accept 0 (which
+            # reverts to strict $ne behavior — documented).
+            if pct < 0 or pct > 10:
+                return jsonify({"error": "diffThresholdPct fora do intervalo [0, 10]"}), 400
+            cfg["diffThresholdPct"] = pct
+        except (TypeError, ValueError):
+            return jsonify({"error": "diffThresholdPct inválido"}), 400
+    ok, err = _save_conciliacao_config(cfg)
+    if not ok:
+        return jsonify({"error": f"falha ao salvar config: {err}"}), 500
+    return jsonify(cfg)
+
+
+@bp.route("/api/conciliacao/rows")
+def get_rows():
+    try:
+        company_id = request.args.get("companyId", "")
+        date       = request.args.get("date", "")
+        if not company_visible(company_id):
+            return jsonify({"rows": [], "dates": []})
+        threshold  = _diff_threshold_decimal(request)
+
+        wallet_names = dict(get_wallet_names())
+
+        proj = {
+            "walletId": 1, "nav": 1, "navPerShare": 1, "amount": 1,
+            "inAndOutFlows": 1, "returnNavPerShare": 1, "returnContribution": 1,
+            "formerNav": 1, "formerAmount": 1,
+        }
+
+        # Pre-fetch former NAV + formerDate for each wallet — source of truth is
+        # the most recent untrashed navPackage strictly before `date`. Per-wallet:
+        # each wallet gets its own former date. Wallets without any prior
+        # untrashed navPackage are excluded from analysis entirely.
+        former_map = {}  # {walletId: {"nav": float, "date": str}}
+        for prev in db.navPackages.aggregate([
+            {"$match": {"companyId": company_id, "positionDate": {"$lt": date},
+                        "trashed": {"$ne": True}, "walletId": {"$nin": [None, ""]}}},
+            {"$sort": {"positionDate": -1}},
+            {"$group": {"_id": "$walletId",
+                        "nav": {"$first": "$nav"},
+                        "positionDate": {"$first": "$positionDate"}}},
+        ]):
+            pd = prev.get("positionDate")
+            former_map[str(prev["_id"])] = {
+                "nav":  prev.get("nav"),
+                "date": str(pd)[:10] if pd else None,
+            }
+
+        # Pre-load all pending provisions for this company in a single tree
+        # walk, keyed by wallet — avoids re-scanning the correcoes store
+        # inside the per-row loop below (previously O(wallets × dateFolders)
+        # file opens; now O(wallets + dateFolders)).
+        _all_pending_provs = load_all_pending_provisions_by_wallet(company_id)
+
+        rows = []
+        for pkg in db.navPackages.find(_mismatch_query(company_id, None, date, threshold=threshold), proj):
+            raw_wid = pkg.get("walletId")
+            # Defensive: skip navPackages with no usable walletId (null/empty).
+            # `str(None)` would otherwise become the literal "None" and, since
+            # the former_map aggregation groups null walletIds under the same
+            # key, the row would survive the out-of-scope filter and render as
+            # a phantom "None" wallet mirroring real data.
+            if raw_wid is None or str(raw_wid).strip() == "":
+                continue
+            wid = str(raw_wid)
+            former = former_map.get(wid)
+            if not former or former.get("nav") is None:
+                # No prior untrashed navPackage for this wallet → out of scope
+                continue
+
+            return_nav    = _safe_num(pkg.get("returnNavPerShare"))
+            return_contrib = _safe_num(pkg.get("returnContribution"))
+            former_nav    = _safe_num(former.get("nav"))
+            gap_pct       = (return_nav - return_contrib) if (return_nav is not None and return_contrib is not None) else None
+            gap_cash      = (gap_pct * former_nav) if (gap_pct is not None and former_nav) else None
+
+            # Post-correction estimate. Provisions use full NAV recalc
+            # (via _recalc_gap_with_corrections); txns keep the legacy
+            # |balance|-closes-gap heuristic. Label as "est." in the UI.
+            new_gap_pct  = gap_pct
+            new_gap_cash = gap_cash
+            corrections_count = 0
+            if gap_cash is not None:
+                new_gap_cash, new_gap_pct, _impact_abs, corrections_count = \
+                    _recalc_gap_with_corrections(
+                        company_id, wid, date, pkg,
+                        former.get("date"), former_nav,
+                        return_contrib, gap_cash,
+                        pending_provs=_all_pending_provs.get(wid, []),
+                    )
+
+            rows.append({
+                "walletId":           wid,
+                "walletName":         wallet_names.get(wid, wid),
+                "nav":                _safe_num(pkg.get("nav")),
+                "navPerShare":        _safe_num(pkg.get("navPerShare")),
+                "amount":             _safe_num(pkg.get("amount")),
+                "inAndOutFlows":      _safe_num(pkg.get("inAndOutFlows")),
+                "returnNavPerShare":  return_nav,
+                "returnContribution": return_contrib,
+                "formerNav":          former_nav,
+                "formerDate":         former.get("date"),
+                "newGapPct":          new_gap_pct,
+                "newGapCash":         new_gap_cash,
+                "correctionsCount":   corrections_count,
+            })
+
+        rows.sort(key=lambda x: x["walletName"])
+        return jsonify({"rows": rows, "date": date})
+    except Exception:
+        import logging, traceback
+        traceback.print_exc()
+        logging.getLogger(__name__).exception("conciliacao /rows failed")
+        return jsonify({"error": "falha ao processar"}), 500
+
+
+@bp.route("/api/conciliacao/wallet-detail")
+def get_wallet_detail():
+    wallet_id = request.args.get("walletId", "")
+    date      = request.args.get("date", "")
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    # Current position
+    current_pos = db.processedPosition.find_one(
+        {"walletId": wallet_id, "positionDate": date},
+        {"securities": 1}
+    )
+
+    # Former date comes from the most recent untrashed navPackage for this wallet.
+    # processedPosition is never used to determine the previous date, because a
+    # processedPosition can exist on a date where no navPackage was calculated.
+    former_date, _ = _find_former_nav(wallet_id, date)
+
+    # Fetch processedPosition at that specific former_date (if any) for former_map
+    former_pos = None
+    if former_date:
+        former_pos = db.processedPosition.find_one(
+            {"walletId": wallet_id, "positionDate": former_date},
+            {"securities": 1}
+        )
+
+    # Build former lookup: {securityId: {pu, quantity}}
+    former_map = {}
+    for sec in (former_pos or {}).get("securities", []):
+        sid = str(sec.get("securityId", ""))
+        former_map[sid] = {
+            "pu":       sec.get("pu"),
+            "quantity": sec.get("quantity"),
+        }
+
+    # ── Pending deletion markers (MISCLASSIFIED corrections) ────────────────────
+    # Load first so we can exclude these txns from the aggregation below and
+    # surface them as "pending deletion" rows in the UI.
+    _company_for_corr = _wallet_company(wallet_id)
+    _c_txns, _c_provs, _c_dels = load_corrections_for_wallet(_company_for_corr, date, wallet_id)
+    _del_id_strs = [str(d.get("originalId")) for d in _c_dels if d.get("originalId")]
+    _del_id_variants = list(_del_id_strs)
+    for s in _del_id_strs:
+        try:
+            _del_id_variants.append(_OID(s))
+        except Exception:
+            pass
+
+    # ── Build position-side lookup indices for transaction linkage ─────────────
+    # Two-stage matching:
+    #   1) Primary: stringified securityId (handles mixed ObjectId/string storage).
+    #   2) Fallback: case-insensitive name match (`beehusName` ↔ `securityName`)
+    #      so transactions stored with a name but stale/missing securityId still
+    #      attach to the right asset in the listing.
+    _pos_sid_set  = set()
+    _pos_by_name  = {}      # {beehusName.lower(): str(securityId)}
+    for sec in (current_pos or {}).get("securities", []):
+        _sid = str(sec.get("securityId", "") or "")
+        if _sid:
+            _pos_sid_set.add(_sid)
+        _bn = (sec.get("beehusName") or "").strip().lower()
+        if _bn and _sid and _bn not in _pos_by_name:
+            _pos_by_name[_bn] = _sid
+
+    # Cache securities.beehusName for txn securityIds we'll display per-asset.
+    # Scoped to just the IDs that appear in this wallet's txns to avoid a
+    # full-collection scan.
+    _txn_match = {"walletId": wallet_id, "liquidationDate": date, "balance": {"$ne": None}}
+    if _del_id_variants:
+        _txn_match["_id"] = {"$nin": _del_id_variants}
+    _txn_docs = list(db.transactions.find(
+        _txn_match,
+        {"_id": 1, "securityId": 1, "securityName": 1, "beehusTransactionType": 1,
+         "balance": 1, "operationDate": 1, "liquidationDate": 1, "description": 1,
+         "quantity": 1, "price": 1},
+    ))
+    _txn_sid_strs = {str(t.get("securityId") or "") for t in _txn_docs}
+    _txn_sid_strs.discard("")
+    _sec_name_by_id = {}
+    if _txn_sid_strs:
+        _oid_list = []
+        for s in _txn_sid_strs:
+            try:
+                _oid_list.append(_OID(s))
+            except Exception:
+                pass
+        if _oid_list:
+            _sec_name_by_id = {
+                str(d["_id"]): d.get("beehusName", "")
+                for d in db.securities.find({"_id": {"$in": _oid_list}}, {"beehusName": 1})
+            }
+
+    def _resolve_txn_to_pos_sid(raw_sid_str, raw_name):
+        """Map a transaction's (securityId, securityName) onto a position's
+        securityId. Returns ('', '') when no linkage is possible."""
+        if raw_sid_str and raw_sid_str in _pos_sid_set:
+            return raw_sid_str, _sec_name_by_id.get(raw_sid_str, raw_name or "")
+        # Fallback: name match against current-position securities. Used when
+        # txns carry a different ObjectId than the position (e.g. duplicate
+        # security docs, stale ingestion id) but the name aligns.
+        nm = (raw_name or _sec_name_by_id.get(raw_sid_str, "") or "").strip().lower()
+        if nm and nm in _pos_by_name:
+            pos_sid = _pos_by_name[nm]
+            return pos_sid, _sec_name_by_id.get(raw_sid_str, raw_name or "")
+        return "", _sec_name_by_id.get(raw_sid_str, raw_name or "")
+
+    # ── Transaction aggregation per security (liquidationDate == date) ─────────
+    # In addition to the running totals, we materialize a per-security list of
+    # linked transactions so the frontend can render them inline in the asset
+    # listing (the user-facing "linkar a transação ao ativo" requirement).
+    txn_by_security       = {}   # {securityId: total_balance}
+    event_txn_by_security = {}   # {securityId: total event balance (amortization/coupon)}
+    txns_by_security      = {}   # {securityId: [ {txnId, type, balance, ...}, ... ]}
+    unmatched_txns        = []   # txns whose security can't be resolved to a position row
+
+    for t in _txn_docs:
+        raw_sid_str = str(t.get("securityId") or "")
+        bal_raw = t.get("balance")
+        try:
+            bal = float(bal_raw) if bal_raw is not None else 0.0
+        except (TypeError, ValueError):
+            bal = 0.0
+        typ = t.get("beehusTransactionType", "") or ""
+        resolved_sid, sec_nm = _resolve_txn_to_pos_sid(raw_sid_str, t.get("securityName"))
+        key_sid = resolved_sid or raw_sid_str
+        txn_by_security[key_sid] = txn_by_security.get(key_sid, 0) + bal
+        if typ in _EVENT_TYPES:
+            event_txn_by_security[key_sid] = event_txn_by_security.get(key_sid, 0) + bal
+
+        entry = {
+            "txnId":                 str(t.get("_id", "") or ""),
+            "operationDate":         str(t.get("operationDate", "")   or "")[:10],
+            "liquidationDate":       str(t.get("liquidationDate", "") or "")[:10],
+            "securityId":            raw_sid_str,
+            "securityName":          sec_nm,
+            "beehusTransactionType": typ,
+            "balance":               bal_raw,
+            "quantity":              t.get("quantity"),
+            "price":                 t.get("price"),
+            "description":           t.get("description", "") or "",
+            "isPending":             False,
+            "isEvent":               typ in _EVENT_TYPES,
+            "linkedBy":              ("securityId" if resolved_sid and raw_sid_str in _pos_sid_set
+                                       else "name" if resolved_sid
+                                       else "unmatched"),
+        }
+        if resolved_sid:
+            txns_by_security.setdefault(resolved_sid, []).append(entry)
+        else:
+            unmatched_txns.append(entry)
+
+    # Include pending correction transactions (stored in /correcoes, not yet
+    # ingested) in the per-security listing so the asset row reflects what the
+    # user has already accepted via the Aceitar/+Transação/+Provisão buttons.
+    for ct in _c_txns:
+        raw_sid_str = str(ct.get("securityId") or "")
+        bal_raw = ct.get("balance")
+        typ = ct.get("beehusTransactionType", "") or ""
+        resolved_sid, sec_nm = _resolve_txn_to_pos_sid(raw_sid_str, ct.get("securityName"))
+        entry = {
+            "txnId":                 "",
+            "correctionId":          ct.get("id", ""),
+            "operationDate":         str(ct.get("operationDate", "")   or "")[:10],
+            "liquidationDate":       str(ct.get("liquidationDate", "") or "")[:10],
+            "securityId":            raw_sid_str,
+            "securityName":          sec_nm or ct.get("securityName", ""),
+            "beehusTransactionType": typ,
+            "balance":               bal_raw,
+            "quantity":              None,
+            "price":                 None,
+            "description":           ct.get("description", "") or "",
+            "isPending":             True,
+            "isEvent":               typ in _EVENT_TYPES,
+            "linkedBy":              ("securityId" if resolved_sid and raw_sid_str in _pos_sid_set
+                                       else "name" if resolved_sid
+                                       else "unmatched"),
+        }
+        if resolved_sid:
+            txns_by_security.setdefault(resolved_sid, []).append(entry)
+        else:
+            unmatched_txns.append(entry)
+
+    # Order each security's transactions by operationDate (asc) so the UI lists
+    # them chronologically.
+    for _lst in txns_by_security.values():
+        _lst.sort(key=lambda e: (e.get("operationDate") or "", e.get("liquidationDate") or ""))
+
+    securities = []
+    for sec in (current_pos or {}).get("securities", []):
+        sid = str(sec.get("securityId", ""))
+        pu  = sec.get("pu")
+        qty = sec.get("quantity")
+        balance = round(pu * qty, 6) if (pu is not None and qty is not None) else None
+
+        total_contrib = sec.get("totalContribution")
+        event_contrib = sec.get("eventContribution") or 0
+
+        f      = former_map.get(sid, {})
+        f_pu   = f.get("pu")
+        f_qty  = f.get("quantity")
+        f_bal  = round(f_pu * f_qty, 6) if (f_pu is not None and f_qty is not None) else None
+        amt_diff = round(qty - (f_qty or 0), 6) if qty is not None else None
+
+        try:
+            return_pu = round(pu / f_pu - 1, 8) if (pu is not None and f_pu and f_pu != 0) else None
+        except (TypeError, ZeroDivisionError):
+            return_pu = None
+
+        try:
+            return_contrib = round(total_contrib / f_bal, 8) if (total_contrib is not None and f_bal and f_bal != 0) else None
+        except (TypeError, ZeroDivisionError):
+            return_contrib = None
+
+        diff_rent = round(return_pu - return_contrib, 8) if (return_pu is not None and return_contrib is not None) else None
+
+        # Correct returnPU when event transactions (coupon/amortization) explain the diff
+        ev_corrected = False
+        if diff_rent and f_bal:
+            ev_total = event_txn_by_security.get(sid)
+            if ev_total is not None:
+                expected_event_cash = round(-diff_rent * f_bal, 2)
+                if _approx(round(ev_total, 2), expected_event_cash):
+                    return_pu = round((pu + ev_total / f_qty) / f_pu - 1, 8)
+                    diff_rent = round(return_pu - return_contrib, 8)
+                    ev_corrected = True
+
+        txn_bal = txn_by_security.get(sid)   # None if no transactions for this security
+        if ev_corrected and txn_bal is not None:
+            txn_bal = round(txn_bal - event_txn_by_security[sid], 2) or None
+
+        # Linked transactions for this asset (DB + pending corrections), already
+        # resolved upstream via _resolve_txn_to_pos_sid (securityId first, name
+        # fallback). The list is chronological and includes both ingested and
+        # pending rows so the asset listing can show the user-facing "linkage".
+        linked_txns = list(txns_by_security.get(sid, []))
+        txn_count = len(linked_txns)
+        linked_by_name_count = sum(1 for e in linked_txns if e.get("linkedBy") == "name")
+
+        securities.append({
+            "securityId":        sid,
+            "beehusName":        sec.get("beehusName", ""),
+            "pricingType":       sec.get("pricingType", ""),
+            "pu":                pu,
+            "executionPrice":    sec.get("executionPrice"),
+            "quantity":          qty,
+            "balance":           balance,
+            "totalContribution": total_contrib,
+            "formerPu":          f_pu,
+            "formerQuantity":    f_qty,
+            "formerBalance":     f_bal,
+            "amountDifference":  amt_diff,
+            "returnPU":          return_pu,
+            "returnContrib":     return_contrib,
+            "diffRent":          diff_rent,
+            "transactionBalance": txn_bal,
+            "transactions":         linked_txns,
+            "transactionCount":     txn_count,
+            "transactionsByNameCount": linked_by_name_count,
+            "dailyContribution":    sec.get("dailyContribution"),
+            "intradayContribution": sec.get("intradayContribution"),
+            "eventContribution":    event_contrib,
+        })
+
+    securities.sort(key=lambda s: s["beehusName"])
+
+    current_sids = {s["securityId"] for s in securities}
+    unmatched_txn_total = sum(
+        bal for sid, bal in txn_by_security.items() if sid not in current_sids
+    ) or None
+    matched_txn_total = sum(
+        bal for sid, bal in txn_by_security.items() if sid in current_sids
+    ) or None
+    # Sort unmatched txns so the UI can display them under a single
+    # "Transações sem ativo" group at the bottom of the listing.
+    unmatched_txns.sort(key=lambda e: (e.get("operationDate") or "", e.get("liquidationDate") or ""))
+
+    # ── Cash accounts ──────────────────────────────────────────────────────────
+    # Batch both dates into one `cashAccounts` scan (no index on walletId).
+    _cash = _sum_cash_by_dates(wallet_id, [former_date, date])
+    former_cash  = _cash[former_date]
+    current_cash = _cash[date]
+
+    # Total transactions = sum of all per-security transaction balances
+    total_txns = sum(txn_by_security.values())
+
+    projected_cash = former_cash + total_txns if former_cash is not None else None
+    cash_diff = (
+        projected_cash - current_cash
+        if projected_cash is not None and current_cash is not None
+        else None
+    )
+
+    # ── Alerts ─────────────────────────────────────────────────────────────────
+    alerts = []
+
+    # Alert 1: transactions with unidentified type
+    if db.transactions.find_one(
+        {"walletId": wallet_id, "liquidationDate": date, "beehusTransactionType": None},
+        {"_id": 1},
+    ) is not None:
+        alerts.append({"id": "unidentified_txns", "message": "Existem transações não identificadas"})
+
+    # Alert 2: projected cash ≠ current cash
+    if projected_cash is not None and current_cash is not None:
+        if round(projected_cash - current_cash, 2) != 0:
+            alerts.append({"id": "cash_mismatch", "message": "Há uma divergência no caixa"})
+
+    # Pending corrections (for the recalculated-gap pill in the wallet view).
+    # `_c_txns`, `_c_provs`, `_c_dels` were loaded at the top of this function.
+    # ExecutionPrice corrections are pulled here too — they're stored in a
+    # cross-folder bucket and only count when (a) targeting this date and
+    # (b) not yet pushed upstream (`inputed=False`). Otherwise the gap-recalc
+    # pills on the wallet-detail screen would silently ignore MEP corrections,
+    # showing the original gap as if Aceitar had no effect.
+    _c_exec_active = [
+        r for r in load_pending_execution_prices(_company_for_corr, wallet_id)
+        if (r.get("positionDate") == date) and not r.get("inputed")
+    ]
+    exec_impact_abs = sum(_exec_price_impact(r) for r in _c_exec_active)
+    corrections_impact_abs = sum(
+        abs(float(r.get("balance") or 0))
+        for r in list(_c_txns) + list(_c_provs)
+    ) + exec_impact_abs
+    corrections_count = (len(_c_txns) + len(_c_provs) + len(_c_dels)
+                         + len(_c_exec_active))
+
+    return jsonify(_sanitize({
+        "securities":                securities,
+        "formerDate":                former_date,
+        "date":                      date,
+        "formerCash":                former_cash,
+        "totalTransactions":         total_txns,
+        "projectedCash":             projected_cash,
+        "currentCash":               current_cash,
+        "cashDifference":            cash_diff,
+        "unmatchedTransactions":     unmatched_txn_total,
+        "matchedTransactions":       matched_txn_total,
+        # Full list of transactions that couldn't be linked to any position row
+        # (no matching securityId AND no matching beehusName). Surfaced so the
+        # UI can show them as an "órfãs" group at the bottom of the listing.
+        "unmatchedTransactionsList": unmatched_txns,
+        "alerts":                    alerts,
+        "correctionsCount":          corrections_count,
+        "correctionsImpact":         round(corrections_impact_abs, 2),
+    }))
+
+
+# ── Edit / delete a real DB transaction via the upstream Beehus API ───────────
+# Consumed by the wallet-detail screen (inline ✎/🗑 on each linked transaction).
+# Pending /correcoes rows are NOT touched here — those are edited via the
+# /correcoes endpoints. Only transactions that already exist in db.transactions
+# (and belong to the requested wallet) can be patched/deleted.
+
+# Fields the wallet-detail edit form is allowed to change. Subset of
+# beehus_api.transactions._PATCHABLE_FIELDS — deliberately excludes
+# walletId/entityId/currencyId (wallet migration is the Exceções routine's job,
+# not an inline edit) and quantity (not patchable upstream).
+_TXN_EDIT_FIELDS = {
+    "balance", "beehusTransactionType", "operationDate",
+    "liquidationDate", "price", "securityId", "description",
+}
+
+
+def _find_wallet_txn(wallet_id, txn_id):
+    """Return the db.transactions doc for `txn_id` IF it belongs to `wallet_id`.
+
+    Handles mixed `_id` storage (ObjectId vs string) and returns None when the
+    txn doesn't exist or belongs to another wallet — closing the door on
+    editing/deleting an arbitrary transaction by guessing its id."""
+    if not txn_id:
+        return None
+    id_variants = [txn_id]
+    try:
+        id_variants.append(_OID(txn_id))
+    except Exception:
+        pass
+    return db.transactions.find_one(
+        {"_id": {"$in": id_variants}, "walletId": wallet_id},
+        {"_id": 1, "walletId": 1},
+    )
+
+
+def _beehus_error_response(e, auth_status=401, api_status=502):
+    """Map a Beehus exception to a JSON error response tuple."""
+    status = auth_status if isinstance(e, BeehusAuthError) else api_status
+    return jsonify({"error": str(e),
+                    "upstream_status": getattr(e, "status", None),
+                    "upstream_body": getattr(e, "body", None)}), status
+
+
+@bp.route("/api/conciliacao/transaction/delete", methods=["POST"])
+def delete_wallet_transaction():
+    """Delete a real DB transaction via `DELETE /beehus/financial/transactions/{id}`.
+
+    Body: `{walletId, txnId}`. The txn must belong to `walletId` (verified
+    against db.transactions) and the wallet must be visible to the user."""
+    data      = request.get_json() or {}
+    wallet_id = data.get("walletId", "")
+    txn_id    = str(data.get("txnId", "") or "")
+
+    _, err = _require_visible_wallet(wallet_id)
+    if err:
+        return err
+    if not txn_id:
+        return jsonify({"error": "txnId obrigatório"}), 400
+    if not _find_wallet_txn(wallet_id, txn_id):
+        return jsonify({"error": "transação não encontrada nesta carteira"}), 404
+
+    try:
+        result = _api_delete_transaction(txn_id)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return _beehus_error_response(e)
+    return jsonify(_sanitize({"ok": True, "txnId": txn_id, "upstream": result}))
+
+
+@bp.route("/api/conciliacao/transaction/update", methods=["POST"])
+def update_wallet_transaction():
+    """Patch a real DB transaction via `PATCH /beehus/financial/transactions/{id}`.
+
+    Body: `{walletId, txnId, patch}` where `patch` is a partial dict. Only the
+    fields in `_TXN_EDIT_FIELDS` are forwarded; `balance`/`price` are coerced to
+    float. The txn must belong to `walletId` and the wallet must be visible."""
+    data      = request.get_json() or {}
+    wallet_id = data.get("walletId", "")
+    txn_id    = str(data.get("txnId", "") or "")
+    patch_in  = data.get("patch") or {}
+
+    _, err = _require_visible_wallet(wallet_id)
+    if err:
+        return err
+    if not txn_id:
+        return jsonify({"error": "txnId obrigatório"}), 400
+    if not isinstance(patch_in, dict) or not patch_in:
+        return jsonify({"error": "patch (objeto não-vazio) obrigatório"}), 400
+    if not _find_wallet_txn(wallet_id, txn_id):
+        return jsonify({"error": "transação não encontrada nesta carteira"}), 404
+
+    # Whitelist + coerce. Empty strings on a field mean "leave as-is" → dropped.
+    patch = {}
+    for k, v in patch_in.items():
+        if k not in _TXN_EDIT_FIELDS:
+            continue
+        if v is None or v == "":
+            continue
+        if k in ("balance", "price"):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{k} inválido (não numérico)"}), 400
+        patch[k] = v
+    if not patch:
+        return jsonify({"error": "nenhum campo editável no patch"}), 400
+
+    try:
+        result = _api_update_transaction(txn_id, patch)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return _beehus_error_response(e)
+    return jsonify(_sanitize({"ok": True, "txnId": txn_id, "patch": patch, "upstream": result}))
+
+
+# Fields the wallet-detail provision edit form is allowed to change. Subset of
+# beehus_api.provisions._PATCHABLE_FIELDS — excludes walletId/currencyId/
+# provisionSource (not inline-editable here).
+_PROV_EDIT_FIELDS = {
+    "balance", "provisionType", "initialDate",
+    "liquidationDate", "securityId", "description",
+}
+
+
+def _find_wallet_provision(wallet_id, prov_id):
+    """Return the db.provisions doc for `prov_id` IF it belongs to `wallet_id`.
+    Same ownership guard as `_find_wallet_txn`, for provisions."""
+    if not prov_id:
+        return None
+    id_variants = [prov_id]
+    try:
+        id_variants.append(_OID(prov_id))
+    except Exception:
+        pass
+    return db.provisions.find_one(
+        {"_id": {"$in": id_variants}, "walletId": wallet_id},
+        {"_id": 1, "walletId": 1},
+    )
+
+
+@bp.route("/api/conciliacao/provision/delete", methods=["POST"])
+def delete_wallet_provision():
+    """Delete a real DB provision via `DELETE /beehus/provisions/{id}`.
+
+    Body: `{walletId, provisionId}`. The provision must belong to `walletId`
+    and the wallet must be visible to the user."""
+    data       = request.get_json() or {}
+    wallet_id  = data.get("walletId", "")
+    prov_id    = str(data.get("provisionId", "") or "")
+
+    _, err = _require_visible_wallet(wallet_id)
+    if err:
+        return err
+    if not prov_id:
+        return jsonify({"error": "provisionId obrigatório"}), 400
+    if not _find_wallet_provision(wallet_id, prov_id):
+        return jsonify({"error": "provisão não encontrada nesta carteira"}), 404
+
+    try:
+        result = _api_delete_provision(prov_id)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return _beehus_error_response(e)
+    return jsonify(_sanitize({"ok": True, "provisionId": prov_id, "upstream": result}))
+
+
+@bp.route("/api/conciliacao/provision/update", methods=["POST"])
+def update_wallet_provision():
+    """Patch a real DB provision via `PATCH /beehus/provisions/{id}`.
+
+    Body: `{walletId, provisionId, patch}`. Only `_PROV_EDIT_FIELDS` are
+    forwarded; `balance` is coerced to float. The provision must belong to
+    `walletId` and the wallet must be visible."""
+    data       = request.get_json() or {}
+    wallet_id  = data.get("walletId", "")
+    prov_id    = str(data.get("provisionId", "") or "")
+    patch_in   = data.get("patch") or {}
+
+    _, err = _require_visible_wallet(wallet_id)
+    if err:
+        return err
+    if not prov_id:
+        return jsonify({"error": "provisionId obrigatório"}), 400
+    if not isinstance(patch_in, dict) or not patch_in:
+        return jsonify({"error": "patch (objeto não-vazio) obrigatório"}), 400
+    if not _find_wallet_provision(wallet_id, prov_id):
+        return jsonify({"error": "provisão não encontrada nesta carteira"}), 404
+
+    patch = {}
+    for k, v in patch_in.items():
+        if k not in _PROV_EDIT_FIELDS:
+            continue
+        if v is None or v == "":
+            continue
+        if k == "balance":
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return jsonify({"error": "balance inválido (não numérico)"}), 400
+        patch[k] = v
+    if not patch:
+        return jsonify({"error": "nenhum campo editável no patch"}), 400
+
+    try:
+        result = _api_update_provision(prov_id, patch)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return _beehus_error_response(e)
+    return jsonify(_sanitize({"ok": True, "provisionId": prov_id, "patch": patch, "upstream": result}))
+
+
+@bp.route("/api/conciliacao/calculate-nav", methods=["POST"])
+def calculate_wallet_nav():
+    """Trigger upstream NAV-contribution recalculation for one wallet+date via
+    `POST /beehus/consolidation/nav-contribution-calculation/wallets`
+    (`beehus_api.calculate_nav_wallets`).
+
+    Body: `{walletId, date}`. The company is resolved from the wallet
+    (`_require_visible_wallet`), so the caller can't recalc a wallet outside
+    its visible company. The upstream call can take a while (wide timeout)."""
+    data      = request.get_json() or {}
+    wallet_id = data.get("walletId", "")
+    date      = data.get("date", "")
+
+    company_id, err = _require_visible_wallet(wallet_id)
+    if err:
+        return err
+    if not date:
+        return jsonify({"error": "date obrigatório"}), 400
+
+    try:
+        result = _api_calculate_nav_wallets(
+            company_id=company_id, position_date=date, wallets=[wallet_id],
+        )
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return _beehus_error_response(e)
+    return jsonify(_sanitize({"ok": True, "walletId": wallet_id, "date": date, "upstream": result}))
+
+
+@bp.route("/api/conciliacao/transactions")
+def get_transactions():
+    wallet_id = request.args.get("walletId", "")
+    date      = request.args.get("date", "")
+    company_id, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    proj = {
+        "_id": 1, "operationDate": 1, "liquidationDate": 1, "securityId": 1,
+        "beehusTransactionType": 1, "quantity": 1, "price": 1,
+        "balance": 1, "description": 1,
+    }
+
+    # Pending deletions (MISCLASSIFIED) — keep rows in the list so the user
+    # sees what was marked, but flag them so the UI can grey/strike them and
+    # the calculations on the page can exclude them.
+    corr_txns, _, corr_dels = load_corrections_for_wallet(company_id, date, wallet_id)
+    _del_by_id = {str(d.get("originalId")): d for d in corr_dels if d.get("originalId")}
+
+    # Materialize txns first so the security-name lookup can be scoped to just
+    # the IDs actually referenced on this wallet+date (was a full-collection
+    # scan of `securities`).
+    txn_docs = list(db.transactions.find(
+        {"walletId": wallet_id, "liquidationDate": date}, proj
+    ).sort("operationDate", 1))
+
+    _sec_str_ids = {str(t.get("securityId") or "") for t in txn_docs}
+    _sec_str_ids |= {str(ct.get("securityId") or "") for ct in corr_txns}
+    _sec_str_ids.discard("")
+    security_names = {}
+    if _sec_str_ids:
+        _oids = []
+        for s in _sec_str_ids:
+            try:
+                _oids.append(_OID(s))
+            except Exception:
+                pass
+        if _oids:
+            security_names = {
+                str(d["_id"]): d.get("beehusName", "")
+                for d in db.securities.find({"_id": {"$in": _oids}}, {"beehusName": 1})
+            }
+
+    txns = []
+    for txn in txn_docs:
+        sid = str(txn.get("securityId", "") or "")
+        txn_id = str(txn.get("_id", "") or "")
+        del_entry = _del_by_id.get(txn_id)
+        txns.append({
+            "txnId":                 txn_id,
+            "operationDate":         str(txn.get("operationDate",   "") or "")[:10],
+            "liquidationDate":       str(txn.get("liquidationDate", "") or "")[:10],
+            "securityId":            sid,
+            "securityName":          security_names.get(sid, ""),
+            "beehusTransactionType": txn.get("beehusTransactionType", ""),
+            "quantity":              txn.get("quantity"),
+            "price":                 txn.get("price"),
+            "balance":               txn.get("balance"),
+            "description":           txn.get("description", ""),
+            "isPending":             False,
+            "pendingDeletion":       del_entry is not None,
+            "deletionReason":        (del_entry or {}).get("reason", ""),
+        })
+
+    # Append pending correction transactions (stored in /correcoes, not yet ingested).
+    for ct in corr_txns:
+        sid = str(ct.get("securityId", "") or "")
+        txns.append({
+            "operationDate":         str(ct.get("operationDate",   "") or "")[:10],
+            "liquidationDate":       str(ct.get("liquidationDate", "") or "")[:10],
+            "securityId":            sid,
+            "securityName":          security_names.get(sid, ""),
+            "beehusTransactionType": ct.get("beehusTransactionType", ""),
+            "quantity":              None,
+            "price":                 None,
+            "balance":                ct.get("balance"),
+            "description":           ct.get("description", ""),
+            "isPending":             True,
+            "correctionId":          ct.get("id"),
+        })
+
+    return jsonify(_sanitize({"transactions": txns, "date": date}))
+
+
+# ── Diagnostic engine (V2 — 6-step sequential funnel) ──────────────────────────
+
+_EVENT_TYPES    = {"amortization", "coupon"}
+_TOLERANCE_ABS  = 0.01
+_TOLERANCE_REL  = 0.05   # 5%
+_TOLERANCE_REL_TXN = 0.10  # 10% — Step 3.3 (transaction value vs expected)
+
+
+def _approx(a, b):
+    """Return True if a ≈ b within absolute or relative tolerance."""
+    if a is None or b is None:
+        return False
+    diff = abs(a - b)
+    return diff <= _TOLERANCE_ABS or diff <= abs(b) * _TOLERANCE_REL
+
+
+def _approx_txn(a, b):
+    """Return True if a ≈ b within the wider Step 3.3 tolerance (10%)."""
+    if a is None or b is None:
+        return False
+    diff = abs(a - b)
+    return diff <= _TOLERANCE_ABS or diff <= abs(b) * _TOLERANCE_REL_TXN
+
+
+def _find_former_nav(wallet_id, date):
+    """Resolve a wallet's immediately-prior untrashed navPackage.
+
+    Single source of truth for "former date" / "former NAV". Never uses
+    processedPosition — a processedPosition can exist for a date where no
+    navPackage was calculated, which would produce phantom multi-day returns
+    if picked as the reference.
+
+    Returns (former_date_str|None, former_nav_float|None).
+    """
+    prev_pkg = db.navPackages.find_one(
+        {"walletId":     wallet_id,
+         "positionDate": {"$lt": date},
+         "trashed":      {"$ne": True}},
+        {"positionDate": 1, "nav": 1},
+        sort=[("positionDate", -1)],
+    )
+    if not prev_pkg:
+        return None, None
+    pd = prev_pkg.get("positionDate")
+    return (str(pd)[:10] if pd else None), prev_pkg.get("nav")
+
+
+def _exec_price_impact(row):
+    """Absolute cash impact of an accepted executionPrice correction.
+
+    Derivation: replacing the price the system used (`priorExecutionPrice` or
+    `pu` fallback) with the user-supplied `executionPrice` shifts the intraday
+    contribution by `amountDiff × (priorPrice − newPrice)`. The gap closes by
+    that same magnitude with the appropriate sign — same close-the-gap rule
+    already used for pending transactions, so callers add `|impact|` to the
+    overall `corrections_impact_abs` and the existing `recalc ± impact_abs`
+    heuristic does the rest.
+
+    Returns 0.0 if any field is missing or non-numeric so the recalc never
+    crashes on malformed rows."""
+    try:
+        amt   = float(row.get("amountDiff") or 0)
+        prior = float(row.get("priorExecutionPrice") or 0) or float(row.get("pu") or 0)
+        new   = float(row.get("executionPrice") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return abs(amt * (prior - new))
+
+
+def _recalc_gap_with_corrections(company_id, wallet_id, date, nav_pkg, former_date,
+                                 former_nav, return_contrib, gap_cash,
+                                 *, pending_provs=None):
+    """Full NAV recalc of today's gap considering pending correction provisions
+    that affect either today's NAV or former_date's NAV (Option 1 from
+    docs/CONCILIACAO_BAYESIAN.md). Transactions/deletions keep the legacy
+    |balance| heuristic on top until they get an equally rigorous treatment.
+
+    `pending_provs` is an optional pre-loaded list of provisions for this
+    wallet (output of `load_all_pending_provisions(...)` or of a batched
+    `load_all_pending_provisions_by_wallet(...)[wallet_id]`). Callers that
+    iterate many wallets in one request should batch-load once and pass
+    the per-wallet slice to avoid re-scanning the correcoes tree per call.
+    When `None`, this helper loads its own.
+
+    Formula chain applied verbatim from docs/CONCILIACAO_RECALCULO.md:
+        nav_D             = Σ securities.balance + Σ provisions.amount + Σ cash
+        navPerShare_D     = (nav_D − inAndOutFlows_D) / formerAmount_D
+        returnNavPS_today = navPerShare_today / navPerShare_former − 1
+        gapPct_today      = returnNavPS_today − returnContribution_today
+        gapCash_today     = gapPct_today × former_nav
+
+    Pending provisions change nav_D on the dates where they are *active*
+    (`initialDate ≤ D < liquidationDate`). Pending txns/deletions adjust
+    gap magnitude via the legacy |balance| close rule.
+
+    Returns (recalc_gap_cash, recalc_gap_pct, impact_abs, corrections_count).
+    """
+    if not company_id or gap_cash is None:
+        recalc_gap_pct = (gap_cash / former_nav) if (gap_cash is not None and former_nav) else None
+        return gap_cash, recalc_gap_pct, 0, 0
+
+    txns, _, dels = load_corrections_for_wallet(company_id, date, wallet_id)
+
+    # Partition pending provisions into today-active / former-active without
+    # re-scanning the tree. A provision can be active on both dates if its
+    # window spans them.
+    if pending_provs is None:
+        pending_provs = load_all_pending_provisions(company_id, wallet_id)
+
+    def _active_on(p, d):
+        if not d:
+            return False
+        init = str(p.get("initialDate") or "")[:10]
+        liq  = str(p.get("liquidationDate") or "")[:10]
+        dstr = str(d)[:10]
+        return bool(init) and bool(liq) and init <= dstr < liq
+
+    today_provs  = [p for p in pending_provs if _active_on(p, date)]
+    former_provs = [p for p in pending_provs if _active_on(p, former_date)]
+
+    # Dedupe provisions by id — a provision whose window spans BOTH today and
+    # former_date (uncommon but possible) appears in both lists.
+    uniq_provs = {}
+    for p in list(today_provs) + list(former_provs):
+        pid = p.get("id") or id(p)
+        uniq_provs[pid] = p
+
+    # Pending executionPrice corrections that target this date and have NOT
+    # yet been pushed upstream (`inputed=False`). Inputed rows are baked into
+    # the source data already and applying them locally would double-count.
+    exec_rows = load_pending_execution_prices(company_id, wallet_id)
+    exec_active = [
+        r for r in exec_rows
+        if (r.get("positionDate") == date) and not r.get("inputed")
+    ]
+    exec_impact_abs = sum(_exec_price_impact(r) for r in exec_active)
+
+    txn_impact_abs  = sum(abs(float(r.get("balance") or 0)) for r in txns)
+    prov_impact_abs = sum(abs(float(p.get("balance") or 0)) for p in uniq_provs.values())
+    impact_abs      = txn_impact_abs + prov_impact_abs + exec_impact_abs
+    corrections_count = len(txns) + len(uniq_provs) + len(dels) + len(exec_active)
+
+    # Delta NAV per date from active provisions
+    delta_nav_today  = sum(float(p.get("balance") or 0) for p in today_provs)
+    delta_nav_former = sum(float(p.get("balance") or 0) for p in former_provs)
+
+    # Full NAV recalc when any provision affects either nav
+    recalc_gap_cash = gap_cash
+    if delta_nav_today != 0 or delta_nav_former != 0:
+        former_pkg = db.navPackages.find_one(
+            {"walletId": wallet_id, "positionDate": former_date, "trashed": {"$ne": True}},
+            {"formerAmount": 1, "inAndOutFlows": 1, "navPerShare": 1, "nav": 1}
+        ) if former_date else None
+
+        former_shares = (former_pkg or {}).get("formerAmount") or 0
+        today_shares  = nav_pkg.get("formerAmount") or 0
+
+        if former_pkg and former_shares and today_shares:
+            inflow_F = (former_pkg or {}).get("inAndOutFlows") or 0
+            inflow_T = nav_pkg.get("inAndOutFlows") or 0
+            nav_T    = nav_pkg.get("nav") or 0
+
+            new_nav_former = former_nav + delta_nav_former
+            new_nps_former = (new_nav_former - inflow_F) / former_shares
+
+            new_nav_today  = nav_T + delta_nav_today
+            new_nps_today  = (new_nav_today - inflow_T) / today_shares
+
+            if new_nps_former:
+                new_return_nav_ps = (new_nps_today / new_nps_former) - 1
+                new_gap_pct       = new_return_nav_ps - return_contrib
+                recalc_gap_cash   = new_gap_pct * new_nav_former
+
+    # Legacy close-the-gap heuristic applied on top of the provision recalc.
+    # Both pending transactions AND non-inputed executionPrice corrections
+    # follow the same rule: each |impact| pushes `recalc_gap_cash` toward zero
+    # by its magnitude. This matches the user's stated semantics ("include the
+    # impact previously calculated in the recalculated GAP after Aceitar"),
+    # and for the canonical MEP scenario where impact == |gapCash| produces
+    # `recalc_gap_cash ≈ 0`.
+    close_amount = txn_impact_abs + exec_impact_abs
+    if recalc_gap_cash is not None:
+        if recalc_gap_cash >= 0:
+            recalc_gap_cash = recalc_gap_cash - close_amount
+        else:
+            recalc_gap_cash = recalc_gap_cash + close_amount
+
+    recalc_gap_cash = round(recalc_gap_cash, 2) if recalc_gap_cash is not None else None
+    recalc_gap_pct  = (round(recalc_gap_cash / former_nav, 10)
+                       if (recalc_gap_cash is not None and former_nav) else None)
+    return recalc_gap_cash, recalc_gap_pct, round(impact_abs, 2), corrections_count
+
+
+@bp.route("/api/conciliacao/diagnose")
+def diagnose():
+    wallet_id = request.args.get("walletId", "")
+    date      = request.args.get("date", "")
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    # ── Data loading ────────────────────────────────────────────────────────────
+
+    # NAV package
+    nav_pkg = db.navPackages.find_one(
+        {"walletId": wallet_id, "positionDate": date, "trashed": {"$ne": True}},
+        {"returnNavPerShare": 1, "returnContribution": 1, "nav": 1,
+         "navPerShare": 1, "inAndOutFlows": 1, "amount": 1, "formerAmount": 1}
+    )
+    if not nav_pkg:
+        return jsonify({"error": "navPackage não encontrado"}), 404
+
+    return_nav_ps  = nav_pkg.get("returnNavPerShare", 0) or 0
+    return_contrib = nav_pkg.get("returnContribution", 0) or 0
+
+    # Resolve former date + NAV from the most recent untrashed navPackage for this
+    # wallet (never from processedPosition). The `formerNav` field stored on
+    # today's navPackage is intentionally ignored: it can be stale if the prior
+    # package was trashed or regenerated after today's was computed.
+    former_date, former_nav = _find_former_nav(wallet_id, date)
+
+    # Wallet has no prior untrashed navPackage → out of scope for analysis.
+    if former_date is None or former_nav is None:
+        return jsonify({
+            "error": "Carteira sem navPackage anterior — fora do escopo de análise.",
+            "walletId": wallet_id, "date": date,
+        }), 404
+
+    gap_pct  = return_nav_ps - return_contrib
+    gap_cash = round(gap_pct * former_nav, 2) if former_nav is not None else None
+
+    # ── Recalculated gap after applying pending corrections ─────────────────────
+    # Provisions are handled via full NAV recalc (see _recalc_gap_with_corrections
+    # docstring); txns/deletions keep the legacy |balance|-closes-gap heuristic.
+    _company_id_for_gap = _wallet_company(wallet_id)
+    recalc_gap_cash, recalc_gap_pct, corrections_impact_abs, corrections_count = \
+        _recalc_gap_with_corrections(_company_id_for_gap, wallet_id, date, nav_pkg,
+                                     former_date, former_nav, return_contrib, gap_cash)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 1 — Detect
+    # ═══════════════════════════════════════════════════════════════════════════
+    step1 = {
+        "status":             "gap" if abs(gap_pct) > 1e-10 else "ok",
+        "returnNavPerShare":  return_nav_ps,
+        "returnContribution": return_contrib,
+        "gapPct":             gap_pct,
+        "gapCash":            gap_cash,
+        "formerNav":          former_nav,
+        "correctionsCount":   corrections_count,
+        "correctionsImpact":  round(corrections_impact_abs, 2),
+        "recalculatedGapCash": recalc_gap_cash,
+        "recalculatedGapPct":  recalc_gap_pct,
+    }
+
+    _skipped = {"status": "skipped"}
+    if step1["status"] == "ok":
+        step7_no_gap = {
+            "status":    "ok",
+            "verdict":   "NO_GAP",
+            "detail":    "Sem divergência detectada.",
+            "formerNav": former_nav,
+            "formerDate": None,
+            "gapCash":   gap_cash,
+            "gapPct":    gap_pct,
+            "signals": {
+                "step3HasFlags":                  False,
+                "step4HasIssues":                 False,
+                "step5Consistent":                True,
+                "step6WalletAnomaly":             False,
+                "allSuspectsMissingContribution": False,
+            },
+        }
+        return jsonify(_sanitize({
+            "walletId": wallet_id, "date": date,
+            "step1": step1, "step2": _skipped, "step3": _skipped,
+            "step4": _skipped, "step5": _skipped, "step6": _skipped,
+            "step7": step7_no_gap,
+        }))
+
+    # ── Processed positions ─────────────────────────────────────────────────────
+    pos_doc = db.processedPosition.find_one(
+        {"walletId": wallet_id, "positionDate": date}, {"securities": 1}
+    )
+    # Use the navPackage-aligned former_date (resolved earlier) to fetch the
+    # processedPosition for the same date. Do NOT fall back to "most recent
+    # processedPosition before date" — that re-introduces the mismatch bug.
+    former_doc = db.processedPosition.find_one(
+        {"walletId": wallet_id, "positionDate": former_date},
+        {"securities": 1}
+    ) if former_date else None
+    former_map = {
+        str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
+        for s in (former_doc or {}).get("securities", [])
+    }
+
+    # ── Pending corrections (from /correcoes store) ─────────────────────────────
+    # These are rows the user has accepted (via Painel / Conciliação Aceitar) but
+    # not yet exported/ingested into the DB. Feeding them into the pipeline makes
+    # flags that would be "fixed" by them disappear, gaps close, etc.
+    #
+    # Transactions and deletions are acceptance-date-scoped (same folder as
+    # `date`). Provisions are NOT: a provision spanning [D, D+N) must be visible
+    # to every diagnose run whose date falls in that window, regardless of the
+    # folder it was accepted into. So we pull provisions cross-folder.
+    _company_id = _wallet_company(wallet_id)
+    _corr_txns, _, _corr_dels = load_corrections_for_wallet(_company_id, date, wallet_id)
+    _corr_provs = load_all_pending_provisions(_company_id, wallet_id)
+
+    # IDs of DB transactions the user asked to disregard (MISCLASSIFIED
+    # replacements). Filtered out of Steps 4/5 and Bayesian so the pipeline
+    # sees the post-correction world.
+    _deletion_ids = {str(d.get("originalId")) for d in _corr_dels if d.get("originalId")}
+
+    # ── Transactions grouped by securityId ──────────────────────────────────────
+    txns_by_security = {}   # {securityId: [{"type", "balance"}]}
+    wallet_txns      = []   # transactions with no securityId
+    all_txns_flat    = []   # every transaction (for Step 4 / Step 5)
+    for doc in db.transactions.find(
+        {"walletId": wallet_id, "liquidationDate": date},
+        {"_id": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1}
+    ):
+        txn_id = str(doc.get("_id", "") or "")
+        if txn_id and txn_id in _deletion_ids:
+            continue  # user disregarded this DB txn (MISCLASSIFIED replacement)
+        entry = {"type": doc.get("beehusTransactionType"), "balance": doc.get("balance"),
+                 "securityId": str(doc.get("securityId", "") or ""),
+                 "txnId":      txn_id}
+        all_txns_flat.append(entry)
+        sid = entry["securityId"]
+        if sid:
+            txns_by_security.setdefault(sid, []).append(entry)
+        else:
+            wallet_txns.append(entry)
+
+    # Inject pending correction transactions.
+    for ct in _corr_txns:
+        entry = {"type":       ct.get("beehusTransactionType"),
+                 "balance":    ct.get("balance"),
+                 "securityId": str(ct.get("securityId", "") or ""),
+                 "pending":    True}
+        all_txns_flat.append(entry)
+        sid = entry["securityId"]
+        if sid:
+            txns_by_security.setdefault(sid, []).append(entry)
+        else:
+            wallet_txns.append(entry)
+
+    # ── Security info (settlement days + securityType) ──────────────────────────
+    current_secs   = (pos_doc or {}).get("securities", [])
+    current_sec_ids = {str(s.get("securityId", "")) for s in current_secs}
+
+    # Gather all securityIds we need info for (position + transactions)
+    all_sec_ids_raw = set()
+    for s in current_secs:
+        if s.get("securityId"):
+            all_sec_ids_raw.add(s["securityId"])
+    for sid in txns_by_security:
+        all_sec_ids_raw.add(sid)
+
+    sec_ids_query = []
+    for sid in all_sec_ids_raw:
+        sec_ids_query.append(sid)
+        try:
+            sec_ids_query.append(_OID(str(sid)))
+        except Exception:
+            pass
+
+    sec_info = {
+        str(s["_id"]): s
+        for s in db.securities.find(
+            {"_id": {"$in": sec_ids_query}},
+            {"redemptionNavDays": 1, "redemptionSettlementDays": 1,
+             "subscriptionNavDays": 1, "subscriptionSettlementDays": 1,
+             "securityType": 1, "beehusName": 1}
+        )
+    }
+
+    # ── Active provisions ───────────────────────────────────────────────────────
+    prov_map = {}    # {securityId: total active provision amount}
+    for doc in db.provisions.aggregate([
+        {"$match": {"walletId": wallet_id, "initialDate": {"$lte": date},
+                    "liquidationDate": {"$gt": date}, "securityId": {"$ne": None}}},
+        {"$group": {"_id": "$securityId", "total": {"$sum": {"$ifNull": ["$amount", 0]}}}},
+    ]):
+        sid_p = str(doc["_id"])
+        if sid_p:
+            prov_map[sid_p] = doc["total"]
+
+    # Provisions created or liquidated on this date (for Step 2 condition c)
+    prov_lifecycle_sids = set()
+    for doc in db.provisions.find(
+        {"walletId": wallet_id, "securityId": {"$ne": None},
+         "$or": [{"initialDate": date}, {"liquidationDate": date}]},
+        {"securityId": 1}
+    ):
+        prov_lifecycle_sids.add(str(doc["securityId"]))
+
+    # Inject pending correction provisions.
+    for cp in _corr_provs:
+        sid = str(cp.get("securityId", "") or "")
+        bal = cp.get("balance") or 0
+        init = cp.get("initialDate")
+        liq  = cp.get("liquidationDate")
+        # Active provision spans (init <= date < liq) — add to prov_map.
+        if sid and (init or "") <= date and (liq or "") > date:
+            prov_map[sid] = prov_map.get(sid, 0) + float(bal)
+        # Lifecycle event on this date (init == date or liq == date).
+        if sid and (init == date or liq == date):
+            prov_lifecycle_sids.add(sid)
+
+    # ── Event transactions by security (for Step 3.2) ───────────────────────────
+    event_txns_by_sec = {}   # {securityId: [{"type", "balance"}]}
+    for t in all_txns_flat:
+        if t["type"] in _EVENT_TYPES and t["securityId"]:
+            event_txns_by_sec.setdefault(t["securityId"], []).append(t)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 2 — Eliminate
+    # ═══════════════════════════════════════════════════════════════════════════
+    eliminated = []
+    suspects   = []
+
+    for sec in current_secs:
+        sid  = str(sec.get("securityId", ""))
+        pu   = sec.get("pu")
+        qty  = sec.get("quantity")
+        f    = former_map.get(sid, {})
+        f_pu = f.get("pu")
+        f_qty = f.get("quantity")
+        f_bal = round(f_pu * f_qty, 6) if (f_pu is not None and f_qty is not None) else None
+        amt_diff = round(qty - (f_qty or 0), 6) if qty is not None else None
+
+        exec_price = sec.get("executionPrice")
+        event_c    = sec.get("eventContribution") or 0
+        total_c    = sec.get("totalContribution")
+
+        # Compute rentab PU and rentab Contribution
+        try:
+            ret_pu = round(pu / f_pu - 1, 8) if (pu and f_pu) else None
+        except (TypeError, ZeroDivisionError):
+            ret_pu = None
+        try:
+            ret_c = round(total_c / f_bal, 8) if (total_c is not None and f_bal) else None
+        except (TypeError, ZeroDivisionError):
+            ret_c = None
+        diff_rent = round(ret_pu - ret_c, 8) if (ret_pu is not None and ret_c is not None) else None
+
+        sec_txns = txns_by_security.get(sid, [])
+
+        # Elimination conditions (ALL must be true)
+        cond_a = amt_diff is not None and amt_diff == 0     # no quantity change
+        cond_b = not sec_txns                               # no transactions
+        cond_c = sid not in prov_lifecycle_sids              # no provision lifecycle event
+        cond_d = diff_rent is not None and diff_rent == 0   # rentab equal
+
+        # If rentab differs, check if event txns explain it (coupon/amortization)
+        if not cond_d and diff_rent and f_bal:
+            ev_txns = event_txns_by_sec.get(sid, [])
+            if ev_txns:
+                ev_total = round(sum(float(t.get("balance", 0) or 0) for t in ev_txns), 2)
+                expected_event_cash = round(-diff_rent * f_bal, 2)
+                if _approx(ev_total, expected_event_cash):
+                    cond_d = True   # explained by event transactions
+                    # Exclude event txns from cond_b check — they are accounted for
+                    non_event_txns = [t for t in sec_txns if t["type"] not in _EVENT_TYPES]
+                    cond_b = not non_event_txns
+
+        sec_entry = {
+            "securityId":     sid,
+            "name":           sec.get("beehusName", ""),
+            "amountDiff":     amt_diff,
+            "diffRent":       diff_rent,
+            "formerBalance":  f_bal,
+            "pu":             pu,
+            "formerPu":       f_pu,
+            "executionPrice": exec_price,
+            "quantity":       qty,
+            "formerQuantity": f_qty,
+            "eventContribution": event_c,
+            "totalContribution": total_c,
+            "securityType":   sec_info.get(sid, {}).get("securityType", ""),
+            "failedConditions": [],
+        }
+
+        if cond_a and cond_b and cond_c and cond_d:
+            eliminated.append(sec_entry)
+        else:
+            if not cond_a:
+                sec_entry["failedConditions"].append("amountDifference")
+            if not cond_b:
+                sec_entry["failedConditions"].append("hasTransactions")
+            if not cond_c:
+                sec_entry["failedConditions"].append("provisionLifecycle")
+            if not cond_d:
+                sec_entry["failedConditions"].append("rentabilityDifference")
+            suspects.append(sec_entry)
+
+    step2 = {
+        "status":          "done",
+        "eliminatedCount": len(eliminated),
+        "suspectCount":    len(suspects),
+        "suspects":        suspects,
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 3 — Diagnose Securities
+    # ═══════════════════════════════════════════════════════════════════════════
+    step3_securities = []
+
+    for sec_entry in suspects:
+        sid        = sec_entry["securityId"]
+        amt_diff   = sec_entry["amountDiff"]
+        diff_rent  = sec_entry["diffRent"]
+        f_bal      = sec_entry["formerBalance"]
+        pu         = sec_entry["pu"]
+        exec_price = sec_entry["executionPrice"]
+        price      = exec_price or pu or 0
+        sec_type   = sec_entry["securityType"]
+        sec_txns   = txns_by_security.get(sid, [])
+
+        diag = {
+            "securityId": sid,
+            "name":       sec_entry["name"],
+            "amountDiff": amt_diff,
+            "diffRent":   diff_rent,
+            "eliminated": False,
+            "step3_1":    None,
+            "step3_2":    None,
+            "step3_3":    None,
+            "step3_4":    None,
+        }
+
+        # ── 3.1 Amount Difference ──────────────────────────────────────────────
+        if amt_diff:
+            info   = sec_info.get(sid, {})
+            settle = info.get("redemptionSettlementDays" if amt_diff < 0 else "subscriptionSettlementDays") or 0
+            nav_d  = info.get("redemptionNavDays"        if amt_diff < 0 else "subscriptionNavDays")        or 0
+            offset = settle - nav_d
+
+            if offset == 0:
+                # Expect transaction
+                has_buysell = any(t.get("type") == "buySell" for t in sec_txns)
+                if has_buysell:
+                    diag["step3_1"] = {"status": "ok", "offset": offset,
+                                       "detail": "Transação buySell encontrada"}
+                else:
+                    impact = round(abs(amt_diff) * price, 2)
+                    diag["step3_1"] = {"status": "flag", "flag": "MISSING_TRANSACTION",
+                                       "offset": offset, "impact": impact,
+                                       "detail": "Liquidação imediata mas transação buySell não encontrada"}
+            else:
+                # Expect provision
+                if sid in prov_map:
+                    diag["step3_1"] = {"status": "ok", "offset": offset,
+                                       "detail": "Provisão ativa encontrada",
+                                       "provisionAmount": round(float(prov_map[sid]), 2)}
+                else:
+                    impact = round(abs(amt_diff) * price, 2)
+                    flag_detail = "Liquidação futura" if offset > 0 else "Nav futuro"
+                    # Provision window: liquidation = navPackage date + offset.
+                    prov_initial, prov_liquidation = _prov_dates(date, offset)
+                    prov_type = "buySell"
+                    # Provision sign rule is SCENARIO-DEPENDENT (see
+                    # refine/accept for the full derivation):
+                    #   offset > 0 (liquidação futura, active [date, date+offset)):
+                    #     qty already on position, cash not yet moved.
+                    #     subscription → NEGATIVE ; redemption → POSITIVE
+                    #   offset < 0 (nav futuro — txn already settled in past,
+                    #     active [date+offset, date)): cash already moved,
+                    #     qty not yet on position.
+                    #     subscription → POSITIVE ; redemption → NEGATIVE
+                    if offset > 0:
+                        prov_balance = -impact if amt_diff > 0 else impact
+                    else:
+                        prov_balance = impact if amt_diff > 0 else -impact
+                    diag["step3_1"] = {"status": "flag", "flag": "MISSING_PROVISION",
+                                       "offset": offset, "impact": impact,
+                                       "detail": f"{flag_detail} (offset={offset}) mas provisão não encontrada",
+                                       "provisionData": {
+                                           "initialDate":    prov_initial,
+                                           "liquidationDate": prov_liquidation,
+                                           "provisionType":  prov_type,
+                                           "balance":        prov_balance,
+                                           "offset":         offset,
+                                       }}
+
+        # ── 3.2 Rentability Difference ─────────────────────────────────────────
+        if diff_rent and f_bal:
+            expected_event_cash = round(-diff_rent * f_bal, 2)
+            ev_txns = event_txns_by_sec.get(sid, [])
+            ev_total = round(sum(float(t.get("balance", 0) or 0) for t in ev_txns), 2)
+
+            if ev_txns and _approx(ev_total, expected_event_cash):
+                diag["step3_2"] = {"status": "eliminated",
+                                   "detail": "Diferença explicada por transação de evento",
+                                   "expectedEventCash": expected_event_cash,
+                                   "eventTransactionTotal": ev_total}
+                diag["eliminated"] = True
+            elif ev_txns:
+                diag["step3_2"] = {"status": "flag", "flag": "WRONG_EVENT_BALANCE",
+                                   "detail": "Transação de evento existe mas valor diverge",
+                                   "expectedEventCash": expected_event_cash,
+                                   "eventTransactionTotal": ev_total,
+                                   "impact": round(abs(ev_total - expected_event_cash), 2)}
+            elif sid in prov_map and _approx(float(prov_map[sid]), expected_event_cash):
+                diag["step3_2"] = {"status": "eliminated",
+                                   "detail": "Diferença explicada por provisão (provável evento anunciado)",
+                                   "expectedEventCash": expected_event_cash,
+                                   "provisionAmount": round(float(prov_map[sid]), 2)}
+                diag["eliminated"] = True
+            elif sid in prov_map:
+                diag["step3_2"] = {"status": "flag", "flag": "WRONG_PROVISION_AMOUNT",
+                                   "detail": "Provisão existe mas valor diverge do evento esperado",
+                                   "expectedEventCash": expected_event_cash,
+                                   "provisionAmount": round(float(prov_map[sid]), 2),
+                                   "impact": round(abs(float(prov_map[sid]) - expected_event_cash), 2)}
+            else:
+                diag["step3_2"] = {"status": "flag", "flag": "MISSING_EVENT",
+                                   "detail": "Sem transação de evento e sem provisão",
+                                   "expectedEventCash": expected_event_cash,
+                                   "impact": abs(expected_event_cash)}
+
+        # ── 3.3 Withholding Tax / Execution Price ──────────────────────────────
+        if amt_diff and not diag["eliminated"]:
+            buysell_txns = [t for t in sec_txns if t.get("type") == "buySell"]
+            if buysell_txns:
+                actual_bal    = round(sum(float(t.get("balance", 0) or 0) for t in buysell_txns), 2)
+                expected_val  = round(-amt_diff * price, 2)
+                if _approx_txn(expected_val, actual_bal):
+                    # Total value roughly matches (within 10%). There are three
+                    # sub-cases to consider:
+                    #   (a) brazilianFund redemption where actual < expected
+                    #       → IR retido na fonte (WITHHOLDING_TAX). Priority
+                    #         over MISSING_EXECUTION_PRICE because the implied
+                    #         price naturally differs from the used price by
+                    #         tax/quantity, which would otherwise be mis-flagged.
+                    #   (b) implied price (= -actual / Δqty) differs from the
+                    #       price actually used (`price = executionPrice or
+                    #       PU`) by more than 0.5% → MISSING_EXECUTION_PRICE.
+                    #   (c) otherwise → OK (value matches within tolerance).
+                    diff_val = round(abs(expected_val - actual_bal), 2)
+                    implied_exec = round(-actual_bal / amt_diff, 6) if amt_diff else None
+
+                    if (sec_type == "brazilianFund" and amt_diff < 0
+                            and actual_bal < expected_val and diff_val > _TOLERANCE_ABS):
+                        diag["step3_3"] = {"status": "flag", "flag": "WITHHOLDING_TAX",
+                                           "detail": "Provável IR retido na fonte (brazilianFunds)",
+                                           "expectedValue": expected_val,
+                                           "actualBalance": round(actual_bal, 2),
+                                           "impact": diff_val}
+                    elif (price and implied_exec is not None
+                            and abs(implied_exec - price) > abs(price) * 0.005):
+                        diag["step3_3"] = {"status": "flag", "flag": "MISSING_EXECUTION_PRICE",
+                                           "detail": "Preço de execução divergente do preço usado (provável fallback de PU)",
+                                           "expectedValue": expected_val,
+                                           "actualBalance": round(actual_bal, 2),
+                                           "pu": pu, "executionPrice": exec_price,
+                                           "expectedExecPrice": implied_exec,
+                                           "impact": diff_val}
+                    else:
+                        diag["step3_3"] = {"status": "ok",
+                                           "detail": "Valor da transação confere com esperado",
+                                           "expectedValue": expected_val,
+                                           "actualBalance": round(actual_bal, 2)}
+                else:
+                    diff_val = round(abs(expected_val - actual_bal), 2)
+                    if sec_type == "brazilianFund" and amt_diff < 0:
+                        diag["step3_3"] = {"status": "flag", "flag": "WITHHOLDING_TAX",
+                                           "detail": "Provável IR retido na fonte (brazilianFunds)",
+                                           "expectedValue": expected_val,
+                                           "actualBalance": round(actual_bal, 2),
+                                           "impact": diff_val}
+                    elif exec_price is None or (pu is not None and exec_price == pu):
+                        # expectedExecPrice = actualBalance / amountDiff
+                        expected_exec_price = round(-actual_bal / amt_diff, 6) if amt_diff else None
+                        diag["step3_3"] = {"status": "flag", "flag": "MISSING_EXECUTION_PRICE",
+                                           "detail": "Preço de execução ausente (sistema usou PU como fallback)",
+                                           "expectedValue": expected_val,
+                                           "actualBalance": round(actual_bal, 2),
+                                           "pu": pu, "executionPrice": exec_price,
+                                           "expectedExecPrice": expected_exec_price,
+                                           "impact": diff_val}
+                    else:
+                        diag["step3_3"] = {"status": "flag", "flag": "WRONG_TRANSACTION_VALUE",
+                                           "detail": "Valor da transação diverge do esperado",
+                                           "expectedValue": expected_val,
+                                           "actualBalance": round(actual_bal, 2),
+                                           "impact": diff_val}
+
+        # ── 3.4 Transaction exists but no quantity/rentab signal ───────────────
+        # Fires when a suspect has transactions on the security, but neither
+        # quantity nor rentability moved (amountDiff == 0 AND diffRent ∈ {0, None}).
+        # If the sum of those transactions matches the gap, it's almost certainly
+        # a misclassified beehusTransactionType — the transaction is moving cash
+        # but its type (e.g. dividend, rebate, otherFee) is not counted in
+        # eventContribution. Purely diagnostic: no Aceitar / no Bayesian / no
+        # file generation for this flag.
+        no_amt_change  = (amt_diff is not None and amt_diff == 0)
+        no_rent_signal = (diff_rent is None or diff_rent == 0)
+        if (no_amt_change and no_rent_signal and sec_txns
+                and gap_cash is not None and not diag["step3_3"]):
+            txn_sum = round(sum(float(t.get("balance", 0) or 0) for t in sec_txns), 2)
+            if abs(txn_sum) > 0.01 and _approx(abs(txn_sum), abs(gap_cash)):
+                types_found = sorted({(t.get("type") or "—") for t in sec_txns})
+                diag["step3_4"] = {
+                    "status":            "flag",
+                    "flag":              "MISCLASSIFIED_EVENT_TYPE",
+                    "impact":            abs(txn_sum),
+                    "transactionTotal":  txn_sum,
+                    "transactionTypes":  types_found,
+                    "transactionCount":  len(sec_txns),
+                    "detail": (
+                        f"Transações neste security somam R$ {txn_sum:.2f}, valor idêntico ao gap. "
+                        f"Tipo(s) presente(s): {', '.join(types_found)}. "
+                        "Provável erro de classificação — o tipo atual não é reconhecido como evento "
+                        "(coupon/amortization) e por isso não impacta eventContribution."
+                    ),
+                }
+
+        if diag["step3_1"] or diag["step3_2"] or diag["step3_3"] or diag["step3_4"]:
+            step3_securities.append(diag)
+
+    step3 = {
+        "status":     "done",
+        "securities": step3_securities,
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 4 — Diagnose Transactions
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # 4.1 Unclassified transactions
+    unclassified = [
+        {"securityId": t["securityId"], "balance": t.get("balance")}
+        for t in all_txns_flat if not t.get("type")
+    ]
+
+    # 4.2 Wrong security identification
+    wrong_security = []
+    for sid, txns in txns_by_security.items():
+        if sid in current_sec_ids:
+            continue
+        # This securityId is in transactions but not in position
+        info = sec_info.get(sid, {})
+        has_provision = sid in prov_map
+
+        # Check: new purchase with subscriptionNavDays > 0
+        sub_nav = info.get("subscriptionNavDays") or 0
+        if sub_nav > 0 and has_provision:
+            verdict = "LEGITIMATE_NEW_PURCHASE"
+            reason  = f"Compra nova com subscriptionNavDays={sub_nav} e provisão existente"
+        else:
+            # Check: sold security with offset > 0
+            red_settle = info.get("redemptionSettlementDays") or 0
+            red_nav    = info.get("redemptionNavDays") or 0
+            offset     = red_settle - red_nav
+            if offset > 0 and has_provision:
+                verdict = "LEGITIMATE_POST_SALE"
+                reason  = f"Venda com offset={offset} e provisão existente"
+            elif has_provision:
+                verdict = "LEGITIMATE_WITH_PROVISION"
+                reason  = "Security não está na posição mas provisão existe"
+            else:
+                verdict = "WRONG_SECURITY"
+                reason  = "Security não encontrado na posição e sem provisão correspondente"
+
+        total_bal = round(sum(float(t.get("balance", 0) or 0) for t in txns), 2)
+        wrong_security.append({
+            "securityId":   sid,
+            "securityName": info.get("beehusName", ""),
+            "balance":      total_bal,
+            "txnCount":     len(txns),
+            "verdict":      verdict,
+            "reason":       reason,
+        })
+
+    # 4.3 Probable misclassified transactions
+    # Collect missing values from Step 3 flags, then for each transaction check if
+    # its balance matches a missing value from a DIFFERENT security.
+    misclassified = []
+    step3_missing = {}  # {securityId: [(name, impact, flag)]}
+    for diag in step3_securities:
+        sid = diag["securityId"]
+        name = diag["name"]
+        for key in ("step3_1", "step3_2", "step3_3"):
+            s = diag.get(key)
+            if s and s.get("status") == "flag" and s.get("impact"):
+                step3_missing.setdefault(sid, []).append(
+                    (name, round(float(s["impact"]), 2), s["flag"]))
+
+    if step3_missing:
+        for t in all_txns_flat:
+            t_bal = round(abs(float(t.get("balance", 0) or 0)), 2)
+            if not t_bal:
+                continue
+            t_sid = t.get("securityId", "")
+            t_type = t.get("type")
+            matches = []
+            for miss_sid, entries in step3_missing.items():
+                if miss_sid == t_sid:
+                    continue
+                for miss_name, miss_impact, miss_flag in entries:
+                    if _approx(t_bal, miss_impact):
+                        matches.append({
+                            "securityId":   miss_sid,
+                            "securityName": miss_name,
+                            "flag":         miss_flag,
+                            "expectedValue": miss_impact,
+                        })
+            if matches:
+                misclassified.append({
+                    "txnId":         t.get("txnId") or None,
+                    "txnBalance":    round(float(t.get("balance", 0) or 0), 2),
+                    "txnSecurityId": t_sid or None,
+                    "txnType":       t_type,
+                    "matches":       matches,
+                })
+
+    step4 = {
+        "status":        "done",
+        "unclassified":  unclassified,
+        "wrongSecurity": wrong_security,
+        "misclassified": misclassified,
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 5 — Cash Validation
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Batch both dates into one `cashAccounts` scan (no index on walletId).
+    _cash = _sum_cash_by_dates(wallet_id, [former_date, date])
+    former_cash  = _cash[former_date]
+    current_cash = _cash[date]
+    total_txn_balance = round(sum(float(t.get("balance", 0) or 0) for t in all_txns_flat), 2)
+    projected_cash = round(former_cash + total_txn_balance, 2) if former_cash is not None else None
+    cash_diff = round(projected_cash - current_cash, 2) if (projected_cash is not None and current_cash is not None) else None
+
+    # Step 5.1 — suspect transactions: any txn whose balance matches cashDiff
+    # closely enough that removing it would zero out the divergence.
+    # See docs/CONCILIACAO_DIAGNOSTICO.md § 5.1.
+    #
+    # Tighter tolerance than the generic _approx: use max(R$ 0,01; 0,1% of
+    # |cashDiff|). The 5% relative band of _approx is too loose here — on a
+    # cashDiff of R$ 500k it would accept any txn within ±R$ 25k, drowning
+    # the genuine exact-match in noise. Results are sorted by closeness
+    # ascending so the most plausible candidate renders first in the UI.
+    suspect_txns = []
+    if cash_diff is not None and abs(cash_diff) > _TOLERANCE_ABS:
+        tol = max(_TOLERANCE_ABS, abs(cash_diff) * 0.001)
+        candidates = []
+        for t in all_txns_flat:
+            bal = float(t.get("balance") or 0)
+            delta = abs(bal - cash_diff)
+            if delta <= tol:
+                sid = t.get("securityId") or None
+                sec_name = None
+                if sid:
+                    info = sec_info.get(str(sid))
+                    if info:
+                        sec_name = info.get("beehusName")
+                candidates.append((delta, {
+                    "txnId":        t.get("txnId") or None,
+                    "balance":      round(bal, 2),
+                    "type":         t.get("type"),
+                    "securityId":   sid,
+                    "securityName": sec_name,
+                    "pending":      bool(t.get("pending")),
+                }))
+        candidates.sort(key=lambda x: x[0])
+        suspect_txns = [c[1] for c in candidates]
+
+    if cash_diff is not None and round(cash_diff, 2) == 0:
+        cash_diagnosis = "consistent"
+        cash_status    = "ok"
+    elif unclassified:
+        cash_diagnosis = "unclassified_txns"
+        cash_status    = "warning"
+    elif not all_txns_flat:
+        cash_diagnosis = "missing_cash_txn"
+        cash_status    = "warning"
+    elif suspect_txns:
+        cash_diagnosis = "likely_wrong_txn"
+        cash_status    = "warning"
+    elif cash_diff is not None:
+        cash_diagnosis = "value_error"
+        cash_status    = "warning"
+    else:
+        cash_diagnosis = "no_data"
+        cash_status    = "ok"
+
+    step5 = {
+        "status":            cash_status,
+        "formerCash":        former_cash,
+        "currentCash":       current_cash,
+        "totalTransactions": total_txn_balance,
+        "projectedCash":     projected_cash,
+        "cashDiff":          cash_diff,
+        "diagnosis":         cash_diagnosis,
+        "suspectTxns":       suspect_txns,
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 6 — Rentability Anomalies
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # 6.1 Wallet-level 3-sigma check
+    wallet_anomaly = None
+    history = list(db.navPackages.find(
+        {"walletId": wallet_id, "positionDate": {"$lt": date}, "trashed": {"$ne": True}},
+        {"returnNavPerShare": 1},
+    ).sort("positionDate", -1).limit(60))
+    returns = [h["returnNavPerShare"] for h in history if h.get("returnNavPerShare") is not None]
+
+    if len(returns) >= 3:
+        mean   = statistics.mean(returns)
+        stddev = statistics.stdev(returns)
+        lower  = mean - 3 * stddev
+        upper  = mean + 3 * stddev
+        is_anomaly = return_nav_ps < lower or return_nav_ps > upper
+        wallet_anomaly = {
+            "isAnomaly":     is_anomaly,
+            "currentReturn": return_nav_ps,
+            "mean":          round(mean, 8),
+            "stdDev":        round(stddev, 8),
+            "lowerBound":    round(lower, 8),
+            "upperBound":    round(upper, 8),
+            "sampleSize":    len(returns),
+        }
+
+    # 6.2 Per-security anomalies (from rentability_thresholds.json)
+    security_anomalies = []
+    thresholds = _load_thresholds()
+    if thresholds:
+        for sec_entry in suspects:
+            sid   = sec_entry["securityId"]
+            th    = thresholds.get(sid)
+            ret   = None
+            # Compute rentabPU for this security
+            pu    = sec_entry.get("pu")
+            f_pu  = sec_entry.get("formerPu")
+            try:
+                ret = pu / f_pu - 1 if (pu and f_pu) else None
+            except (TypeError, ZeroDivisionError):
+                ret = None
+            if th and ret is not None:
+                lb = th.get("lowerBound")
+                ub = th.get("upperBound")
+                is_anom = (lb is not None and ub is not None) and (ret < lb or ret > ub)
+                if is_anom:
+                    security_anomalies.append({
+                        "securityId":    sid,
+                        "securityName":  sec_entry.get("name", ""),
+                        "currentReturn": round(ret, 8),
+                        "mean":          th.get("mean"),
+                        "stdDev":        th.get("stdDev"),
+                        "isAnomaly":     True,
+                    })
+
+    step6_status = "ok"
+    if (wallet_anomaly and wallet_anomaly["isAnomaly"]) or any(a["isAnomaly"] for a in security_anomalies):
+        step6_status = "warning"
+
+    step6 = {
+        "status":             step6_status,
+        "walletAnomaly":      wallet_anomaly,
+        "securityAnomalies":  security_anomalies,
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 7 — Causa Provável
+    # ═══════════════════════════════════════════════════════════════════════════
+    step3_has_flags = any(
+        (s.get("step3_1") or {}).get("status") == "flag" or
+        (s.get("step3_2") or {}).get("status") == "flag" or
+        (s.get("step3_3") or {}).get("status") == "flag" or
+        (s.get("step3_4") or {}).get("status") == "flag"
+        for s in step3_securities
+    )
+    step4_has_issues = (
+        bool(unclassified)
+        or any(t.get("verdict") == "WRONG_SECURITY" for t in wrong_security)
+        or bool(misclassified)
+    )
+    step5_consistent = step5["diagnosis"] == "consistent"
+    all_suspects_missing_contrib = (
+        len(suspects) > 0 and all(s.get("diffRent") is None for s in suspects)
+    )
+    step6_wallet_anomaly = bool(wallet_anomaly and wallet_anomaly.get("isAnomaly"))
+
+    def _fmt_brl(v):
+        if v is None:
+            return "—"
+        try:
+            return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return str(v)
+
+    # Matrix order: SECURITY_ISSUES → TRANSACTION_ISSUES → CASH_ISSUES →
+    # LIKELY_WRONG_FORMER_NAV. First match wins. (NO_GAP handled in early return.)
+    if step3_has_flags:
+        verdict      = "SECURITY_ISSUES"
+        step7_status = "warning"
+        step7_detail = "Há flags acionáveis em securities. Ver Step 3."
+    elif step4_has_issues:
+        verdict      = "TRANSACTION_ISSUES"
+        step7_status = "warning"
+        step7_detail = "Há transações não identificadas, com security divergente ou mal classificadas. Ver Step 4."
+    elif not step5_consistent:
+        verdict      = "CASH_ISSUES"
+        step7_status = "warning"
+        step7_detail = "Caixa projetado diverge do caixa real. Ver Step 5."
+    else:
+        verdict      = "LIKELY_WRONG_FORMER_NAV"
+        step7_status = "warning"
+        step7_detail = (
+            "Securities, transações e caixa estão consistentes, mas o gap persiste. "
+            f"Causa mais provável: o NAV anterior ({_fmt_brl(former_nav)} em "
+            f"{former_date or '(data desconhecida)'}) está incorreto. "
+            "Verifique a posição e o navPackage do dia anterior."
+        )
+
+    step7 = {
+        "status":     step7_status,
+        "verdict":    verdict,
+        "detail":     step7_detail,
+        "formerNav":  former_nav,
+        "formerDate": former_date,
+        "gapCash":    gap_cash,
+        "gapPct":     gap_pct,
+        "signals": {
+            "step3HasFlags":                  step3_has_flags,
+            "step4HasIssues":                 step4_has_issues,
+            "step5Consistent":                step5_consistent,
+            "step6WalletAnomaly":             step6_wallet_anomaly,
+            "allSuspectsMissingContribution": all_suspects_missing_contrib,
+        },
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Response
+    # ═══════════════════════════════════════════════════════════════════════════
+    return jsonify(_sanitize({
+        "walletId": wallet_id,
+        "date":     date,
+        "step1":    step1,
+        "step2":    step2,
+        "step3":    step3,
+        "step4":    step4,
+        "step5":    step5,
+        "step6":    step6,
+        "step7":    step7,
+    }))
+
+
+@bp.route("/api/conciliacao/provisions")
+def get_provisions():
+    wallet_id = request.args.get("walletId", "")
+    date      = request.args.get("date", "")
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    # Fetch all active provisions for this wallet on this date
+    # Active = initialDate <= date AND liquidationDate > date
+    raw = list(db.provisions.find(
+        {"walletId": wallet_id, "initialDate": {"$lte": date}, "liquidationDate": {"$gt": date}},
+        {"_id": 1, "securityId": 1, "initialDate": 1, "liquidationDate": 1,
+         "amount": 1, "balance": 1, "provisionType": 1, "description": 1}
+    ))
+
+    # Enrich with security names
+    sec_ids = list({str(p.get("securityId", "")) for p in raw if p.get("securityId")})
+    name_map = {}
+    if sec_ids:
+        oid_list = []
+        for s in sec_ids:
+            try:
+                oid_list.append(_OID(s))
+            except Exception:
+                pass
+        for sec in db.securities.find({"_id": {"$in": oid_list}}, {"beehusName": 1}):
+            name_map[str(sec["_id"])] = sec.get("beehusName", "")
+
+    provisions = []
+    for p in raw:
+        sid = str(p.get("securityId", "") or "")
+        amt = p.get("balance") if p.get("balance") is not None else p.get("amount")
+        provisions.append({
+            "provisionId":   str(p.get("_id", "") or ""),
+            "securityId":    sid,
+            "securityName":  name_map.get(sid, ""),
+            "initialDate":   str(p.get("initialDate", ""))[:10],
+            "liquidationDate": str(p.get("liquidationDate", ""))[:10],
+            "balance":       float(amt) if amt is not None else None,
+            "provisionType": p.get("provisionType", ""),
+            "description":   p.get("description", ""),
+            "isPending":     False,
+        })
+
+    # Append pending correction provisions whose active window includes `date`.
+    # Uses a cross-folder scan so a provision accepted on date X with active
+    # window [initialDate, liquidationDate) is visible on every date in that
+    # range — not only on its acceptance-date folder. The filter enforces the
+    # same rule used by db.provisions.find (upper-bound exclusive).
+    company_id = _wallet_company(wallet_id)
+    corr_provs = load_active_pending_provisions(company_id, wallet_id, date)
+    if corr_provs:
+        # Resolve security names for any correction-only securityIds.
+        corr_sec_ids = [sid for sid in
+                        {str(cp.get("securityId", "") or "") for cp in corr_provs}
+                        if sid and sid not in name_map]
+        if corr_sec_ids:
+            oid_list = []
+            for s in corr_sec_ids:
+                try:
+                    oid_list.append(_OID(s))
+                except Exception:
+                    pass
+            for sec in db.securities.find({"_id": {"$in": oid_list}}, {"beehusName": 1}):
+                name_map[str(sec["_id"])] = sec.get("beehusName", "")
+        for cp in corr_provs:
+            sid = str(cp.get("securityId", "") or "")
+            bal = cp.get("balance")
+            provisions.append({
+                "securityId":      sid,
+                "securityName":    name_map.get(sid, ""),
+                "initialDate":     str(cp.get("initialDate", ""))[:10],
+                "liquidationDate": str(cp.get("liquidationDate", ""))[:10],
+                "balance":         float(bal) if bal is not None else None,
+                "provisionType":   cp.get("provisionType", ""),
+                "description":     cp.get("description", ""),
+                "isPending":       True,
+                "correctionId":    cp.get("id"),
+            })
+
+    provisions.sort(key=lambda p: (p["liquidationDate"], p["securityName"]))
+    total = round(sum(p["balance"] for p in provisions if p["balance"] is not None), 2)
+
+    return jsonify(_sanitize({"provisions": provisions, "total": total}))
+
+
+@bp.route("/api/conciliacao/diagnose/feedback", methods=["POST"])
+def diagnose_feedback():
+    data = request.get_json() or {}
+    _, err = _require_visible_wallet(str(data.get("walletId") or ""))
+    if err: return err
+
+    # Type-coerce every field so a payload like {"walletId": {"$gte": ""}}
+    # cannot land an operator-shaped document in the audit collection.
+    def _scalar(v, kind):
+        if isinstance(v, kind):
+            return v
+        return None
+
+    flags_raw = data.get("flagsInScenario") or []
+    flags = []
+    if isinstance(flags_raw, list):
+        for f in flags_raw[:50]:
+            if isinstance(f, (str, int, float, bool)):
+                flags.append(str(f)[:200])
+
+    db.diagnosticFeedback.insert_one({
+        "walletId":        str(data.get("walletId") or ""),
+        "date":            str(data.get("date") or "")[:10],
+        "gapCash":         _scalar(data.get("gapCash"), (int, float)),
+        "scenarioIndex":   _scalar(data.get("scenarioIndex"), int),
+        "confirmed":       bool(data.get("confirmed")) if data.get("confirmed") is not None else None,
+        "userNote":        str(data.get("userNote") or "")[:1024],
+        "flagsInScenario": flags,
+        "resolvedAt":      _dt.now(timezone.utc).isoformat(),
+    })
+    return jsonify({"ok": True})
+
+
+# ── Refinement: offset / settlement-day drift ──────────────────────────────────
+# Main diagnose assumes each security's subscriptionSettlementDays /
+# subscriptionNavDays / redemptionSettlementDays / redemptionNavDays are
+# correctly registered AND that the financial institution settled on the
+# expected date. When that assumption is wrong, a legitimate transaction can
+# land on a liquidationDate ≠ the reconciliation date, and a legitimate
+# position change can appear a few days late/early. This endpoint refines
+# MISSING_TRANSACTION / MISSING_PROVISION flags and WRONG_SECURITY /
+# unclassified transactions by scanning a ±window-day neighborhood.
+_REFINE_WINDOW_DEFAULT = 2
+_REFINE_WINDOW_MAX     = 7
+
+
+def _processed_position_window(wallet_id, center_iso, window_days):
+    """Return sorted list of YYYY-MM-DD strings for processedPosition dates that
+    bracket `center_iso` — up to `window_days` dates strictly before and
+    strictly after. Excludes `center_iso` itself.
+
+    Using processedPosition dates (rather than calendar days) ensures we only
+    inspect business days where a reconciliation actually happened — weekends,
+    holidays and gaps are skipped automatically.
+    """
+    if not wallet_id or not center_iso:
+        return []
+
+    # Fetch a modest window; 4×window_days of calendar span is a safe overshoot
+    # to cover holidays / missing days while keeping the query tight.
+    span_days = max(window_days * 4, 14)
+    try:
+        center = _date.fromisoformat(center_iso[:10])
+    except Exception:
+        return []
+    lo = (center - timedelta(days=span_days)).isoformat()
+    hi = (center + timedelta(days=span_days)).isoformat()
+
+    raw_dates = set()
+    for doc in db.processedPosition.find(
+        {"walletId": wallet_id,
+         "positionDate": {"$gte": lo, "$lte": hi, "$ne": center_iso[:10]}},
+        {"positionDate": 1}
+    ):
+        pd = str(doc.get("positionDate") or "")[:10]
+        if pd and pd != center_iso[:10]:
+            raw_dates.add(pd)
+
+    before = sorted([d for d in raw_dates if d < center_iso[:10]], reverse=True)[:window_days]
+    after  = sorted([d for d in raw_dates if d > center_iso[:10]])[:window_days]
+    return sorted(before + after)
+
+
+# ── Refinement feedback store (local JSON) ────────────────────────────────────
+# Stored under data/refinement_feedback/<companyId>/<date>/<walletId>.json.
+# Mirrors the correcoes store pattern (same reasons: Mongo user has no
+# createCollection rights, and these are app-owned audit records).
+_REFINE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "refinement_feedback"))
+_REFINE_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_REFINE_SAFE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _refine_safe(s):
+    s = str(s or "")
+    return s if _REFINE_SAFE_ID_RE.match(s) else ""
+
+
+def _refine_store_path(company_id, date, wallet_id):
+    c = _refine_safe(company_id)
+    w = _refine_safe(wallet_id)
+    d = date if _REFINE_SAFE_DATE_RE.match(str(date or "")) else ""
+    if not (c and w and d):
+        return None
+    return os.path.join(_REFINE_ROOT, c, d, f"{w}.json")
+
+
+def _refine_load(company_id, date, wallet_id):
+    path = _refine_store_path(company_id, date, wallet_id)
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("accepted", []) if isinstance(data, dict) else []
+    except Exception:
+        return []
+
+
+def _refine_save(company_id, date, wallet_id, accepted):
+    path = _refine_store_path(company_id, date, wallet_id)
+    if not path:
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    atomic_write_json(path, {
+        "walletId":  wallet_id,
+        "date":      date,
+        "companyId": company_id,
+        "accepted":  accepted,
+    })
+    return True
+
+
+@bp.route("/api/conciliacao/diagnose/refine/accept", methods=["POST"])
+def diagnose_refine_accept():
+    """Record that the user confirmed a refinement match as the real cause.
+
+    Does NOT emit a correction file — this is an audit/confirmation record
+    that downstream flows will consume later. Idempotent: records keyed by
+    (securityId, matchTxnId) are replaced in-place so repeated clicks don't
+    duplicate.
+    """
+    data = request.get_json() or {}
+    wallet_id  = str(data.get("walletId") or "")[:64]
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+    date       = str(data.get("date") or "")[:10]
+    sid        = str(data.get("securityId") or "")[:64]
+    match      = data.get("match") or {}
+    txn_id     = str(match.get("txnId") or "")[:64]
+    hypothesis = str(data.get("hypothesis") or "")[:64]
+    user_note  = str(data.get("userNote") or "")[:2048]
+    security_name = str(data.get("securityName") or "")[:256]
+
+    _VALID_HYPOS = {"WRONG_SECURITY", "OFFSET_OR_SETTLEMENT_DRIFT"}
+    if not (wallet_id and date and sid and txn_id and hypothesis in _VALID_HYPOS):
+        return jsonify({"error": "walletId, date, securityId, match.txnId e hypothesis (WRONG_SECURITY|OFFSET_OR_SETTLEMENT_DRIFT) são obrigatórios"}), 400
+
+    company_id = _wallet_company(wallet_id)
+    if not company_id:
+        return jsonify({"error": "companyId não resolvido para a wallet"}), 400
+
+    now = _dt.now(timezone.utc).isoformat()
+    existing = _refine_load(company_id, date, wallet_id)
+
+    # Upsert by (securityId, matchTxnId, hypothesis) — each hypothesis on the
+    # same match is a distinct confirmation the user may give independently.
+    key_tuple = (sid, txn_id, hypothesis)
+    updated = False
+    for rec in existing:
+        if (str(rec.get("securityId")), str(rec.get("matchTxnId")), str(rec.get("hypothesis"))) == key_tuple:
+            rec.update({
+                "securityName":   security_name,
+                "amountDiff":     data.get("amountDiff"),
+                "expectedImpact": data.get("expectedImpact"),
+                "match":          match,
+                "userNote":       user_note,
+                "updatedAt":      now,
+            })
+            updated = True
+            break
+
+    if not updated:
+        existing.append({
+            "walletId":         wallet_id,
+            "date":             date,
+            "securityId":       sid,
+            "matchTxnId":       txn_id,
+            "hypothesis":       hypothesis,
+            "securityName":     security_name,
+            "amountDiff":       data.get("amountDiff"),
+            "expectedImpact":   data.get("expectedImpact"),
+            "match":            match,
+            "userNote":         user_note,
+            "firstAcceptedAt":  now,
+            "updatedAt":        now,
+        })
+
+    if not _refine_save(company_id, date, wallet_id, existing):
+        return jsonify({"error": "falha ao persistir feedback"}), 500
+
+    # ── Side effect: emit a pending provision for OFFSET_OR_SETTLEMENT_DRIFT ──
+    # The provision bridges the position change (on `date`) and the matched
+    # transaction on a different date, closing the NAV gap that results from
+    # the cadastro offset being wrong or the institution settling off-date.
+    # WRONG_SECURITY intentionally does NOT emit here — that fix belongs to
+    # the MISCLASSIFIED flow (deletion + replacement txn), out of scope for
+    # this endpoint.
+    provision_written = None
+    if hypothesis == "OFFSET_OR_SETTLEMENT_DRIFT":
+        match_liq = str(match.get("liquidationDate") or "")[:10]
+        match_bal = match.get("balance")
+        amt_diff  = data.get("amountDiff")
+        expected_impact = data.get("expectedImpact")
+
+        # Pick dates AND sign simultaneously. The provision is ACTIVE during the
+        # window `[initialDate, liquidationDate)` and must counterbalance whatever
+        # has already happened in that window so NAV stays correct.
+        #
+        # Case B (match in FUTURE): active window is [date, match.liq).
+        #   On these days, qty change is already on the position but cash hasn't
+        #   moved yet. Provision offsets the asset change:
+        #     subscription (amt_diff>0) → NEGATIVE  (pending payable)
+        #     redemption   (amt_diff<0) → POSITIVE  (pending receivable)
+        #   Equivalent to: provision ≈ match.balance (which already carries the
+        #   correct "future cash flow" sign).
+        #
+        # Case A (match in PAST): active window is [match.liq, date).
+        #   On these days, cash already moved but qty change isn't on position
+        #   yet. Provision offsets the cash move, raising the depressed NAV:
+        #     subscription (amt_diff>0) → POSITIVE  (asset receivable pending)
+        #     redemption   (amt_diff<0) → NEGATIVE  (asset payable pending)
+        #   Equivalent to: provision ≈ −match.balance.
+        prov_balance = None
+        match_in_past = bool(match_liq and match_liq < date)
+        match_in_future = bool(match_liq and match_liq > date)
+
+        if match_in_future:
+            prov_initial, prov_liquidation = date, match_liq
+            if isinstance(match_bal, (int, float)) and match_bal != 0:
+                prov_balance = float(match_bal)
+            elif isinstance(amt_diff, (int, float)) and isinstance(expected_impact, (int, float)):
+                prov_balance = -abs(expected_impact) if amt_diff > 0 else abs(expected_impact)
+        elif match_in_past:
+            prov_initial, prov_liquidation = match_liq, date
+            if isinstance(match_bal, (int, float)) and match_bal != 0:
+                prov_balance = -float(match_bal)    # flip sign vs future case
+            elif isinstance(amt_diff, (int, float)) and isinstance(expected_impact, (int, float)):
+                prov_balance = abs(expected_impact) if amt_diff > 0 else -abs(expected_impact)
+        else:
+            prov_initial = prov_liquidation = None
+
+        # Minimum-1-business-day rule: a provision must settle at least 1
+        # business day after the nav date (same floor as `_prov_dates`). Guards
+        # the match_in_past branch, whose raw liquidation is the nav date itself.
+        if prov_liquidation:
+            try:
+                _floor = _next_biz_day(_date.fromisoformat(date)).isoformat()
+                if prov_liquidation < _floor:
+                    prov_liquidation = _floor
+            except (TypeError, ValueError):
+                pass
+
+        if prov_initial and prov_liquidation and prov_balance is not None:
+            source_key = f"OFFSET_DRIFT|{sid}|{txn_id}"
+            sec_name = data.get("securityName", "") or sid
+            desc = (
+                f"Provisão gerada por refinamento (offset/settlement drift) — "
+                f"{sec_name}: transação em {match_liq}, posição em {date}"
+            )
+            added, skipped = append_rows_for_wallet(
+                company_id, date, wallet_id,
+                provisions=[{
+                    "walletId":        wallet_id,
+                    "initialDate":     prov_initial,
+                    "liquidationDate": prov_liquidation,
+                    "provisionType":   "buySell",
+                    "securityId":      sid,
+                    "balance":         round(prov_balance, 2),
+                    "description":     desc,
+                    "sourceAnomalyKey": source_key,
+                }],
+            )
+            provision_written = {
+                "initialDate":     prov_initial,
+                "liquidationDate": prov_liquidation,
+                "balance":         round(prov_balance, 2),
+                "sourceAnomalyKey": source_key,
+                "added":           added.get("provisions", 0),
+                "skipped":         skipped.get("provisions", 0),
+            }
+
+    return jsonify({"ok": True, "securityId": sid, "matchTxnId": txn_id,
+                    "hypothesis": hypothesis, "acceptedAt": now,
+                    "provision": provision_written})
+
+
+# ── Dismissed-flag store (local JSON) ─────────────────────────────────────────
+# Stored under data/dismissed_flags/<companyId>/<date>/<walletId>.json.
+# A "dismiss" is the user acknowledging a detected flag as non-actionable
+# (noise / investigated / not fixable right now). UI hides dismissed flags
+# from the active issue list but they're visible under "Descartados".
+_DISMISS_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "dismissed_flags"))
+
+
+def _dismiss_store_path(company_id, date, wallet_id):
+    c = _refine_safe(company_id)
+    w = _refine_safe(wallet_id)
+    d = date if _REFINE_SAFE_DATE_RE.match(str(date or "")) else ""
+    if not (c and w and d):
+        return None
+    return os.path.join(_DISMISS_ROOT, c, d, f"{w}.json")
+
+
+def _dismiss_load(company_id, date, wallet_id):
+    path = _dismiss_store_path(company_id, date, wallet_id)
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("dismissed", []) if isinstance(data, dict) else []
+    except Exception:
+        return []
+
+
+def _dismiss_save(company_id, date, wallet_id, dismissed):
+    path = _dismiss_store_path(company_id, date, wallet_id)
+    if not path:
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    atomic_write_json(path, {
+        "walletId":  wallet_id,
+        "date":      date,
+        "companyId": company_id,
+        "dismissed": dismissed,
+    })
+    return True
+
+
+@bp.route("/api/conciliacao/diagnose/dismiss", methods=["POST"])
+def diagnose_dismiss():
+    """Mark a detected flag as non-actionable (dismissed) so the UI hides it.
+    Keyed by `anomalyKey` (the same key used by /correcoes). Idempotent."""
+    data = request.get_json() or {}
+    # Cap user-controlled string fields to prevent denial-of-storage on the
+    # OneDrive-synced dismiss/refinement files.
+    wallet_id    = str(data.get("walletId") or "")[:64]
+    date         = str(data.get("date") or "")[:10]
+    anomaly_key  = str(data.get("anomalyKey") or "")[:256]
+    reason       = str(data.get("reason") or "")[:2048]
+    flag         = str(data.get("flag") or "")[:64]
+    security_id  = str(data.get("securityId") or "")[:64]
+    security_name = str(data.get("securityName") or "")[:256]
+
+    if not (wallet_id and date and anomaly_key):
+        return jsonify({"error": "walletId, date e anomalyKey são obrigatórios"}), 400
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    company_id = _wallet_company(wallet_id)
+    if not company_id:
+        return jsonify({"error": "companyId não resolvido para a wallet"}), 400
+
+    now = _dt.now(timezone.utc).isoformat()
+    existing = _dismiss_load(company_id, date, wallet_id)
+
+    updated = False
+    for rec in existing:
+        if str(rec.get("anomalyKey")) == anomaly_key:
+            rec.update({
+                "reason":    reason,
+                "flag":      flag or rec.get("flag", ""),
+                "updatedAt": now,
+            })
+            updated = True
+            break
+    if not updated:
+        existing.append({
+            "walletId":        wallet_id,
+            "date":            date,
+            "anomalyKey":      anomaly_key,
+            "flag":            flag,
+            "securityId":      security_id,
+            "securityName":    security_name,
+            "reason":          reason,
+            "firstDismissedAt": now,
+            "updatedAt":       now,
+        })
+
+    if not _dismiss_save(company_id, date, wallet_id, existing):
+        return jsonify({"error": "falha ao persistir descarte"}), 500
+    return jsonify({"ok": True, "anomalyKey": anomaly_key, "dismissedAt": now})
+
+
+@bp.route("/api/conciliacao/diagnose/dismiss/undo", methods=["POST"])
+def diagnose_dismiss_undo():
+    """Remove a dismiss record so the flag reappears in the active list."""
+    data = request.get_json() or {}
+    wallet_id   = str(data.get("walletId") or "")
+    date        = str(data.get("date") or "")
+    anomaly_key = str(data.get("anomalyKey") or "")
+
+    if not (wallet_id and date and anomaly_key):
+        return jsonify({"error": "walletId, date e anomalyKey são obrigatórios"}), 400
+
+    company_id, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    existing = _dismiss_load(company_id, date, wallet_id)
+    remaining = [r for r in existing if str(r.get("anomalyKey")) != anomaly_key]
+    if len(remaining) == len(existing):
+        return jsonify({"ok": True, "removed": False})
+    if not _dismiss_save(company_id, date, wallet_id, remaining):
+        return jsonify({"error": "falha ao persistir"}), 500
+    return jsonify({"ok": True, "removed": True})
+
+
+@bp.route("/api/conciliacao/diagnose/dismissed")
+def diagnose_dismissed():
+    """Return dismissed anomalyKeys (+ metadata) for a wallet+date."""
+    wallet_id = request.args.get("walletId", "")
+    date      = request.args.get("date", "")
+    if not wallet_id or not date:
+        return jsonify({"dismissed": []})
+    company_id, err = _require_visible_wallet(wallet_id)
+    if err: return err
+    records = _dismiss_load(company_id, date, wallet_id)
+    return jsonify({"dismissed": records})
+
+
+@bp.route("/api/conciliacao/diagnose/refine/accepted")
+def diagnose_refine_accepted():
+    """Return the set of (securityId, matchTxnId, hypothesis) triples already
+    confirmed for a wallet+date. UI uses this to pre-mark each hypothesis's
+    "Aceitar" button independently."""
+    wallet_id = request.args.get("walletId", "")
+    date      = request.args.get("date", "")
+    if not wallet_id or not date:
+        return jsonify({"accepted": []})
+    company_id, err = _require_visible_wallet(wallet_id)
+    if err: return err
+    records = _refine_load(company_id, date, wallet_id)
+    accepted = [
+        {"securityId":       r.get("securityId"),
+         "matchTxnId":       r.get("matchTxnId"),
+         "hypothesis":       r.get("hypothesis"),
+         "firstAcceptedAt":  r.get("firstAcceptedAt")}
+        for r in records
+    ]
+    return jsonify({"accepted": accepted})
+
+
+@bp.route("/api/conciliacao/diagnose/refine")
+def diagnose_refine():
+    """Refinement analysis over a ±window-day neighborhood.
+
+    Scope (intentional): this is a refinement of flags left open by the primary
+    diagnose. It does NOT re-run the full pipeline — it looks at the specific
+    offset assumptions that the main engine relies on and surfaces evidence of
+    off-by-N-day drift.
+
+    Analysis 1 (security-side):
+        For each position security with amountDiff ≠ 0, look for transactions
+        in [date-W, date+W] (excluding date) on the same walletId + securityId.
+        Matches whose |balance| ≈ |amountDiff| × price are highlighted as likely
+        offset misconfiguration OR unexpected institution settlement.
+
+    Analysis 2 (transaction-side):
+        For each transaction on `date` whose securityId is NOT in today's
+        processedPosition (wrong/unknown security), scan processedPosition in
+        [date-W, date+W] (excluding date) for the same securityId. If the
+        security appears in a nearby day's position, the transaction is likely
+        mis-dated — the institution may have settled a day off, or the
+        settlement offset is wrong.
+    """
+    wallet_id = request.args.get("walletId", "")[:64]
+    date      = request.args.get("date", "")
+    if not _REFINE_SAFE_DATE_RE.match(str(date)):
+        return jsonify({"error": "date inválida"}), 400
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+    try:
+        window = int(request.args.get("window", _REFINE_WINDOW_DEFAULT) or _REFINE_WINDOW_DEFAULT)
+    except ValueError:
+        window = _REFINE_WINDOW_DEFAULT
+    window = max(1, min(window, _REFINE_WINDOW_MAX))
+
+    # Optional scope — when set, only one analysis runs and only for the given id.
+    # Used by per-row "Refinar" buttons in the UI so we don't re-scan the full
+    # wallet on each click.
+    scope_security_id    = str(request.args.get("securityId", "") or "")
+    scope_txn_security_id = str(request.args.get("txnSecurityId", "") or "")
+    run_analysis_1 = not scope_txn_security_id
+    run_analysis_2 = not scope_security_id
+
+    if not wallet_id or not date:
+        return jsonify({"error": "walletId e date são obrigatórios"}), 400
+
+    nearby_dates = _processed_position_window(wallet_id, date, window)
+    if not nearby_dates:
+        # No processedPosition neighbors → nothing to refine against.
+        return jsonify(_sanitize({
+            "walletId":               wallet_id,
+            "date":                   date,
+            "window":                 window,
+            "nearbyDates":            [],
+            "securityRefinements":    [],
+            "transactionRefinements": [],
+        }))
+
+    # ── Rank nearby dates for processed-position-day deltas ───────────────────
+    # UI counts "D-N / D+N" by processed-position day (i.e., rank among days
+    # where a reconciliation actually happened), not calendar days. This
+    # skips weekends/holidays/gaps, matching the user's mental model.
+    center_iso = date[:10]
+    _before_sorted = sorted([d for d in nearby_dates if d < center_iso], reverse=True)
+    _after_sorted  = sorted([d for d in nearby_dates if d > center_iso])
+    position_day_rank = {}  # {date_iso: signed rank, e.g. -1, -2, +1, +2}
+    for i, d in enumerate(_before_sorted, start=1):
+        position_day_rank[d] = -i
+    for i, d in enumerate(_after_sorted, start=1):
+        position_day_rank[d] = i
+
+    # ── Position today + former ────────────────────────────────────────────────
+    pos_doc = db.processedPosition.find_one(
+        {"walletId": wallet_id, "positionDate": date}, {"securities": 1}
+    ) or {}
+    former_date, _ = _find_former_nav(wallet_id, date)
+    former_doc = db.processedPosition.find_one(
+        {"walletId": wallet_id, "positionDate": former_date}, {"securities": 1}
+    ) if former_date else None
+
+    current_secs = (pos_doc or {}).get("securities", []) or []
+    former_map = {
+        str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
+        for s in ((former_doc or {}).get("securities", []) or [])
+    }
+    current_sec_ids = {str(s.get("securityId", "")) for s in current_secs}
+
+    # ── Transactions on `date` (to flag wrong/unknown securityIds) ─────────────
+    today_txns = list(db.transactions.find(
+        {"walletId": wallet_id, "liquidationDate": date},
+        {"_id": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1,
+         "operationDate": 1, "liquidationDate": 1, "quantity": 1, "price": 1}
+    ))
+
+    # ── Collect sec_ids we need names/offsets for ──────────────────────────────
+    sec_ids_raw = set()
+    for s in current_secs:
+        if s.get("securityId"):
+            sec_ids_raw.add(str(s["securityId"]))
+    for t in today_txns:
+        sid = t.get("securityId")
+        if sid:
+            sec_ids_raw.add(str(sid))
+
+    sec_ids_query = []
+    for sid in sec_ids_raw:
+        sec_ids_query.append(sid)
+        try:
+            sec_ids_query.append(_OID(str(sid)))
+        except Exception:
+            pass
+    sec_info = {
+        str(s["_id"]): s
+        for s in db.securities.find(
+            {"_id": {"$in": sec_ids_query}} if sec_ids_query else {"_id": None},
+            {"beehusName": 1, "securityType": 1,
+             "subscriptionNavDays": 1, "subscriptionSettlementDays": 1,
+             "redemptionNavDays": 1, "redemptionSettlementDays": 1}
+        )
+    } if sec_ids_query else {}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Analysis 1 — securityRefinements
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Securities with amountDiff ≠ 0 → candidates for transactions that landed
+    # on the wrong liquidationDate.
+    amt_diff_secs = []
+    if not run_analysis_1:
+        current_secs_iter = []  # analysis 1 is scoped out by txnSecurityId
+    elif scope_security_id:
+        current_secs_iter = [s for s in current_secs if str(s.get("securityId", "")) == scope_security_id]
+    else:
+        current_secs_iter = current_secs
+    for s in current_secs_iter:
+        sid = str(s.get("securityId", ""))
+        if not sid:
+            continue
+        qty = s.get("quantity")
+        f_qty = (former_map.get(sid) or {}).get("quantity")
+        if qty is None:
+            continue
+        amt_diff = round(qty - (f_qty or 0), 6)
+        if amt_diff == 0:
+            continue
+        pu = s.get("pu")
+        exec_price = s.get("executionPrice")
+        price = exec_price if exec_price is not None else (pu or 0)
+        expected_impact = round(abs(amt_diff) * abs(price or 0), 2) if price else None
+        info = sec_info.get(sid, {})
+        # Configured offset per direction of the move
+        if amt_diff > 0:
+            settle = info.get("subscriptionSettlementDays") or 0
+            nav_d  = info.get("subscriptionNavDays") or 0
+            direction = "subscription"
+        else:
+            settle = info.get("redemptionSettlementDays") or 0
+            nav_d  = info.get("redemptionNavDays") or 0
+            direction = "redemption"
+        configured_offset = settle - nav_d
+        amt_diff_secs.append({
+            "sid":             sid,
+            "name":            s.get("beehusName") or info.get("beehusName", ""),
+            "amountDiff":      amt_diff,
+            "pu":              pu,
+            "formerPu":        (former_map.get(sid) or {}).get("pu"),
+            "executionPrice":  exec_price,
+            "expectedImpact":  expected_impact,
+            "direction":       direction,
+            "configuredOffset": configured_offset,
+            "settlementDays":  settle,
+            "navDays":         nav_d,
+        })
+
+    security_refinements = []
+    if amt_diff_secs:
+        # Single query: ALL transactions on the wallet in the nearby window,
+        # regardless of securityId. We need them to satisfy both match
+        # criteria: (a) same securityId as the suspect, and (b) balance
+        # proximity to the suspect's expectedImpact — the latter catches
+        # WRONG_SECURITY bookings where the cash moved under a different sid.
+        all_nearby_txns = list(db.transactions.find(
+            {"walletId": wallet_id,
+             "liquidationDate": {"$in": nearby_dates}},
+            {"_id": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1,
+             "operationDate": 1, "liquidationDate": 1, "quantity": 1, "price": 1}
+        ))
+
+        # Resolve names for any transaction securityIds we haven't seen yet,
+        # so the UI can surface "security divergente" matches with a readable
+        # name (not just the raw ObjectId).
+        txn_sids_unknown = set()
+        for t in all_nearby_txns:
+            t_sid = str(t.get("securityId") or "")
+            if t_sid and t_sid not in sec_info:
+                txn_sids_unknown.add(t_sid)
+        if txn_sids_unknown:
+            q_ids = list(txn_sids_unknown)
+            for sid in txn_sids_unknown:
+                try:
+                    q_ids.append(_OID(sid))
+                except Exception:
+                    pass
+            for sec in db.securities.find(
+                {"_id": {"$in": q_ids}},
+                {"beehusName": 1, "securityType": 1}
+            ):
+                sec_info[str(sec["_id"])] = sec
+
+        try:
+            center = _date.fromisoformat(date[:10])
+        except Exception:
+            center = None
+
+        for s in amt_diff_secs:
+            expected_impact = s["expectedImpact"]
+            # Expected balance sign: subscription (amtDiff>0) → buySell balance
+            # is negative (cash out); redemption (amtDiff<0) → positive.
+            expected_sign = -1 if s["amountDiff"] > 0 else 1
+
+            matches_by_id = {}   # dedupe across sid / balance passes
+            for t in all_nearby_txns:
+                t_sid = str(t.get("securityId") or "")
+                bal = float(t.get("balance") or 0)
+                same_security = (t_sid == s["sid"])
+                balance_approx = (
+                    expected_impact is not None
+                    and expected_impact > 0
+                    and _approx(abs(bal), expected_impact)
+                )
+
+                if not (same_security or balance_approx):
+                    continue
+
+                liq = str(t.get("liquidationDate") or "")[:10]
+                try:
+                    days_delta = (_date.fromisoformat(liq) - center).days if center else None
+                except Exception:
+                    days_delta = None
+
+                match_reason = (
+                    "both" if same_security and balance_approx
+                    else "securityId" if same_security
+                    else "balance"
+                )
+                sign_match = (bal == 0) or ((bal > 0) == (expected_sign > 0))
+
+                txn_sec_name = ""
+                if not same_security and t_sid:
+                    txn_sec_name = sec_info.get(t_sid, {}).get("beehusName", "") or t_sid
+
+                txn_id = str(t.get("_id", ""))
+                matches_by_id[txn_id] = {
+                    "txnId":                 txn_id,
+                    "liquidationDate":       liq,
+                    "operationDate":         str(t.get("operationDate") or "")[:10] or None,
+                    "balance":               round(bal, 2),
+                    "beehusTransactionType": t.get("beehusTransactionType"),
+                    "daysDelta":             days_delta,             # calendar-day delta (internal / offset config semantics)
+                    "positionDayDelta":      position_day_rank.get(liq),  # processed-position-day rank (UI label)
+                    "balanceApprox":         bool(balance_approx),
+                    "impliedOffset":         days_delta,
+                    "matchReason":           match_reason,
+                    "sameSecurity":          same_security,
+                    "txnSecurityId":         t_sid or None,
+                    "txnSecurityName":       txn_sec_name,
+                    "signMatch":             bool(sign_match),
+                }
+
+            matches = list(matches_by_id.values())
+            if not matches:
+                continue
+            # Sort: balance-approx first, then sign-match, then |daysDelta|,
+            # then same-security (as a tiebreaker when both candidates match
+            # on balance).
+            matches.sort(key=lambda m: (
+                0 if m["balanceApprox"] else 1,
+                0 if m["signMatch"] else 1,
+                abs(m["positionDayDelta"]) if m["positionDayDelta"] is not None else 99,
+                0 if m["sameSecurity"] else 1,
+            ))
+            has_approx = any(m["balanceApprox"] and m["signMatch"] for m in matches)
+            security_refinements.append({
+                "securityId":       s["sid"],
+                "securityName":     s["name"],
+                "amountDiff":       s["amountDiff"],
+                "expectedImpact":   s["expectedImpact"],
+                "direction":        s["direction"],
+                "configuredOffset": s["configuredOffset"],
+                "settlementDays":   s["settlementDays"],
+                "navDays":          s["navDays"],
+                "likelyCause":      bool(has_approx),
+                "matches":          matches,
+            })
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Analysis 2 — transactionRefinements
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Transactions on `date` whose securityId is NOT in today's position
+    # (WRONG_SECURITY / unknown): look for the security in nearby positions.
+    suspect_txns = []
+    if run_analysis_2:
+        for t in today_txns:
+            sid = str(t.get("securityId", "") or "")
+            if not sid:
+                continue
+            if sid in current_sec_ids:
+                continue
+            if scope_txn_security_id and sid != scope_txn_security_id:
+                continue
+            suspect_txns.append(t)
+
+    transaction_refinements = []
+    if suspect_txns:
+        suspect_sids = list({str(t.get("securityId")) for t in suspect_txns})
+        # Pull nearby positions once, extract only the sids we care about.
+        nearby_positions = list(db.processedPosition.find(
+            {"walletId": wallet_id, "positionDate": {"$in": nearby_dates}},
+            {"positionDate": 1, "securities.securityId": 1,
+             "securities.quantity": 1, "securities.pu": 1}
+        ))
+        # { sid: [ {positionDate, quantity, pu, daysDelta}, ... ] }
+        pos_index = {}
+        try:
+            center = _date.fromisoformat(date[:10])
+        except Exception:
+            center = None
+        for doc in nearby_positions:
+            pd = str(doc.get("positionDate") or "")[:10]
+            try:
+                days_delta = (_date.fromisoformat(pd) - center).days if center else None
+            except Exception:
+                days_delta = None
+            for s in (doc.get("securities") or []):
+                s_sid = str(s.get("securityId", "") or "")
+                if s_sid and s_sid in suspect_sids:
+                    pos_index.setdefault(s_sid, []).append({
+                        "positionDate":     pd,
+                        "quantity":         s.get("quantity"),
+                        "pu":               s.get("pu"),
+                        "daysDelta":        days_delta,                   # calendar-day delta
+                        "positionDayDelta": position_day_rank.get(pd),    # processed-position rank
+                    })
+
+        # Also fetch securities info for suspect sids that weren't in today's
+        # position (so we can show a readable name).
+        missing_name_sids = [sid for sid in suspect_sids if sid not in sec_info]
+        if missing_name_sids:
+            q_ids = list(missing_name_sids)
+            for s in missing_name_sids:
+                try:
+                    q_ids.append(_OID(s))
+                except Exception:
+                    pass
+            for sec in db.securities.find(
+                {"_id": {"$in": q_ids}},
+                {"beehusName": 1,
+                 "subscriptionSettlementDays": 1, "subscriptionNavDays": 1,
+                 "redemptionSettlementDays": 1, "redemptionNavDays": 1}
+            ):
+                sec_info[str(sec["_id"])] = sec
+
+        for t in suspect_txns:
+            sid = str(t.get("securityId"))
+            matches = pos_index.get(sid, [])
+            if not matches:
+                continue
+            matches.sort(key=lambda m: abs(m["positionDayDelta"]) if m["positionDayDelta"] is not None else 99)
+            info = sec_info.get(sid, {})
+            bal = float(t.get("balance") or 0)
+            # direction-based configured offset
+            if bal < 0:
+                settle = info.get("subscriptionSettlementDays") or 0
+                nav_d  = info.get("subscriptionNavDays") or 0
+                direction = "subscription"
+            else:
+                settle = info.get("redemptionSettlementDays") or 0
+                nav_d  = info.get("redemptionNavDays") or 0
+                direction = "redemption"
+            transaction_refinements.append({
+                "txnId":                 str(t.get("_id", "")),
+                "securityId":            sid,
+                "securityName":          info.get("beehusName", "") or sid,
+                "balance":               round(bal, 2),
+                "beehusTransactionType": t.get("beehusTransactionType"),
+                "operationDate":         str(t.get("operationDate") or "")[:10] or None,
+                "liquidationDate":       date,
+                "direction":             direction,
+                "configuredOffset":      settle - nav_d,
+                "settlementDays":        settle,
+                "navDays":               nav_d,
+                "matches":               matches,
+            })
+
+    return jsonify(_sanitize({
+        "walletId":                wallet_id,
+        "date":                    date,
+        "window":                  window,
+        "nearbyDates":             nearby_dates,
+        "securityRefinements":     security_refinements,
+        "transactionRefinements":  transaction_refinements,
+    }))
+
+
+# ── Transaction type mapping per flag ──────────────────────────────────────────
+_FLAG_TXN_TYPE = {
+    "MISSING_TRANSACTION":      "buySell",
+    "MISSING_PROVISION":        None,           # provision, not transaction
+    "WRONG_EVENT_BALANCE":      None,           # existing txn has wrong value
+    "WRONG_PROVISION_AMOUNT":   None,           # provision issue
+    "MISSING_EVENT":            "coupon",       # amortization/coupon event
+    "WITHHOLDING_TAX":          "taxes",        # IR retido na fonte → saída de caixa (balance ×-1)
+    "MISSING_EXECUTION_PRICE":  None,           # handled via executionPrices bucket
+    "WRONG_TRANSACTION_VALUE":  "buySell",
+    "WRONG_SECURITY":           None,
+    "UNCLASSIFIED_TRANSACTION": None,           # existing txn needs reclassification
+    "CASH_MISMATCH":            "gainsExpenses",
+}
+
+_FLAG_DESCRIPTIONS = {
+    "MISSING_TRANSACTION":      "Correção: transação buySell faltante",
+    "MISSING_EVENT":            "Correção: transação de evento faltante",
+    "WITHHOLDING_TAX":          "Correção: ajuste IR retido na fonte",
+    "MISSING_EXECUTION_PRICE":  "Correção: ajuste preço de execução",
+    "WRONG_TRANSACTION_VALUE":  "Correção: valor de transação divergente",
+    "CASH_MISMATCH":            "Correção: transação de caixa faltante",
+}
+
+
+@bp.route("/api/conciliacao/generate-transactions", methods=["POST"])
+def generate_transactions():
+    """Build a transaction file (and deletion markers) from accepted items.
+
+    Output:
+        {"companyId": str, "transactions": [...], "deletions": [...]}
+
+    Deletions are emitted only for MISCLASSIFIED accepts: when the user
+    confirms that a DB transaction is in the wrong security, we append a
+    new transaction under the target security AND a deletion row that
+    tells the reconciliation pipeline to disregard the original. See
+    docs/CONCILIACAO_BAYESIAN.md for the full contract.
+    """
+    data      = request.get_json() or {}
+    wallet_id = data.get("walletId", "")
+    date      = data.get("date", "")
+    items     = data.get("items", [])
+
+    if not wallet_id or not date or not items:
+        return jsonify({"error": "walletId, date e items são obrigatórios"}), 400
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    # Fetch wallet info for entityId, currencyId, companyId
+    wallet = resolve_wallet(wallet_id, {"entityId": 1, "currencyId": 1, "companyId": 1})
+    if not wallet:
+        return jsonify({"error": "Wallet não encontrada"}), 404
+
+    company_id  = str(wallet.get("companyId", ""))
+    entity_id   = str(wallet.get("entityId", ""))
+    currency_id = str(wallet.get("currencyId", "BRL"))
+
+    transactions = []
+    deletions    = []
+    for item in items:
+        flag = item.get("flag", "")
+
+        if flag == "MISCLASSIFIED":
+            # MISCLASSIFIED: reclassify the original txn under the target
+            # security. The `matchFlag` selected by the user determines the
+            # transaction type (e.g. MISSING_TRANSACTION → buySell,
+            # MISSING_EVENT → coupon). Fall back to buySell if absent.
+            match_flag = item.get("matchFlag", "") or ""
+            txn_type   = _FLAG_TXN_TYPE.get(match_flag) or "buySell"
+            balance    = float(item.get("impact") or item.get("originalBalance") or 0)
+            target_sid = item.get("securityId") or item.get("targetSecurityId") or ""
+            sec_name   = item.get("securityName") or item.get("targetSecurityName") or ""
+            original_id = item.get("originalId") or ""
+
+            if not original_id:
+                # Without the original _id we can't mark it for deletion —
+                # skip the whole item to avoid orphaned txns duplicating cash.
+                continue
+
+            desc = f"Reclassificação MISCLASSIFIED — {sec_name}" if sec_name else "Reclassificação MISCLASSIFIED"
+            txn_entry = {
+                "companyId":              company_id,
+                "entityId":               entity_id,
+                "walletId":               wallet_id,
+                "currencyId":             currency_id,
+                "operationDate":          date,
+                "liquidationDate":        date,
+                "balance":                balance,
+                "description":            desc,
+                "inputType":              "sheets",
+                "beehusTransactionType":  txn_type,
+                "hide":                   True,
+                "comment":                "",
+            }
+            if target_sid:
+                txn_entry["securityId"] = target_sid
+            if item.get("sourceAnomalyKey"):
+                txn_entry["sourceAnomalyKey"] = item["sourceAnomalyKey"]
+            transactions.append(txn_entry)
+
+            del_entry = {
+                "companyId":              company_id,
+                "walletId":               wallet_id,
+                "originalId":             str(original_id),
+                "securityId":             item.get("originalSecurityId") or "",
+                "balance":                float(item.get("originalBalance") or balance or 0),
+                "operationDate":          date,
+                "liquidationDate":        date,
+                "beehusTransactionType":  item.get("originalType") or "",
+                "description":            f"Desconsiderar original — {sec_name}" if sec_name else "Desconsiderar original (MISCLASSIFIED)",
+                "reason":                 "MISCLASSIFIED",
+            }
+            if item.get("sourceAnomalyKey"):
+                del_entry["sourceAnomalyKey"] = item["sourceAnomalyKey"]
+            deletions.append(del_entry)
+            continue
+
+        txn_type = _FLAG_TXN_TYPE.get(flag)
+        # Skip flags that don't produce transactions
+        if txn_type is None:
+            continue
+
+        sec_name = item.get("securityName", "")
+        base_desc = _FLAG_DESCRIPTIONS.get(flag, f"Correção: {flag}")
+        description = f"{base_desc} — {sec_name}" if sec_name and sec_name not in ("(carteira)", "(caixa)") else base_desc
+
+        balance = item.get("impact") or 0
+        # IR retido na fonte: imposto é uma SAÍDA de caixa. O `impact` vem
+        # sempre como magnitude positiva (abs no step 3.3), então invertemos
+        # o sinal (×-1) para registrar a transação `taxes` com valor negativo.
+        if flag == "WITHHOLDING_TAX":
+            try:
+                balance = -abs(float(balance))
+            except (TypeError, ValueError):
+                balance = 0
+
+        txn_entry = {
+            "companyId":              company_id,
+            "entityId":              entity_id,
+            "walletId":              wallet_id,
+            "currencyId":            currency_id,
+            "operationDate":         date,
+            "liquidationDate":       date,
+            "balance":               balance,
+            "description":           description,
+            "inputType":             "sheets",
+            "beehusTransactionType": txn_type,
+            "hide":                  True,
+            "comment":               "",
+        }
+        if item.get("securityId"):
+            txn_entry["securityId"] = item["securityId"]
+        if item.get("sourceAnomalyKey"):
+            txn_entry["sourceAnomalyKey"] = item["sourceAnomalyKey"]
+        transactions.append(txn_entry)
+
+    return jsonify(_sanitize({
+        "companyId":    company_id,
+        "transactions": transactions,
+        "deletions":    deletions,
+    }))
+
+
+_PROVISION_FLAGS = {"MISSING_PROVISION", "WRONG_PROVISION_AMOUNT"}
+
+
+@bp.route("/api/conciliacao/generate-provisions", methods=["POST"])
+def generate_provisions():
+    """Build provision rows (for clipboard) from accepted diagnostic items."""
+    data      = request.get_json() or {}
+    wallet_id = data.get("walletId", "")
+    date      = data.get("date", "")
+    items     = data.get("items", [])
+
+    if not wallet_id or not date or not items:
+        return jsonify({"error": "walletId, date e items são obrigatórios"}), 400
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    # Fetch wallet info
+    wallet = resolve_wallet(wallet_id, {"currencyId": 1})
+    currency_id = str((wallet or {}).get("currencyId", "BRL"))
+
+    provisions = []
+    for item in items:
+        flag = item.get("flag", "")
+        if flag not in _PROVISION_FLAGS:
+            continue
+
+        prov_data = item.get("provisionData") or {}
+        sec_name  = item.get("securityName", "")
+        sec_id    = item.get("securityId", "")
+
+        desc = f"Provisão gerada por conciliação — {sec_name}" if sec_name else "Provisão gerada por conciliação"
+
+        # Liquidation date is ALWAYS navPackage date + offset (spec). Computed
+        # here for EVERY path — MISSING_PROVISION (which already carried the
+        # offset via provisionData), WRONG_PROVISION_AMOUNT, and the manual
+        # "+ Provisão" override (which previously hardcoded both dates to the
+        # navPackage date, dropping the offset). The offset travels on the item
+        # (set by step 3.1); provisionData.offset is a secondary fallback.
+        offset = item.get("offset")
+        if offset is None:
+            offset = prov_data.get("offset", 0)
+        init_date, liq_date = _prov_dates(date, offset)
+
+        prov_entry = {
+            "walletId":        wallet_id,
+            "initialDate":     init_date,
+            "liquidationDate": liq_date,
+            "provisionType":   prov_data.get("provisionType", "buySell"),
+            "securityId":      sec_id,
+            "balance":         prov_data.get("balance") or item.get("impact") or 0,
+            "description":     desc,
+            "provisionSource": "adjustments",
+            "currencyId":      currency_id,
+        }
+        if item.get("sourceAnomalyKey"):
+            prov_entry["sourceAnomalyKey"] = item["sourceAnomalyKey"]
+        provisions.append(prov_entry)
+
+    return jsonify(_sanitize({"provisions": provisions}))
+
+
+@bp.route("/api/conciliacao/generate-execution-prices", methods=["POST"])
+def generate_execution_prices():
+    """Build executionPrice rows from accepted MISSING_EXECUTION_PRICE items.
+
+    Output:
+        {"companyId": str, "executionPrices": [...]}
+
+    Each row mirrors the payload required by `POST /beehus/financial/
+    execution-prices` (companyId, walletId, securityId, positionDate,
+    executionPrice) plus a few diagnostic snapshots (`pu`,
+    `priorExecutionPrice`, `expectedValue`, `actualBalance`, `amountDiff`)
+    so the Correções page can render the row without re-running the
+    diagnose. Rows are persisted via /api/correcoes/bulk under the
+    `executionPrices` bucket and are pushed to the upstream API later via
+    the per-row "Enviar via API" button (`inputed=false` until submitted).
+    """
+    data      = request.get_json() or {}
+    wallet_id = data.get("walletId", "")
+    date      = data.get("date", "")
+    items     = data.get("items", [])
+
+    if not wallet_id or not date or not items:
+        return jsonify({"error": "walletId, date e items são obrigatórios"}), 400
+    _, err = _require_visible_wallet(wallet_id)
+    if err: return err
+
+    wallet = resolve_wallet(wallet_id, {"companyId": 1})
+    if not wallet:
+        return jsonify({"error": "Wallet não encontrada"}), 404
+    company_id = str(wallet.get("companyId", ""))
+
+    rows = []
+    for item in items:
+        if item.get("flag") != "MISSING_EXECUTION_PRICE":
+            continue
+        sec_id = item.get("securityId") or ""
+        if not sec_id:
+            continue
+        # Prefer the exact implied price computed during diagnose. Fall back to
+        # `actualBalance / -amountDiff` if the front-end didn't relay it.
+        exec_price = item.get("expectedExecPrice")
+        if exec_price in (None, "") and item.get("actualBalance") is not None and item.get("amountDiff"):
+            try:
+                exec_price = round(-float(item["actualBalance"]) / float(item["amountDiff"]), 6)
+            except (TypeError, ValueError, ZeroDivisionError):
+                exec_price = None
+        if exec_price in (None, ""):
+            continue
+        sec_name = item.get("securityName") or ""
+        desc = (f"Preço de execução sugerido pela conciliação — {sec_name}"
+                if sec_name else "Preço de execução sugerido pela conciliação")
+        row = {
+            "companyId":           company_id,
+            "walletId":            wallet_id,
+            "securityId":          sec_id,
+            "securityName":        sec_name,
+            "positionDate":        date,
+            "executionPrice":      float(exec_price),
+            "expectedExecPrice":   float(exec_price),
+            "pu":                  item.get("pu"),
+            "priorExecutionPrice": item.get("executionPrice"),
+            "amountDiff":          item.get("amountDiff"),
+            "actualBalance":       item.get("actualBalance"),
+            "expectedValue":       item.get("expectedValue"),
+            "description":         desc,
+            "inputed":             False,
+            "inputedAt":           None,
+            "beehusId":            None,
+        }
+        if item.get("sourceAnomalyKey"):
+            row["sourceAnomalyKey"] = item["sourceAnomalyKey"]
+        rows.append(row)
+
+    return jsonify(_sanitize({
+        "companyId":       company_id,
+        "executionPrices": rows,
+    }))
+
+
+@bp.route("/api/conciliacao/bayesian")
+def bayesian_optimize():
+    """Run Bayesian factor extraction + optimization on a diagnose result.
+
+    Query params: walletId, date (same as /diagnose).
+    Returns factors, best fix with validation, alternatives, and summary.
+    """
+    diag_resp = diagnose()
+
+    if isinstance(diag_resp, tuple):
+        return diag_resp
+    diag = diag_resp.get_json(force=True)
+    if not diag or "error" in diag:
+        return diag_resp
+
+    cfg     = _load_bayesian_config()
+    factors = extract_factors(diag, cfg=cfg)
+    result  = optimize_with_validation(diag, cfg=cfg)
+    summary = compute_summary(diag)
+
+    return jsonify(_sanitize({
+        "walletId": request.args.get("walletId", ""),
+        "date":     request.args.get("date", ""),
+        "factors":  factors,
+        "optimization": result,
+        "summary":  summary,
+    }))
+
+
+@bp.route("/api/conciliacao/bayesian/from-payload", methods=["POST"])
+def bayesian_from_payload():
+    """Run Bayesian optimization on an already-computed diagnose payload.
+
+    POST body: the raw JSON output of /api/conciliacao/diagnose.
+    No DB access required. Includes Monte Carlo + validation.
+    """
+    diag = request.get_json(force=True)
+    if not diag or "step1" not in diag:
+        return jsonify({"error": "Payload inválido — esperado output de /diagnose"}), 400
+
+    cfg     = _load_bayesian_config()
+    factors = extract_factors(diag, cfg=cfg)
+    result  = optimize_with_validation(diag, cfg=cfg)
+    summary = compute_summary(diag)
+
+    return jsonify(_sanitize({
+        "walletId":     diag.get("walletId", ""),
+        "date":         diag.get("date", ""),
+        "factors":      factors,
+        "optimization": result,
+        "summary":      summary,
+    }))
+
+
+# ── Global Analysis ────────────────────────────────────────────────────────────
+
+_TIER1_FLAGS = {"MISSING_TRANSACTION", "MISSING_PROVISION", "MISSING_EVENT",
+                "WRONG_EVENT_BALANCE", "WRONG_PROVISION_AMOUNT"}
+
+
+@bp.route("/api/conciliacao/global-analysis")
+def global_analysis():
+    """Cross-wallet analysis: group deterministic (Tier 1) flags by security.
+
+    Runs a lightweight Steps 1-3 across all wallets with mismatches for the
+    given company + date, then aggregates flags by (securityId, flagType).
+    """
+    try:
+        company_id = request.args.get("companyId", "")
+        date       = request.args.get("date", "")
+        if not company_visible(company_id):
+            return jsonify({"securities": [], "date": date, "walletCount": 0})
+        threshold  = _diff_threshold_decimal(request)
+
+        wallet_ids = _valid_wallet_ids()
+        wallet_names = {wid: name for wid, name in get_wallet_names().items() if wid in wallet_ids}
+
+        # All wallets with a mismatch on this date
+        mismatch_pkgs = list(db.navPackages.find(
+            _mismatch_query(company_id, wallet_ids, date, threshold=threshold),
+            {"walletId": 1, "returnNavPerShare": 1, "returnContribution": 1,
+             "formerNav": 1, "nav": 1}
+        ))
+
+        if not mismatch_pkgs:
+            return jsonify(_sanitize({"securities": [], "date": date, "walletCount": 0}))
+
+        # Pre-load former NAV for wallets missing it
+        pkg_wallet_ids = list({str(p["walletId"]) for p in mismatch_pkgs})
+        former_nav_map = {}
+        for prev in db.navPackages.aggregate([
+            {"$match": {"walletId": {"$in": pkg_wallet_ids}, "positionDate": {"$lt": date}, "trashed": {"$ne": True}}},
+            {"$sort": {"positionDate": -1}},
+            {"$group": {"_id": "$walletId", "nav": {"$first": "$nav"}}},
+        ]):
+            former_nav_map[str(prev["_id"])] = prev.get("nav")
+
+        # Pre-load ALL current positions in one query (replaces N find_one calls)
+        all_sec_oids = set()
+        all_positions = {}  # {walletId: [securities]}
+        all_former    = {}  # {walletId: {securityId: {pu, quantity}}}
+
+        for doc in db.processedPosition.find(
+            {"walletId": {"$in": pkg_wallet_ids}, "positionDate": date},
+            {"walletId": 1, "securities": 1}
+        ):
+            wid = str(doc["walletId"])
+            secs = doc.get("securities", [])
+            all_positions[wid] = secs
+            for s in secs:
+                sid = s.get("securityId")
+                if sid:
+                    all_sec_oids.add(sid)
+                    try:
+                        all_sec_oids.add(_OID(str(sid)))
+                    except Exception:
+                        pass
+
+        # Pre-load ALL former positions in one aggregation (replaces N find_one calls)
+        for doc in db.processedPosition.aggregate([
+            {"$match": {"walletId": {"$in": pkg_wallet_ids}, "positionDate": {"$lt": date}}},
+            {"$sort": {"positionDate": -1}},
+            {"$group": {"_id": "$walletId", "securities": {"$first": "$securities"}}},
+        ]):
+            wid = str(doc["_id"])
+            all_former[wid] = {
+                str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
+                for s in (doc.get("securities") or [])
+            }
+
+        sec_info = {
+            str(s["_id"]): s
+            for s in db.securities.find(
+                {"_id": {"$in": list(all_sec_oids)}},
+                {"redemptionNavDays": 1, "redemptionSettlementDays": 1,
+                 "subscriptionNavDays": 1, "subscriptionSettlementDays": 1,
+                 "securityType": 1, "beehusName": 1, "currency": 1}
+            )
+        }
+
+        # Pre-load all transactions for these wallets on this date
+        all_txns = {}  # {walletId: {securityId: [entries]}}
+        for doc in db.transactions.find(
+            {"walletId": {"$in": pkg_wallet_ids}, "liquidationDate": date},
+            {"walletId": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1}
+        ):
+            wid = str(doc["walletId"])
+            sid = str(doc.get("securityId", "") or "")
+            entry = {"type": doc.get("beehusTransactionType"), "balance": doc.get("balance"),
+                     "securityId": sid, "txnId": str(doc.get("_id", "") or "")}
+            all_txns.setdefault(wid, {}).setdefault(sid, []).append(entry)
+
+        # Pre-load all active provisions
+        all_provs = {}  # {walletId: {securityId: total}}
+        for doc in db.provisions.aggregate([
+            {"$match": {"walletId": {"$in": pkg_wallet_ids}, "initialDate": {"$lte": date},
+                        "liquidationDate": {"$gt": date}, "securityId": {"$ne": None}}},
+            {"$group": {"_id": {"w": "$walletId", "s": "$securityId"}, "total": {"$sum": {"$ifNull": ["$amount", 0]}}}},
+        ]):
+            wid = str(doc["_id"]["w"])
+            sid = str(doc["_id"]["s"])
+            all_provs.setdefault(wid, {})[sid] = doc["total"]
+
+        # Pre-load provision lifecycle events
+        all_prov_lifecycle = {}  # {walletId: set(securityId)}
+        for doc in db.provisions.find(
+            {"walletId": {"$in": pkg_wallet_ids}, "securityId": {"$ne": None},
+             "$or": [{"initialDate": date}, {"liquidationDate": date}]},
+            {"walletId": 1, "securityId": 1}
+        ):
+            wid = str(doc["walletId"])
+            all_prov_lifecycle.setdefault(wid, set()).add(str(doc["securityId"]))
+
+        # Inject pending corrections for every wallet in scope so flags already
+        # "fixed" via /correcoes don't surface in global-analysis anymore.
+        # Batched once per (company, date) — without this, each of N wallets
+        # walked the full data/correcoes/<company>/*/*.json tree.
+        all_pending_provs = load_all_pending_provisions_by_wallet(company_id)
+        for wid in pkg_wallet_ids:
+            corr_t, _, corr_d = load_corrections_for_wallet(company_id, date, wid)
+            # Cross-folder provisions so a provision accepted on a neighbor date
+            # whose active window includes `date` also affects this wallet's
+            # global-analysis flags. Existing filter below (`init<=date<liq` +
+            # lifecycle `init==date or liq==date`) is preserved.
+            corr_p = all_pending_provs.get(wid, [])
+            _global_deletion_ids = {str(d.get("originalId")) for d in corr_d if d.get("originalId")}
+            if _global_deletion_ids and wid in all_txns:
+                for _sec_id, _txns in all_txns[wid].items():
+                    all_txns[wid][_sec_id] = [
+                        _t for _t in _txns
+                        if str(_t.get("txnId", "")) not in _global_deletion_ids
+                    ]
+            for ct in corr_t:
+                sid = str(ct.get("securityId", "") or "")
+                entry = {"type":       ct.get("beehusTransactionType"),
+                         "balance":    ct.get("balance"),
+                         "securityId": sid,
+                         "pending":    True}
+                all_txns.setdefault(wid, {}).setdefault(sid, []).append(entry)
+            for cp in corr_p:
+                sid = str(cp.get("securityId", "") or "")
+                if not sid:
+                    continue
+                init = cp.get("initialDate")
+                liq  = cp.get("liquidationDate")
+                bal  = float(cp.get("balance") or 0)
+                if (init or "") <= date and (liq or "") > date:
+                    all_provs.setdefault(wid, {})[sid] = all_provs.get(wid, {}).get(sid, 0) + bal
+                if init == date or liq == date:
+                    all_prov_lifecycle.setdefault(wid, set()).add(sid)
+
+        # ── Run Steps 1-3 per wallet, collect Tier 1 flags ─────────────────────
+        # Result: {(securityId, flag): {securityName, securityType, impact_sum, wallets: [...]}}
+        flag_agg = {}
+
+        for pkg in mismatch_pkgs:
+            wid = str(pkg["walletId"])
+            return_nav_ps  = pkg.get("returnNavPerShare", 0) or 0
+            return_contrib = pkg.get("returnContribution", 0) or 0
+            # `pkg.get("formerNav")` is stale when a prior package was trashed
+            # or regenerated after this one was computed. _find_former_nav
+            # already resolved the live value into former_nav_map — use it.
+            former_nav     = former_nav_map.get(wid)
+
+            gap_pct  = return_nav_ps - return_contrib
+            gap_cash = round(gap_pct * former_nav, 2) if former_nav is not None else None
+
+            if gap_cash is None or abs(gap_pct) <= 1e-10:
+                continue
+
+            current_secs = all_positions.get(wid, [])
+            former_map   = all_former.get(wid, {})
+            txns_map     = all_txns.get(wid, {})
+            prov_map     = all_provs.get(wid, {})
+            prov_lc      = all_prov_lifecycle.get(wid, set())
+
+            # Event txns by security
+            event_txns_by_sec = {}
+            for sid, txn_list in txns_map.items():
+                for t in txn_list:
+                    if t["type"] in _EVENT_TYPES and t["securityId"]:
+                        event_txns_by_sec.setdefault(t["securityId"], []).append(t)
+
+            for sec in current_secs:
+                sid  = str(sec.get("securityId", ""))
+                pu   = sec.get("pu")
+                qty  = sec.get("quantity")
+                f    = former_map.get(sid, {})
+                f_pu = f.get("pu")
+                f_qty = f.get("quantity")
+                f_bal = round(f_pu * f_qty, 6) if (f_pu is not None and f_qty is not None) else None
+                amt_diff = round(qty - (f_qty or 0), 6) if qty is not None else None
+
+                exec_price = sec.get("executionPrice")
+                total_c    = sec.get("totalContribution")
+
+                try:
+                    ret_pu = round(pu / f_pu - 1, 8) if (pu and f_pu) else None
+                except (TypeError, ZeroDivisionError):
+                    ret_pu = None
+                try:
+                    ret_c = round(total_c / f_bal, 8) if (total_c is not None and f_bal) else None
+                except (TypeError, ZeroDivisionError):
+                    ret_c = None
+                diff_rent = round(ret_pu - ret_c, 8) if (ret_pu is not None and ret_c is not None) else None
+
+                sec_txns = txns_map.get(sid, [])
+
+                # Step 2 elimination
+                cond_a = amt_diff is not None and amt_diff == 0
+                cond_b = not sec_txns
+                cond_c = sid not in prov_lc
+                cond_d = diff_rent is not None and diff_rent == 0
+
+                if not cond_d and diff_rent and f_bal:
+                    ev_txns = event_txns_by_sec.get(sid, [])
+                    if ev_txns:
+                        ev_total = round(sum(float(t.get("balance", 0) or 0) for t in ev_txns), 2)
+                        expected_event_cash = round(-diff_rent * f_bal, 2)
+                        if _approx(ev_total, expected_event_cash):
+                            cond_d = True
+                            non_event_txns = [t for t in sec_txns if t["type"] not in _EVENT_TYPES]
+                            cond_b = not non_event_txns
+
+                if cond_a and cond_b and cond_c and cond_d:
+                    continue  # eliminated
+
+                # Step 3 — only collect Tier 1 flags
+                price = exec_price or pu or 0
+                info  = sec_info.get(sid, {})
+                sec_name = info.get("beehusName") or sec.get("beehusName", sid)
+                sec_type = info.get("securityType", "")
+
+                # 3.1 — Amount Difference
+                if amt_diff:
+                    settle = info.get("redemptionSettlementDays" if amt_diff < 0 else "subscriptionSettlementDays") or 0
+                    nav_d  = info.get("redemptionNavDays"        if amt_diff < 0 else "subscriptionNavDays")        or 0
+                    offset = settle - nav_d
+
+                    if offset == 0:
+                        has_buysell = any(t.get("type") == "buySell" for t in sec_txns)
+                        if not has_buysell:
+                            impact = round(abs(amt_diff) * price, 2)
+                            _agg_flag(flag_agg, sid, sec_name, sec_type, "MISSING_TRANSACTION",
+                                      impact, wid, wallet_names.get(wid, wid), gap_cash,
+                                      amt_diff, pu, exec_price, offset)
+                    else:
+                        if sid not in prov_map:
+                            impact = round(abs(amt_diff) * price, 2)
+                            _agg_flag(flag_agg, sid, sec_name, sec_type, "MISSING_PROVISION",
+                                      impact, wid, wallet_names.get(wid, wid), gap_cash,
+                                      amt_diff, pu, exec_price, offset)
+
+                # 3.2 — Rentability Difference
+                if diff_rent and f_bal and not (cond_a and cond_b and cond_c and cond_d):
+                    expected_event_cash = round(-diff_rent * f_bal, 2)
+                    ev_txns = event_txns_by_sec.get(sid, [])
+                    if ev_txns:
+                        ev_total = round(sum(float(t.get("balance", 0) or 0) for t in ev_txns), 2)
+                        if not _approx(ev_total, expected_event_cash):
+                            _agg_flag(flag_agg, sid, sec_name, sec_type, "WRONG_EVENT_BALANCE",
+                                      round(abs(ev_total - expected_event_cash), 2),
+                                      wid, wallet_names.get(wid, wid), gap_cash,
+                                      amt_diff, pu, exec_price, 0)
+                    elif sid in prov_map:
+                        if not _approx(float(prov_map[sid]), expected_event_cash):
+                            _agg_flag(flag_agg, sid, sec_name, sec_type, "WRONG_PROVISION_AMOUNT",
+                                      round(abs(float(prov_map[sid]) - expected_event_cash), 2),
+                                      wid, wallet_names.get(wid, wid), gap_cash,
+                                      amt_diff, pu, exec_price, 0)
+                    else:
+                        _agg_flag(flag_agg, sid, sec_name, sec_type, "MISSING_EVENT",
+                                  abs(expected_event_cash),
+                                  wid, wallet_names.get(wid, wid), gap_cash,
+                                  amt_diff, pu, exec_price, 0)
+
+        # Build output sorted by wallet count desc
+        securities = []
+        for (sid, flag), data in flag_agg.items():
+            si = sec_info.get(sid, {})
+            securities.append({
+                "securityId":   sid,
+                "securityName": data["securityName"],
+                "securityType": data["securityType"],
+                "flag":         flag,
+                "walletCount":  len(data["wallets"]),
+                "totalImpact":  round(sum(w["impact"] for w in data["wallets"]), 2),
+                "avgImpact":    round(sum(w["impact"] for w in data["wallets"]) / len(data["wallets"]), 2),
+                "pu":           data.get("pu"),
+                "executionPrice": data.get("executionPrice"),
+                "amountDiff":   data.get("amountDiff"),
+                "offset":       data.get("offset", 0),
+                "currencyId":   str(si.get("currency", "BRL")),
+                "wallets":      sorted(data["wallets"], key=lambda w: -abs(w["impact"])),
+            })
+
+        securities.sort(key=lambda s: -s["walletCount"])
+
+        return jsonify(_sanitize({
+            "securities": securities,
+            "date":       date,
+            "walletCount": len(pkg_wallet_ids),
+        }))
+    except Exception:
+        import logging, traceback
+        traceback.print_exc()
+        logging.getLogger(__name__).exception("conciliacao /global-analysis failed")
+        return jsonify({"error": "falha ao processar"}), 500
+
+
+def _agg_flag(agg, sid, sec_name, sec_type, flag, impact, wid, wallet_name, gap_cash,
+              amt_diff, pu, exec_price, offset=0):
+    """Aggregate a flag occurrence into the global analysis dict."""
+    key = (sid, flag)
+    if key not in agg:
+        agg[key] = {
+            "securityName": sec_name,
+            "securityType": sec_type,
+            "pu":           pu,
+            "executionPrice": exec_price,
+            "amountDiff":   amt_diff,
+            "offset":       offset,
+            "wallets":      [],
+        }
+    agg[key]["wallets"].append({
+        "walletId":   wid,
+        "walletName": wallet_name,
+        "impact":     impact,
+        "gapCash":    gap_cash,
+    })
+
+
+# ── Global Execution-Price Check ──────────────────────────────────────────────
+
+@bp.route("/api/conciliacao/global-execution-prices")
+def global_execution_prices():
+    """Cross-wallet scan for `MISSING_EXECUTION_PRICE` candidates.
+
+    For every wallet of `companyId` on `date`, evaluate each security:
+      - has `amountDifference` (qty changed since former position), AND
+      - has at least one `buySell` transaction on `liquidationDate == date`
+    The implied execution price is `−Σbalance(buySell) ÷ amountDifference`.
+    A row is surfaced as a candidate when the implied price diverges from the
+    price the system used (`executionPrice or PU`) by more than 0.5%.
+
+    The scan runs *unconditionally* on every wallet — it does not require a
+    `returnNavPerShare ≠ returnContribution` mismatch — so it doubles as a
+    "second-pass" verification: even wallets that look fine on the daily NAV
+    can have an execution-price discrepancy whose impact happens to net out
+    against another flag, but is still worth fixing.
+
+    Output mirrors the existing `/global-analysis` shape so the Painel UI can
+    reuse the bulk-send pipeline:
+        {
+          "rows": [{walletId, walletName, securityId, securityName,
+                    pu, priorExecutionPrice, executionPrice (suggested),
+                    expectedExecPrice, deltaPct, amountDiff,
+                    actualBalance, expectedValue, impact, sourceAnomalyKey}],
+          "walletCount": N, "date": "YYYY-MM-DD"
+        }
+    Rows already in the executionPrices bucket (matched by `sourceAnomalyKey`)
+    are tagged with `accepted=True` so the UI can gray them out.
+    """
+    try:
+        company_id = request.args.get("companyId", "")
+        date       = request.args.get("date", "")
+        if not company_visible(company_id):
+            return jsonify({"rows": [], "date": date, "walletCount": 0})
+
+        wallet_ids = _valid_wallet_ids()
+        wallet_names = {wid: name for wid, name in get_wallet_names().items() if wid in wallet_ids}
+
+        # Wallets of this company that have a position on this date. We scan
+        # all of them — not just those with a NAV mismatch — because a MEP
+        # divergence can exist independent of the daily gap.
+        scope_wallets = [
+            str(w["_id"])
+            for w in db.wallets.find({"companyId": company_id, "_id": {"$in": [_OID(s) for s in wallet_ids if _is_oid(s)]}}, {"_id": 1})
+        ]
+        if not scope_wallets:
+            return jsonify(_sanitize({"rows": [], "date": date, "walletCount": 0}))
+
+        # Wallets with a processedPosition on `date` (skip wallets that never
+        # got computed for this date — nothing to inspect there).
+        positions = {}
+        sec_oids  = set()
+        for doc in db.processedPosition.find(
+            {"walletId": {"$in": scope_wallets}, "positionDate": date},
+            {"walletId": 1, "securities": 1}
+        ):
+            wid = str(doc["walletId"])
+            secs = doc.get("securities", [])
+            positions[wid] = secs
+            for s in secs:
+                sid = s.get("securityId")
+                if sid:
+                    sec_oids.add(sid)
+                    try:
+                        sec_oids.add(_OID(str(sid)))
+                    except Exception:
+                        pass
+
+        if not positions:
+            return jsonify(_sanitize({"rows": [], "date": date, "walletCount": 0}))
+
+        # Former positions (most recent before `date`)
+        former = {}
+        for doc in db.processedPosition.aggregate([
+            {"$match": {"walletId": {"$in": list(positions.keys())}, "positionDate": {"$lt": date}}},
+            {"$sort": {"positionDate": -1}},
+            {"$group": {"_id": "$walletId", "securities": {"$first": "$securities"}}},
+        ]):
+            wid = str(doc["_id"])
+            former[wid] = {
+                str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
+                for s in (doc.get("securities") or [])
+            }
+
+        # Securities metadata (for beehusName fallback)
+        sec_info = {
+            str(s["_id"]): s
+            for s in db.securities.find(
+                {"_id": {"$in": list(sec_oids)}},
+                {"beehusName": 1, "securityType": 1}
+            )
+        }
+
+        # buySell transactions, indexed by (walletId, securityId)
+        buysell = {}
+        for doc in db.transactions.find(
+            {"walletId": {"$in": list(positions.keys())},
+             "liquidationDate": date, "beehusTransactionType": "buySell"},
+            {"walletId": 1, "securityId": 1, "balance": 1}
+        ):
+            wid = str(doc["walletId"])
+            sid = str(doc.get("securityId", "") or "")
+            if not sid:
+                continue
+            buysell.setdefault(wid, {}).setdefault(sid, []).append(float(doc.get("balance") or 0))
+
+        # Already-accepted MEP corrections for dedup. The Painel uses the same
+        # wallet-level anomaly key as the diagnose modal so the row gets the
+        # ✓ marker without re-sending.
+        accepted_keys = set()
+        for path in _iter_wallet_files(company_id, date):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    blob = json.load(f)
+            except (OSError, ValueError):
+                continue
+            for r in (blob.get("executionPrices") or []):
+                k = r.get("sourceAnomalyKey")
+                if k:
+                    accepted_keys.add(k)
+
+        rows = []
+        for wid, secs in positions.items():
+            for sec in secs:
+                sid = str(sec.get("securityId", ""))
+                if not sid:
+                    continue
+                qty   = sec.get("quantity")
+                f_qty = former.get(wid, {}).get(sid, {}).get("quantity")
+                if qty is None:
+                    continue
+                amt_diff = round(qty - (f_qty or 0), 6)
+                if amt_diff == 0:
+                    continue
+
+                txn_balances = buysell.get(wid, {}).get(sid, [])
+                if not txn_balances:
+                    continue
+                actual_bal = round(sum(txn_balances), 2)
+                if actual_bal == 0:
+                    continue
+
+                pu         = sec.get("pu")
+                exec_price = sec.get("executionPrice")
+                price_used = exec_price if (exec_price not in (None, 0)) else pu
+                if not price_used:
+                    continue
+
+                try:
+                    implied_exec = round(-actual_bal / amt_diff, 6)
+                except ZeroDivisionError:
+                    continue
+
+                delta = abs(implied_exec - price_used)
+                if delta <= abs(price_used) * 0.005:
+                    continue  # within tolerance — not a candidate
+
+                expected_value = round(-amt_diff * price_used, 2)
+                impact         = round(abs(amt_diff * (price_used - implied_exec)), 2)
+                key = f"{company_id}|{date}|{wid}|MISSING_EXECUTION_PRICE|{sid}"
+                info = sec_info.get(sid, {})
+
+                rows.append({
+                    "walletId":            wid,
+                    "walletName":          wallet_names.get(wid, wid),
+                    "securityId":          sid,
+                    "securityName":        info.get("beehusName") or sec.get("beehusName") or sid,
+                    "securityType":        info.get("securityType", ""),
+                    "pu":                  pu,
+                    "priorExecutionPrice": exec_price,
+                    "priceUsed":           price_used,
+                    "expectedExecPrice":   implied_exec,
+                    "deltaPct":            round((implied_exec - price_used) / price_used * 100, 4),
+                    "amountDiff":          amt_diff,
+                    "actualBalance":       actual_bal,
+                    "expectedValue":       expected_value,
+                    "impact":              impact,
+                    "sourceAnomalyKey":    key,
+                    "accepted":            key in accepted_keys,
+                })
+
+        # Sort by impact desc — biggest cash deltas first
+        rows.sort(key=lambda r: -r["impact"])
+
+        return jsonify(_sanitize({
+            "rows":        rows,
+            "date":        date,
+            "walletCount": len(positions),
+        }))
+    except Exception:
+        import logging, traceback
+        traceback.print_exc()
+        logging.getLogger(__name__).exception("conciliacao /global-execution-prices failed")
+        return jsonify({"error": "falha ao processar"}), 500
+
+
+def _is_oid(s):
+    try:
+        _OID(str(s))
+        return True
+    except Exception:
+        return False
+
+
+# ── Transaction Check ──────────────────────────────────────────────────────────
+
+@bp.route("/api/conciliacao/transaction-check")
+def transaction_check():
+    """Find buySell transactions without a matching amountDifference or provision.
+
+    For each buySell transaction on the given date:
+      - balance < 0 → subscription → offset = subscriptionSettlementDays − subscriptionNavDays
+      - balance > 0 → redemption   → offset = redemptionSettlementDays − redemptionNavDays
+      - offset = 0  → expect amountDifference on liquidationDate
+      - offset ≠ 0  → expect active provision for the security/wallet
+    """
+    try:
+        company_id = request.args.get("companyId", "")
+        date       = request.args.get("date", "")
+        if not company_visible(company_id):
+            return jsonify({"unmatched": [], "date": date, "totalTransactions": 0})
+
+        wallet_names = dict(get_wallet_names())
+
+        # Company wallets only
+        company_wallets = set()
+        for pkg in db.navPackages.find(
+            {"companyId": company_id,
+             "positionDate": date, "trashed": {"$ne": True}},
+            {"walletId": 1}
+        ):
+            company_wallets.add(str(pkg["walletId"]))
+
+        if not company_wallets:
+            return jsonify(_sanitize({"unmatched": [], "date": date, "totalTransactions": 0}))
+
+        # All buySell transactions for these wallets on this date
+        buysell_txns = list(db.transactions.find(
+            {"walletId": {"$in": list(company_wallets)}, "liquidationDate": date,
+             "beehusTransactionType": "buySell"},
+            {"walletId": 1, "securityId": 1, "balance": 1, "quantity": 1,
+             "price": 1, "description": 1, "operationDate": 1, "liquidationDate": 1}
+        ))
+
+        if not buysell_txns:
+            return jsonify(_sanitize({"unmatched": [], "date": date, "totalTransactions": 0}))
+
+        total_txns = len(buysell_txns)
+
+        # Collect all securityIds and walletIds involved
+        txn_wallet_ids = set()
+        txn_sec_ids_raw = set()
+        for txn in buysell_txns:
+            txn_wallet_ids.add(str(txn["walletId"]))
+            sid = txn.get("securityId")
+            if sid:
+                txn_sec_ids_raw.add(sid)
+                try:
+                    txn_sec_ids_raw.add(_OID(str(sid)))
+                except Exception:
+                    pass
+
+        # Pre-load security info (settlement days)
+        sec_info = {
+            str(s["_id"]): s
+            for s in db.securities.find(
+                {"_id": {"$in": list(txn_sec_ids_raw)}},
+                {"subscriptionSettlementDays": 1, "subscriptionNavDays": 1,
+                 "redemptionSettlementDays": 1, "redemptionNavDays": 1,
+                 "securityType": 1, "beehusName": 1}
+            )
+        }
+
+        # Pre-load ALL current positions in one query (replaces N find_one calls)
+        positions = {}   # {walletId: {securityId: quantity}}
+        former_pos = {}  # {walletId: {securityId: quantity}}
+        wid_list = list(txn_wallet_ids)
+
+        for doc in db.processedPosition.find(
+            {"walletId": {"$in": wid_list}, "positionDate": date},
+            {"walletId": 1, "securities": 1}
+        ):
+            wid = str(doc["walletId"])
+            positions[wid] = {
+                str(s.get("securityId", "")): s.get("quantity")
+                for s in doc.get("securities", [])
+            }
+
+        # Pre-load ALL former positions in one aggregation (replaces N find_one calls)
+        for doc in db.processedPosition.aggregate([
+            {"$match": {"walletId": {"$in": wid_list}, "positionDate": {"$lt": date}}},
+            {"$sort": {"positionDate": -1}},
+            {"$group": {"_id": "$walletId", "securities": {"$first": "$securities"}}},
+        ]):
+            wid = str(doc["_id"])
+            former_pos[wid] = {
+                str(s.get("securityId", "")): s.get("quantity")
+                for s in (doc.get("securities") or [])
+            }
+
+        # Pre-load active provisions: {(walletId, securityId): total}
+        active_provs = {}
+        for doc in db.provisions.aggregate([
+            {"$match": {"walletId": {"$in": list(txn_wallet_ids)},
+                        "initialDate": {"$lte": date}, "liquidationDate": {"$gt": date},
+                        "securityId": {"$ne": None}}},
+            {"$group": {"_id": {"w": "$walletId", "s": "$securityId"},
+                        "total": {"$sum": {"$ifNull": ["$balance", {"$ifNull": ["$amount", 0]}]}}}},
+        ]):
+            wid = str(doc["_id"]["w"])
+            sid = str(doc["_id"]["s"])
+            active_provs[(wid, sid)] = doc["total"]
+
+        # Merge in pending provisions accepted via /correcoes whose active
+        # window covers `date`. Without this, a buySell already paired with a
+        # provision via the "Aceitar" button still flags as unmatched.
+        all_pending_provs = load_all_pending_provisions_by_wallet(company_id)
+        for wid, provs in all_pending_provs.items():
+            if wid not in txn_wallet_ids:
+                continue
+            for cp in provs:
+                sid = str(cp.get("securityId", "") or "")
+                if not sid:
+                    continue
+                init = cp.get("initialDate")
+                liq  = cp.get("liquidationDate")
+                if (init or "") <= date and (liq or "") > date:
+                    bal = float(cp.get("balance") or cp.get("amount") or 0)
+                    active_provs[(wid, sid)] = active_provs.get((wid, sid), 0) + bal
+
+        # Check each buySell transaction
+        unmatched = []
+        for txn in buysell_txns:
+            wid = str(txn["walletId"])
+            sid = str(txn.get("securityId", "") or "")
+            balance = txn.get("balance") or 0
+
+            if not sid:
+                continue
+
+            info = sec_info.get(sid, {})
+            sec_name = info.get("beehusName", sid)
+            sec_type = info.get("securityType", "")
+
+            # Determine subscription vs redemption
+            if balance < 0:
+                # Subscription (buying)
+                settle = info.get("subscriptionSettlementDays") or 0
+                nav_d  = info.get("subscriptionNavDays") or 0
+                direction = "subscription"
+            else:
+                # Redemption (selling)
+                settle = info.get("redemptionSettlementDays") or 0
+                nav_d  = info.get("redemptionNavDays") or 0
+                direction = "redemption"
+
+            offset = settle - nav_d
+
+            # Check based on offset
+            if offset == 0:
+                # Expect amountDifference on this date
+                curr_qty = positions.get(wid, {}).get(sid)
+                frmr_qty = former_pos.get(wid, {}).get(sid)
+                amt_diff = round((curr_qty or 0) - (frmr_qty or 0), 6) if curr_qty is not None else None
+
+                if amt_diff is not None and amt_diff != 0:
+                    continue  # matched — position changed
+                problem = "Sem amountDifference na posição"
+            else:
+                # Expect active provision
+                if (wid, sid) in active_provs:
+                    continue  # matched — provision exists
+                problem = f"Sem provisão ativa (offset={offset})"
+
+            unmatched.append({
+                "walletId":       wid,
+                "walletName":     wallet_names.get(wid, wid),
+                "securityId":     sid,
+                "securityName":   sec_name,
+                "securityType":   sec_type,
+                "balance":        balance,
+                "quantity":       txn.get("quantity"),
+                "price":          txn.get("price"),
+                "direction":      direction,
+                "offset":         offset,
+                "operationDate":  str(txn.get("operationDate", "") or "")[:10],
+                "liquidationDate": str(txn.get("liquidationDate", "") or "")[:10],
+                "description":    txn.get("description", ""),
+                "problem":        problem,
+            })
+
+        # Sort: by security name, then wallet
+        unmatched.sort(key=lambda u: (u["securityName"], u["walletName"]))
+
+        return jsonify(_sanitize({
+            "unmatched":         unmatched,
+            "date":              date,
+            "totalTransactions": total_txns,
+        }))
+    except Exception:
+        import logging, traceback
+        traceback.print_exc()
+        logging.getLogger(__name__).exception("conciliacao /transaction-check failed")
+        return jsonify({"error": "falha ao processar"}), 500
+
+
+# ── Scenario Capture ─────────────────────────────────────────────────────────
+
+_SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "..", "tests", "scenarios")
+
+
+def _next_scenario_id():
+    """Find the next available scenario number (T10, T11, ...)."""
+    os.makedirs(_SCENARIOS_DIR, exist_ok=True)
+    existing = []
+    for name in os.listdir(_SCENARIOS_DIR):
+        m = re.match(r"^T(\d+)$", name)
+        if m:
+            existing.append(int(m.group(1)))
+    return max(existing, default=0) + 1
+
+
+def _bson_to_json(obj):
+    """Recursively convert BSON types (ObjectId, datetime) to JSON-safe values."""
+    if isinstance(obj, _OID):
+        return str(obj)
+    if isinstance(obj, _dt):
+        return obj.isoformat()
+    if isinstance(obj, _date):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _bson_to_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_bson_to_json(v) for v in obj]
+    if isinstance(obj, float) and (math.isinf(obj) or math.isnan(obj)):
+        return None
+    return obj
+
+
+def _capture_scenario_data(wallet_id, date_str):
+    """Snapshot all MongoDB state needed to replay a diagnostic scenario.
+
+    Returns a dict with the same structure as tests/scenarios/T9/.
+    """
+    # ── 1. Wallet ─────────────────────────────────────────────────────────────
+    wallet_doc = db.wallets.find_one({"_id": wallet_id})
+    if not wallet_doc:
+        try:
+            wallet_doc = db.wallets.find_one({"_id": _OID(wallet_id)})
+        except Exception:
+            pass
+    wallet_json = {
+        "_id":                     str(wallet_doc["_id"]) if wallet_doc else wallet_id,
+        "name":                    (wallet_doc or {}).get("name", ""),
+        "companyId":               str((wallet_doc or {}).get("companyId", "")),
+        "entityId":                str((wallet_doc or {}).get("entityId", "")),
+        "currencyId":              str((wallet_doc or {}).get("currencyId", "BRL")),
+        "hasDailyPosition":        (wallet_doc or {}).get("hasDailyPosition", True),
+        "startDateConsolidation":  str((wallet_doc or {}).get("startDateConsolidation", "")),
+        "startDateReturn":         str((wallet_doc or {}).get("startDateReturn", "")),
+    }
+
+    # ── 2. Former date (navPackage source of truth) ───────────────────────────
+    former_date, former_nav = _find_former_nav(wallet_id, date_str)
+
+    # ── 3. Nav packages (former + current) ────────────────────────────────────
+    current_nav = db.navPackages.find_one(
+        {"walletId": wallet_id, "positionDate": date_str, "trashed": {"$ne": True}},
+    )
+    former_nav_doc = None
+    if former_date:
+        former_nav_doc = db.navPackages.find_one(
+            {"walletId": wallet_id, "positionDate": former_date, "trashed": {"$ne": True}},
+        )
+    nav_packages_json = {
+        "former":  _bson_to_json({k: v for k, v in (former_nav_doc or {}).items() if k != "_id"}),
+        "current": _bson_to_json({k: v for k, v in (current_nav or {}).items() if k != "_id"}),
+    }
+
+    # ── 4. Positions (former + current) ───────────────────────────────────────
+    current_pos = db.processedPosition.find_one(
+        {"walletId": wallet_id, "positionDate": date_str}, {"securities": 1}
+    )
+    former_pos = None
+    if former_date:
+        former_pos = db.processedPosition.find_one(
+            {"walletId": wallet_id, "positionDate": former_date}, {"securities": 1}
+        )
+    positions_json = {
+        "former":  _bson_to_json({k: v for k, v in (former_pos or {}).items() if k != "_id"}),
+        "current": _bson_to_json({k: v for k, v in (current_pos or {}).items() if k != "_id"}),
+    }
+
+    # ── 5. Transactions ──────────────────────────────────────────────────────
+    txns = list(db.transactions.find(
+        {"walletId": wallet_id, "liquidationDate": date_str},
+        {"_id": 0}
+    ))
+    transactions_json = {
+        "transactions": _bson_to_json(txns),
+    }
+
+    # ── 6. Provisions (active on date) ────────────────────────────────────────
+    active_provs = list(db.provisions.find(
+        {"walletId": wallet_id, "initialDate": {"$lte": date_str},
+         "liquidationDate": {"$gt": date_str}},
+        {"_id": 0}
+    ))
+    provisions_json = {
+        "activeProvisions": _bson_to_json(active_provs),
+    }
+
+    # ── 7. Cash accounts ─────────────────────────────────────────────────────
+    cash_docs = list(db.cashAccounts.find(
+        {"walletId": wallet_id}, {"_id": 0}
+    ))
+    cash_accounts_json = {
+        "cashAccounts": _bson_to_json(cash_docs),
+    }
+
+    # ── 8. Securities metadata (only those in position or transactions) ──────
+    sec_ids_raw = set()
+    for s in (current_pos or {}).get("securities", []):
+        if s.get("securityId"):
+            sec_ids_raw.add(s["securityId"])
+    for t in txns:
+        if t.get("securityId"):
+            sec_ids_raw.add(t["securityId"])
+
+    sec_ids_query = []
+    for sid in sec_ids_raw:
+        sec_ids_query.append(sid)
+        try:
+            sec_ids_query.append(_OID(str(sid)))
+        except Exception:
+            pass
+
+    securities = []
+    for s in db.securities.find(
+        {"_id": {"$in": sec_ids_query}},
+        {"beehusName": 1, "securityType": 1,
+         "redemptionNavDays": 1, "redemptionSettlementDays": 1,
+         "subscriptionNavDays": 1, "subscriptionSettlementDays": 1}
+    ):
+        securities.append({
+            "_id":                       str(s["_id"]),
+            "beehusName":                s.get("beehusName", ""),
+            "securityType":              s.get("securityType", ""),
+            "redemptionNavDays":         s.get("redemptionNavDays", 0),
+            "redemptionSettlementDays":  s.get("redemptionSettlementDays", 0),
+            "subscriptionNavDays":       s.get("subscriptionNavDays", 0),
+            "subscriptionSettlementDays": s.get("subscriptionSettlementDays", 0),
+        })
+
+    return {
+        "wallet":         wallet_json,
+        "nav_packages":   nav_packages_json,
+        "positions":      positions_json,
+        "transactions":   transactions_json,
+        "provisions":     provisions_json,
+        "cash_accounts":  cash_accounts_json,
+        "securities":     securities,
+    }
+
+
+def _compute_coverage(diagnose_output, bayesian_output):
+    """Compute how much of the gap is explained by diagnosed flags.
+
+    Returns dict with coveragePct, explainedImpact, residualGap, flags.
+    """
+    gap_cash = abs((diagnose_output.get("step1") or {}).get("gapCash") or 0)
+    if gap_cash == 0:
+        return {"coveragePct": 100.0, "explainedImpact": 0, "residualGap": 0, "flags": []}
+
+    # Extract flag impacts from step3 securities. step3_4
+    # (MISCLASSIFIED_EVENT_TYPE) is purely diagnostic — see step3 builder
+    # comment, "no Aceitar / no Bayesian" — so the Bayesian engine ignores
+    # it. Drop it from coverage too, otherwise a security whose only signal
+    # is step3_4 inflates explained-impact without ever appearing in the
+    # power-set scoring downstream.
+    flags = []
+    for sec in (diagnose_output.get("step3") or {}).get("securities", []):
+        for key in ("step3_1", "step3_2", "step3_3"):
+            sub = sec.get(key)
+            if sub and sub.get("status") == "flag":
+                flags.append({
+                    "flag":       sub.get("flag", ""),
+                    "securityId": sec.get("securityId", ""),
+                    "impact":     abs(sub.get("impact") or 0),
+                })
+
+    explained = sum(f["impact"] for f in flags)
+    residual = gap_cash - explained
+
+    # If bayesian found a best fix, use its residual instead (more accurate)
+    best_fix = (bayesian_output or {}).get("bestFix")
+    if best_fix and best_fix.get("residualGap") is not None:
+        residual = abs(best_fix["residualGap"])
+        explained = gap_cash - residual
+
+    coverage_pct = round((explained / gap_cash) * 100, 2) if gap_cash else 100.0
+    coverage_pct = min(coverage_pct, 100.0)
+
+    return {
+        "coveragePct":    coverage_pct,
+        "explainedImpact": round(explained, 2),
+        "residualGap":    round(residual, 2),
+        "flags":          flags,
+    }
+
+
+@bp.route("/api/conciliacao/capture-scenario", methods=["POST"])
+def capture_scenario():
+    """Snapshot the full MongoDB state for a wallet/date and save as a test scenario.
+
+    Also runs diagnose + bayesian and saves the outputs alongside the data,
+    along with a coverage analysis showing how much of the gap is explained.
+    """
+    try:
+        data      = request.get_json() or {}
+        wallet_id = data.get("walletId", "")
+        date_str  = data.get("date", "")
+        note      = data.get("note", "")
+
+        if not wallet_id or not date_str:
+            return jsonify({"error": "walletId e date são obrigatórios"}), 400
+        _, err = _require_visible_wallet(wallet_id)
+        if err: return err
+
+        # diagnose + bayesian outputs are sent by the frontend (already fetched)
+        diagnose_output  = data.get("diagnoseOutput") or {}
+        bayesian_output  = data.get("bayesianOutput") or {}
+
+        # ── Snapshot raw data ─────────────────────────────────────────────────
+        scenario_data = _capture_scenario_data(wallet_id, date_str)
+
+        # ── Coverage analysis ─────────────────────────────────────────────────
+        coverage = _compute_coverage(diagnose_output, bayesian_output)
+
+        # ── Save to disk ──────────────────────────────────────────────────────
+        scenario_num = _next_scenario_id()
+        scenario_id  = f"T{scenario_num}"
+        scenario_dir = os.path.join(_SCENARIOS_DIR, scenario_id)
+        os.makedirs(scenario_dir, exist_ok=True)
+
+        def _write(filename, obj):
+            atomic_write_json(os.path.join(scenario_dir, filename), obj)
+
+        _write("wallet.json",          scenario_data["wallet"])
+        _write("nav_packages.json",    scenario_data["nav_packages"])
+        _write("positions.json",       scenario_data["positions"])
+        _write("transactions.json",    scenario_data["transactions"])
+        _write("provisions.json",      scenario_data["provisions"])
+        _write("cash_accounts.json",   scenario_data["cash_accounts"])
+        _write("securities.json",      scenario_data["securities"])
+        _write("diagnose_output.json", _sanitize(diagnose_output))
+        _write("bayesian_output.json", _sanitize(bayesian_output))
+        _write("coverage.json",        coverage)
+
+        # Metadata file for traceability
+        metadata = {
+            "scenarioId":  scenario_id,
+            "walletId":    wallet_id,
+            "walletName":  scenario_data["wallet"].get("name", ""),
+            "date":        date_str,
+            "capturedAt":  _dt.now(timezone.utc).isoformat(),
+            "note":        note,
+            "gapCash":     (diagnose_output.get("step1") or {}).get("gapCash"),
+            "gapPct":      (diagnose_output.get("step1") or {}).get("gapPct"),
+            "coveragePct": coverage["coveragePct"],
+            "residualGap": coverage["residualGap"],
+            "flagCount":   len(coverage["flags"]),
+        }
+        _write("metadata.json", metadata)
+
+        # ── Optional: trigger /analyze-scenario via headless Claude CLI ───────
+        # Default ON; opt-out via ANALYZE_ON_CAPTURE=0. Silently skipped when
+        # the CLI is not installed/authenticated. `analysisError` is surfaced
+        # to the UI so the user can distinguish "feature disabled" from
+        # "OneDrive lock", "CLI missing", etc.
+        analysis_triggered, analysis_error = _maybe_trigger_analysis(scenario_id, scenario_dir)
+
+        return jsonify({
+            "ok":               True,
+            "scenarioId":       scenario_id,
+            "scenarioDir":      scenario_dir,
+            "coverage":         coverage,
+            "metadata":         metadata,
+            "analysisTriggered": analysis_triggered,
+            "analysisError":     analysis_error,
+        })
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        # Raw exception text may embed internal paths / Mongo URIs. Log the
+        # full traceback server-side; return a generic message to the client.
+        return jsonify({"error": "falha ao capturar cenário — ver logs do servidor"}), 500
+
+
+def _find_claude_binary():
+    """Locate the Claude Code CLI binary.
+
+    Tries PATH first (fast path), then falls back to well-known install
+    locations so the feature works even when Flask was started before the
+    PATH was refreshed (e.g., right after `winget install`). The CLAUDE_BIN
+    env var always wins for manual overrides.
+
+    Windows fallbacks derive the AppData path from LOCALAPPDATA or, when
+    empty (common under SYSTEM service accounts), from USERPROFILE. When
+    running Flask as a Windows service, prefer setting CLAUDE_BIN explicitly.
+    """
+    override = os.environ.get("CLAUDE_BIN", "").strip()
+    if override and os.path.isfile(override):
+        return override
+    found = shutil.which("claude")
+    if found:
+        return found
+    # Windows fallbacks (winget installs to %LOCALAPPDATA%\Microsoft\WinGet\...)
+    if sys.platform.startswith("win"):
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if not local_appdata:
+            user_profile = os.environ.get("USERPROFILE", "").strip()
+            if user_profile:
+                local_appdata = os.path.join(user_profile, "AppData", "Local")
+        if local_appdata:
+            candidates = [
+                os.path.join(local_appdata, "Microsoft", "WinGet", "Links", "claude.exe"),
+            ]
+            pkg_root = os.path.join(local_appdata, "Microsoft", "WinGet", "Packages")
+            if os.path.isdir(pkg_root):
+                try:
+                    for name in os.listdir(pkg_root):
+                        if name.startswith("Anthropic.ClaudeCode"):
+                            candidates.append(os.path.join(pkg_root, name, "claude.exe"))
+                except OSError:
+                    pass
+            for c in candidates:
+                if os.path.isfile(c):
+                    return c
+    return None
+
+
+def _spawn_claude_bg(scenario_dir, slash_cmd_args, out_filename, status_filename):
+    """Shared subprocess helper for /analyze and /implement triggers.
+
+    Writes `pending` sentinel, opens `out_filename` for streaming stdout+stderr,
+    and spawns `claude -p <slash_cmd_args...>` detached from Flask. Returns
+    (ok: bool, error: str|None). Never raises.
+
+    Guarantees on failure paths:
+      - If `Popen` fails, the stdout file handle is closed in the parent
+        (subprocess never inherited it, so closing is safe and prevents
+        leaked handles on Windows and ENOSPC blast radius on OneDrive).
+      - Status sentinel is flipped to "error" and the original OSError text
+        is propagated back to the caller (not to the HTTP client).
+
+    Defense-in-depth gate: requires SWAT_ALLOW_CLAUDE_CLI=1 in the env.
+    Without that flag the helper refuses to spawn anything, even if
+    auth + scenarioId regex pass — so an HTTP path (or scenario import
+    bug) cannot ever invoke `claude --permission-mode acceptEdits`
+    against the working tree without an explicit operator opt-in.
+    """
+    if os.environ.get("SWAT_ALLOW_CLAUDE_CLI", "").strip() not in ("1", "true", "True"):
+        return False, "claude CLI desabilitado (defina SWAT_ALLOW_CLAUDE_CLI=1 para habilitar)"
+    claude_bin = _find_claude_binary()
+    if not claude_bin:
+        return False, "claude CLI not found on PATH or fallback locations"
+    status_path = os.path.join(scenario_dir, status_filename)
+    out_path    = os.path.join(scenario_dir, out_filename)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    out = None
+    try:
+        try:
+            atomic_write_text(status_path, "pending")
+        except OSError as exc:
+            return False, f"failed to write status sentinel: {exc}"
+
+        kwargs = {}
+        if sys.platform.startswith("win"):
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) \
+                                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+
+        try:
+            out = open(out_path, "w", encoding="utf-8")
+        except OSError as exc:
+            return False, f"failed to open stdout file: {exc}"
+
+        try:
+            subprocess.Popen(
+                [claude_bin, "-p", *slash_cmd_args],
+                cwd=project_root,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                **kwargs,
+            )
+        except OSError as exc:
+            # Subprocess never spawned → parent still owns the fd. Close it
+            # to avoid leaking the handle (Windows in particular locks the
+            # file until GC, making retries fail with "file in use").
+            try:
+                out.close()
+            except Exception:
+                pass
+            raise
+
+        # Popen succeeded; Popen now owns the handle. Do NOT close `out` in
+        # the parent — closing would make the subprocess write into a dead fd.
+        return True, None
+    except Exception as exc:
+        try:
+            atomic_write_text(status_path, "error")
+        except Exception:
+            pass
+        return False, f"failed to spawn subprocess: {exc}"
+
+
+def _maybe_trigger_analysis(scenario_id, scenario_dir):
+    """Spawn `claude -p /analyze-scenario <id>` in background.
+
+    Default: ON. Opt out with ANALYZE_ON_CAPTURE=0 (or "false") when running
+    in CI / environments where the Claude CLI is unavailable or unauthenticated.
+
+    Writes stdout to `<scenario_dir>/analysis.md` and a status sentinel to
+    `<scenario_dir>/.analysis_status` (pending|done|error) so the frontend can
+    poll without guessing when the subprocess has finished. Never raises.
+
+    Returns (ok: bool, error: str|None). `False` with no error means the
+    feature was explicitly disabled (ANALYZE_ON_CAPTURE=0) or the CLI is
+    missing — the HTTP caller can pass this through to the UI for diagnosis.
+    """
+    if os.environ.get("ANALYZE_ON_CAPTURE", "1").strip() in ("0", "false", "False"):
+        return False, "ANALYZE_ON_CAPTURE=0 (feature desativada)"
+    return _spawn_claude_bg(
+        scenario_dir,
+        slash_cmd_args=[f"/analyze-scenario {scenario_id}"],
+        out_filename="analysis.md",
+        status_filename=".analysis_status",
+    )
+
+
+@bp.route("/api/conciliacao/scenario-analysis")
+def scenario_analysis():
+    """Return the (possibly streaming) analysis.md content for a scenario.
+
+    Response shape:
+        { status: "pending"|"done"|"error"|"absent", content: "..." }
+
+    `pending`  → subprocess still writing
+    `done`     → subprocess finished (status sentinel removed or not present
+                 and the file has stabilized)
+    `error`    → subprocess failed to start
+    `absent`   → no analysis was ever triggered for this scenario
+    """
+    scenario_id = request.args.get("scenarioId", "").strip()
+    if not scenario_id or not re.match(r"^T\d+$", scenario_id):
+        return jsonify({"error": "scenarioId inválido"}), 400
+    scenario_dir  = os.path.join(_SCENARIOS_DIR, scenario_id)
+    status_path   = os.path.join(scenario_dir, ".analysis_status")
+    analysis_path = os.path.join(scenario_dir, "analysis.md")
+
+    if not os.path.exists(scenario_dir):
+        return jsonify({"status": "absent", "content": ""}), 404
+
+    content = ""
+    if os.path.exists(analysis_path):
+        try:
+            with open(analysis_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            content = ""
+
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                status = f.read().strip() or "pending"
+        except Exception:
+            status = "pending"
+        # Heuristic completion: if the status is still "pending" and the
+        # stdout file hasn't been touched for ≥ 30 seconds, assume Claude
+        # finished and the subprocess exited without flipping the sentinel.
+        # The 30s threshold accommodates tool-call pauses (MCP latency,
+        # rate-limit backoff) that commonly exceed 5s without meaning
+        # the subprocess is done.
+        if status == "pending":
+            try:
+                mtime = os.path.getmtime(analysis_path) if os.path.exists(analysis_path) else 0
+                if mtime and (_dt.now(timezone.utc).timestamp() - mtime) > 30 and content.strip():
+                    status = "done"
+                    atomic_write_text(status_path, "done")
+            except Exception:
+                pass
+        return jsonify({"status": status, "content": content})
+
+    if content:
+        return jsonify({"status": "done", "content": content})
+    return jsonify({"status": "absent", "content": ""})
+
+
+def _trigger_implementation(scenario_id, user_choice=""):
+    """Spawn `claude -p /implement-scenario-suggestion <id>` in background.
+
+    Mirrors `_maybe_trigger_analysis` but runs the implementation slash command
+    against a scenario whose analysis.md already exists. If `user_choice` is
+    provided, it is persisted to `<scenario_dir>/user_choice.txt` and the
+    slash command will prefer it over any A/B ambiguity in analysis.md.
+
+    Returns (ok: bool, error: str|None). Never raises.
+    """
+    scenario_dir = os.path.join(_SCENARIOS_DIR, scenario_id)
+    if not os.path.isdir(scenario_dir):
+        return False, "scenario directory not found"
+    analysis_path = os.path.join(scenario_dir, "analysis.md")
+    if not os.path.exists(analysis_path):
+        return False, "analysis.md missing — run /analyze-scenario first"
+    choice_path = os.path.join(scenario_dir, "user_choice.txt")
+    # Persist (or clear) the user directive BEFORE spawning. The slash command
+    # reads this file and treats it as authoritative over any A/B ambiguity.
+    try:
+        trimmed = (user_choice or "").strip()
+        if trimmed:
+            with open(choice_path, "w", encoding="utf-8") as f:
+                f.write(trimmed)
+        elif os.path.exists(choice_path):
+            # Clear stale choice from previous runs.
+            os.remove(choice_path)
+    except Exception:
+        pass
+    return _spawn_claude_bg(
+        scenario_dir,
+        slash_cmd_args=[f"/implement-scenario-suggestion {scenario_id}",
+                        "--permission-mode", "acceptEdits"],
+        out_filename="implementation.md",
+        status_filename=".implementation_status",
+    )
+
+
+@bp.route("/api/conciliacao/implement-suggestion", methods=["POST"])
+def implement_suggestion():
+    """Trigger background `/implement-scenario-suggestion` for a scenario.
+
+    Precondition: `analysis.md` must exist in the scenario directory (user
+    already ran /analyze-scenario via the capture flow).
+    """
+    data = request.get_json() or {}
+    scenario_id = (data.get("scenarioId") or "").strip()
+    user_choice = (data.get("userChoice") or "").strip()
+    if not scenario_id or not re.match(r"^T\d+$", scenario_id):
+        return jsonify({"ok": False, "error": "scenarioId inválido"}), 400
+    ok, err = _trigger_implementation(scenario_id, user_choice=user_choice)
+    if not ok:
+        return jsonify({"ok": False, "error": err or "falha ao disparar"}), 400
+    return jsonify({"ok": True, "scenarioId": scenario_id, "userChoice": user_choice})
+
+
+@bp.route("/api/conciliacao/scenario-implementation")
+def scenario_implementation():
+    """Return the (possibly streaming) implementation.md content for a scenario.
+
+    Same response shape and heuristics as `/scenario-analysis`, but reads
+    `implementation.md` and `.implementation_status` instead.
+    """
+    scenario_id = request.args.get("scenarioId", "").strip()
+    if not scenario_id or not re.match(r"^T\d+$", scenario_id):
+        return jsonify({"error": "scenarioId inválido"}), 400
+    scenario_dir = os.path.join(_SCENARIOS_DIR, scenario_id)
+    status_path  = os.path.join(scenario_dir, ".implementation_status")
+    out_path     = os.path.join(scenario_dir, "implementation.md")
+
+    if not os.path.exists(scenario_dir):
+        return jsonify({"status": "absent", "content": ""}), 404
+
+    content = ""
+    if os.path.exists(out_path):
+        try:
+            with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            content = ""
+
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                status = f.read().strip() or "pending"
+        except Exception:
+            status = "pending"
+        # Same 30s heuristic as /scenario-analysis — see that endpoint for
+        # rationale on why 5s/10s were too tight.
+        if status == "pending":
+            try:
+                mtime = os.path.getmtime(out_path) if os.path.exists(out_path) else 0
+                if mtime and (_dt.now(timezone.utc).timestamp() - mtime) > 30 and content.strip():
+                    status = "done"
+                    atomic_write_text(status_path, "done")
+            except Exception:
+                pass
+        return jsonify({"status": status, "content": content})
+
+    if content:
+        return jsonify({"status": "done", "content": content})
+    return jsonify({"status": "absent", "content": ""})
+
+
+@bp.route("/api/conciliacao/scenarios")
+def list_scenarios():
+    """List all captured scenarios with their metadata."""
+    if not os.path.exists(_SCENARIOS_DIR):
+        return jsonify({"scenarios": []})
+    scenarios = []
+    for name in sorted(os.listdir(_SCENARIOS_DIR)):
+        meta_path = os.path.join(_SCENARIOS_DIR, name, "metadata.json")
+        if os.path.exists(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                scenarios.append(json.load(f))
+    return jsonify({"scenarios": scenarios})

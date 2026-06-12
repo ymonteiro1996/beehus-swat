@@ -1,0 +1,19 @@
+{
+  "_comment": "Cash account values for wallet T9-all-tiers",
+  "cashAccounts": [
+    {
+      "walletId": "T9-all-tiers",
+      "values": [
+        {"date": "2026-02-07", "value": 1000},
+        {"date": "2026-02-10", "value": 1000}
+      ]
+    }
+  ],
+  "_summary": {
+    "formerCash": 1000,
+    "currentCash": 1000,
+    "projectedCash": 41000,
+    "cashDiff": 40000,
+    "_explanation": "former(1,000) + txns(40,000) = projected(41,000) vs current(1,000) = diff(40,000). The 37,000 erroneous gainsExpenses + 3,000 buySell inflate projected cash."
+  }
+}

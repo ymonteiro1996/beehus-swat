@@ -1,0 +1,1940 @@
+{% extends "base.html" %}
+{% set active = "excecoes" %}
+{% block title %}Exceções{% endblock %}
+
+{% block head %}
+<style>
+  .table-wrap   { overflow-x: auto; max-height: calc(100vh - 280px); overflow-y: auto; }
+  .modal-body   { overflow-y: auto; max-height: calc(92vh - 120px); }
+  .pill         { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+  .pill-info    { background: #dbeafe; color: #1e40af; }
+  .pill-warn    { background: #fef3c7; color: #92400e; }
+  .pill-success { background: #dcfce7; color: #166534; }
+  .pill-error   { background: #fee2e2; color: #991b1b; }
+  .pill-muted   { background: #f3f4f6; color: #4b5563; }
+  html.dark .pill-info    { background: #1e3a8a; color: #bfdbfe; }
+  html.dark .pill-warn    { background: #78350f; color: #fde68a; }
+  html.dark .pill-success { background: #14532d; color: #bbf7d0; }
+  html.dark .pill-error   { background: #7f1d1d; color: #fecaca; }
+  html.dark .pill-muted   { background: #374151; color: #d1d5db; }
+  .step-num     { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #2563eb; color: white; font-size: 11px; font-weight: 700; margin-right: 8px; }
+  /* Transfer panes for the day-trade filter (groupings + wallets). Mirrors
+     the layout used in Funções > Identificar Transações so the operator's
+     muscle memory carries over. */
+  .it-xfer        { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
+  .it-xfer-pane   { display: flex; flex-direction: column; min-height: 160px; }
+  .it-xfer-pane h4 { font-size: 10px; text-transform: uppercase; color: #6b7280; margin: 0 0 4px 2px; display: flex; justify-content: space-between; }
+  .it-xfer select { flex: 1; min-height: 140px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 11px; padding: 4px; background: white; }
+  .it-xfer-actions { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+  .it-xfer-actions button { width: 32px; height: 28px; font-size: 12px; }
+  .it-mode-seg button { padding: 2px 10px; font-size: 11px; border: 1px solid #d1d5db; background: white; }
+  .it-mode-seg button.active { background: #2563eb; color: white; border-color: #2563eb; }
+  .it-mode-seg button:first-child { border-radius: 6px 0 0 6px; }
+  .it-mode-seg button:last-child  { border-radius: 0 6px 6px 0; border-left: 0; }
+  .it-row-zeroed  { background: #fef2f2; }
+  html.dark .it-row-zeroed { background: #4c1d1d; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<header id="exc-header" class="bg-white shadow px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+  <h1 class="font-semibold text-gray-700">Exceções</h1>
+  <div class="flex items-center gap-2">
+    <button onclick="showIntradayView()"
+      class="bg-amber-600 hover:bg-amber-700 text-white rounded px-4 py-1.5 text-sm font-semibold"
+      title="Detectar buy/sell intraday cuja security não entrou no processedPosition e zerar a posição correspondente">
+      Ajustes day-trade
+    </button>
+    <button onclick="openSetupModal()"
+      class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-4 py-1.5 text-sm font-semibold">
+      + Nova Exceção
+    </button>
+  </div>
+</header>
+
+<!-- ── List view ─────────────────────────────────────────────────────────── -->
+<div id="exc-list-view" class="px-6 pt-5 pb-3">
+  <p class="text-xs text-gray-400 mb-2">Exceções configuradas:</p>
+  <div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="table-wrap">
+      <table class="w-full text-xs border-collapse" id="exc-table">
+        <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+          <tr>
+            <th class="px-3 py-2.5 text-left min-w-[200px]">Empresa</th>
+            <th class="px-3 py-2.5 text-left min-w-[200px]">Nome</th>
+            <th class="px-3 py-2.5 text-left min-w-[180px]">Carteira (origem)</th>
+            <th class="px-3 py-2.5 text-left min-w-[200px]">Carteiras (saída)</th>
+            <th class="px-3 py-2.5 text-right min-w-[60px]">Regras</th>
+            <th class="px-3 py-2.5 text-left min-w-[140px]">Última aplicação</th>
+            <th class="px-3 py-2.5 text-center min-w-[180px]">Ações</th>
+          </tr>
+        </thead>
+        <tbody id="exc-tbody"></tbody>
+      </table>
+      <p id="exc-msg" class="text-center text-gray-400 text-sm py-8">Carregando...</p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ SETUP MODAL ══════════════════ -->
+<div id="setup-modal" class="hidden fixed inset-0 z-50 overflow-auto bg-black/50 flex items-start justify-center pt-6 pb-6 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex flex-col" style="max-height:92vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div>
+        <h2 class="font-semibold text-gray-800 text-sm">Nova Exceção — Position Stripping</h2>
+        <p id="setup-subtitle" class="text-[11px] text-gray-400 mt-0.5"></p>
+      </div>
+      <button onclick="closeSetupModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body px-6 py-4 space-y-5">
+
+      <!-- Step 1: Company + name -->
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-2"><span class="step-num">1</span>Empresa e Nome</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-1">Empresa</label>
+            <select id="setup-company" onchange="onSetupCompanyChange()"
+              class="w-full border rounded px-3 py-1.5 text-xs bg-white text-gray-700">
+              <option value="">Selecione...</option>
+              {% for c in companies %}
+              <option value="{{ c.id }}">{{ c.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-1">Nome da exceção</label>
+            <input id="setup-name" type="text" placeholder="ex.: Carteira espelho XYZ"
+              class="w-full border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Source wallet -->
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-2"><span class="step-num">2</span>Carteira a ser sinalizada</p>
+        <select id="setup-source" onchange="onSetupSourceChange()" disabled
+          class="w-full border rounded px-3 py-1.5 text-xs bg-white text-gray-700">
+          <option value="">Selecione uma empresa primeiro...</option>
+        </select>
+      </div>
+
+      <!-- Step 3: Output wallets -->
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-2"><span class="step-num">3</span>Carteiras de saída</p>
+        <div id="setup-outputs" class="border rounded p-3 max-h-40 overflow-y-auto bg-gray-50 text-[11px] text-gray-400">
+          Selecione uma carteira de origem primeiro.
+        </div>
+      </div>
+
+      <!-- Step 4: Date for source position -->
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-2"><span class="step-num">4</span>Data para visualizar a posição da carteira</p>
+        <div class="flex items-center gap-3">
+          <input id="setup-date" type="date"
+            class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
+          <button onclick="loadSourcePosition()"
+            class="bg-blue-600 hover:bg-blue-700 text-white rounded px-3 py-1.5 text-xs font-semibold">
+            Carregar posição
+          </button>
+        </div>
+      </div>
+
+      <!-- Steps 5+6: Securities + rules -->
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-2"><span class="step-num">5</span>Selecione os ativos a serem stripados</p>
+        <div class="bg-white border rounded">
+          <table class="w-full text-xs">
+            <thead class="bg-gray-50 text-gray-500 uppercase">
+              <tr>
+                <th class="px-2 py-2 text-center w-8">✓</th>
+                <th class="px-2 py-2 text-left min-w-[180px]">Ativo (unprocessedId)</th>
+                <th class="px-2 py-2 text-right min-w-[100px]">Quant.</th>
+                <th class="px-2 py-2 text-right min-w-[100px]">PU</th>
+                <th class="px-2 py-2 text-right min-w-[120px]">Saldo</th>
+                <th class="px-2 py-2 text-left min-w-[180px]">Adicionar em</th>
+                <th class="px-2 py-2 text-left min-w-[180px]">Remover de</th>
+                <th class="px-2 py-2 text-center min-w-[60px]">Caixa</th>
+              </tr>
+            </thead>
+            <tbody id="setup-secs-tbody"></tbody>
+          </table>
+          <p id="setup-secs-msg" class="text-center text-gray-400 text-xs py-6">Configure os passos anteriores e carregue a posição.</p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="flex items-center justify-between px-6 py-3 border-t shrink-0">
+      <p id="setup-status" class="text-xs text-gray-500"></p>
+      <div class="flex items-center gap-2">
+        <button onclick="closeSetupModal()" class="border rounded px-4 py-1.5 text-xs text-gray-700 hover:bg-gray-100">
+          Cancelar
+        </button>
+        <button onclick="saveException()"
+          class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-4 py-1.5 text-xs font-semibold">
+          Salvar exceção
+        </button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════ APPLY MODAL ══════════════════ -->
+<div id="apply-modal" class="hidden fixed inset-0 z-50 overflow-auto bg-black/50 flex items-start justify-center pt-6 pb-6 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex flex-col" style="max-height:92vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div>
+        <h2 class="font-semibold text-gray-800 text-sm">Rotina diária — aplicar exceção</h2>
+        <p id="apply-subtitle" class="text-[11px] text-gray-400 mt-0.5"></p>
+      </div>
+      <button onclick="closeApplyModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body px-6 py-4 space-y-4">
+      <div class="flex items-center gap-3">
+        <label class="text-xs text-gray-500">Data:</label>
+        <input id="apply-date" type="date"
+          class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
+        <button onclick="runPreview()"
+          class="bg-blue-600 hover:bg-blue-700 text-white rounded px-3 py-1.5 text-xs font-semibold">
+          Pré-visualizar
+        </button>
+        <button id="apply-download-btn" onclick="downloadExcel()" disabled
+          class="bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-gray-700 rounded px-3 py-1.5 text-xs">
+          Baixar Excel
+        </button>
+        <button id="apply-run-btn" onclick="runApply()" disabled
+          class="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-semibold">
+          Confirmar e enviar
+        </button>
+      </div>
+
+      <div id="apply-warnings" class="space-y-1"></div>
+
+      <div id="apply-preview" class="space-y-3 hidden">
+        <div class="flex items-center justify-between">
+          <p class="text-xs font-semibold text-gray-700">Carteiras afetadas</p>
+          <div class="flex items-center gap-3 text-[10px]">
+            <span class="flex items-center gap-1"><span class="pill pill-error">Sofre strip</span><span class="text-gray-400">ativo retirado</span></span>
+            <span class="flex items-center gap-1"><span class="pill pill-success">Recebe</span><span class="text-gray-400">ativo incluído</span></span>
+            <span class="flex items-center gap-1"><span class="pill pill-warn">Ambos</span><span class="text-gray-400">recebe e retira</span></span>
+            <span class="flex items-center gap-1"><span class="pill pill-info">Origem</span><span class="text-gray-400">carteira sinalizada</span></span>
+          </div>
+        </div>
+        <div id="apply-wallets" class="space-y-3"></div>
+
+        <div id="apply-transactions" class="hidden mt-4">
+          <p class="text-xs font-semibold text-gray-700 mb-1">
+            Transações que serão migradas + ajustes pareados
+            <span class="text-gray-400 font-normal" id="apply-tx-count"></span>
+          </p>
+          <p class="text-[10px] text-gray-400 mb-2">Transações com <span class="font-mono">liquidationDate</span> = data alvo e <span class="font-mono">securityId</span> casando com um ativo stripado serão repatchadas para a nova carteira. Cada migração também cria duas linhas <span class="font-mono">securityTransfer</span> "Ajuste …" (sinal +/−) nas duas carteiras para deixar lastro casado.</p>
+          <div class="border rounded overflow-hidden">
+            <table class="w-full text-xs">
+              <thead class="bg-gray-50 text-gray-500 uppercase">
+                <tr>
+                  <th class="px-2 py-1 text-left min-w-[150px]">Ativo</th>
+                  <th class="px-2 py-1 text-left min-w-[80px]">Tipo</th>
+                  <th class="px-2 py-1 text-left min-w-[160px]">De (carteira)</th>
+                  <th class="px-2 py-1 text-left min-w-[160px]">Para (carteira)</th>
+                  <th class="px-2 py-1 text-right min-w-[120px]">Saldo</th>
+                  <th class="px-2 py-1 text-right min-w-[120px]">Quant.</th>
+                  <th class="px-2 py-1 text-left min-w-[110px]">Liquidação</th>
+                  <th class="px-2 py-1 text-left">Descrição</th>
+                </tr>
+              </thead>
+              <tbody id="apply-tx-tbody"></tbody>
+            </table>
+            <p id="apply-tx-msg" class="text-center text-gray-400 text-xs py-4 hidden"></p>
+          </div>
+        </div>
+      </div>
+
+      <div id="apply-results" class="hidden">
+        <p class="text-xs font-semibold text-gray-700 mb-2">Resultado do envio</p>
+        <div id="apply-results-list" class="space-y-1"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ INTRADAY (DAY-TRADE) — FULL-SCREEN VIEW ══════════
+     Hidden by default; `showIntradayView()` swaps it in for the regular
+     Exceções list. Three workflow steps live in their own cards so the
+     operator can check intermediate state before moving forward:
+       1. Filter
+       2. Detected day-trade groups (checkboxes → "Gerar posições")
+       3. Patched positions (checkboxes → "Enviar selecionadas")
+     ──────────────────────────────────────────────────────────────── -->
+<div id="intraday-view" class="hidden px-6 pt-5 pb-6 space-y-4">
+  <!-- View header: title + back button. Replaces the modal header so the
+       full-screen view feels like a sibling page, not an overlay. -->
+  <div class="bg-white rounded-xl shadow px-6 py-4">
+    <div class="flex items-center justify-between gap-4">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-800">Ajustes day-trade — zerar posição de buy/sell intraday</h2>
+        <p class="text-[11px] text-gray-400 mt-0.5">
+          Detecta transações <span class="font-mono">buySell</span> com 2+ entradas para a mesma
+          <span class="font-mono">(carteira, security, data)</span> cuja security NÃO entrou no
+          <span class="font-mono">processedPosition</span> dessa carteira/data, e zera as linhas
+          correspondentes no <span class="font-mono">unprocessedSecurityPositions</span>.
+        </p>
+      </div>
+      <button onclick="hideIntradayView()" class="border rounded px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 shrink-0">
+        ← Voltar
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Card 1: Filter ──────────────────────────────────────────── -->
+  <div class="bg-white rounded-xl shadow px-6 py-4 space-y-4">
+    <!-- Company -->
+    <div>
+      <p class="text-xs font-semibold text-gray-700 mb-2"><span class="step-num">1</span>Empresa</p>
+      <select id="it-company" onchange="onIntradayCompanyChange()"
+        class="w-full max-w-md border rounded px-3 py-1.5 text-xs bg-white text-gray-700">
+        <option value="">Selecione...</option>
+        {% for c in companies %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Dates -->
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-xs font-semibold text-gray-700"><span class="step-num">2</span>Data de liquidação</p>
+        <span class="it-mode-seg inline-flex">
+          <button type="button" id="it-mode-single" class="active" onclick="onIntradayModeChange('single')">única</button>
+          <button type="button" id="it-mode-range"  onclick="onIntradayModeChange('range')">faixa</button>
+        </span>
+      </div>
+      <div class="flex items-center gap-3">
+        <div>
+          <label class="block text-[10px] text-gray-500 mb-0.5" id="it-initialDate-label">Data</label>
+          <input id="it-initialDate" type="date"
+            class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
+        </div>
+        <div id="it-finalDate-wrap" class="hidden">
+          <label class="block text-[10px] text-gray-500 mb-0.5">Data final</label>
+          <input id="it-finalDate" type="date"
+            class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Optional: Groupings + Wallets -->
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-xs font-semibold text-gray-700"><span class="step-num">3</span>Filtros opcionais (groupings + wallets)</p>
+        <button id="it-toggle-advanced" onclick="toggleIntradayAdvanced()"
+          class="border rounded px-3 py-1 text-[11px] text-gray-700 hover:bg-gray-100">
+          + Mostrar
+        </button>
+      </div>
+      <p class="text-[10px] text-gray-400 mb-2">
+        Sem seleção, busca em todas as wallets da empresa. Selecionar groupings filtra a lista de wallets disponíveis (união).
+      </p>
+      <div id="it-advanced" class="hidden space-y-3">
+        <div>
+          <p class="text-[11px] font-medium text-gray-600 mb-1">Groupings</p>
+          <div class="it-xfer">
+            <div class="it-xfer-pane">
+              <h4>Disponíveis <span id="it-grp-available-count">0</span></h4>
+              <select id="it-grp-available" multiple ondblclick="addIntradayGroupingSelected()"></select>
+            </div>
+            <div class="it-xfer-actions">
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="addIntradayGroupingSelected()" title="Adicionar destacadas">→</button>
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="addIntradayGroupingAll()" title="Adicionar todas">»</button>
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="removeIntradayGroupingSelected()" title="Remover destacadas">←</button>
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="removeIntradayGroupingAll()" title="Limpar">«</button>
+            </div>
+            <div class="it-xfer-pane">
+              <h4>Selecionados <span id="it-grp-selected-count">0</span></h4>
+              <select id="it-grp-selected" multiple ondblclick="removeIntradayGroupingSelected()"></select>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="text-[11px] font-medium text-gray-600 mb-1">Wallets</p>
+          <div class="it-xfer">
+            <div class="it-xfer-pane">
+              <h4>Disponíveis <span id="it-wal-available-count">0</span></h4>
+              <select id="it-wal-available" multiple ondblclick="addIntradayWalletSelected()"></select>
+            </div>
+            <div class="it-xfer-actions">
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="addIntradayWalletSelected()" title="Adicionar destacadas">→</button>
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="addIntradayWalletAll()" title="Adicionar todas">»</button>
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="removeIntradayWalletSelected()" title="Remover destacadas">←</button>
+              <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="removeIntradayWalletAll()" title="Limpar">«</button>
+            </div>
+            <div class="it-xfer-pane">
+              <h4>Selecionadas <span id="it-wal-selected-count">0</span></h4>
+              <select id="it-wal-selected" multiple ondblclick="removeIntradayWalletSelected()"></select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Run check -->
+    <div class="flex items-center gap-2 pt-3 border-t">
+      <button onclick="runIntradayCheck()"
+        class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-1.5 text-xs font-semibold">
+        Verificar intraday
+      </button>
+      <span id="it-status" class="text-[11px] text-gray-500 ml-2"></span>
+    </div>
+
+    <div id="it-warnings" class="space-y-1"></div>
+  </div>
+
+  <!-- ── Card 2: Detected day-trade groups (with checkboxes) ─────── -->
+  <div id="it-groups-section" class="bg-white rounded-xl shadow px-6 py-4 hidden">
+    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+      <p class="text-xs font-semibold text-gray-700">
+        Day-trades detectados <span class="text-gray-400 font-normal" id="it-groups-count"></span>
+      </p>
+      <div class="flex items-center gap-2">
+        <button onclick="toggleIntradayGroupsAll(true)"  class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Marcar todos</button>
+        <button onclick="toggleIntradayGroupsAll(false)" class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Desmarcar todos</button>
+        <button id="it-build-patches-btn" onclick="runIntradayBuildPatches()" disabled
+          class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-semibold">
+          Gerar posições patcheadas (<span id="it-build-count">0</span>) →
+        </button>
+      </div>
+    </div>
+    <div class="border rounded overflow-hidden">
+      <table class="w-full text-xs">
+        <thead class="bg-gray-50 text-gray-500 uppercase">
+          <tr>
+            <th class="px-2 py-1.5 text-center w-8"><input type="checkbox" id="it-groups-master" onchange="toggleIntradayGroupsAll(this.checked)" /></th>
+            <th class="px-2 py-1.5 text-left min-w-[110px]">Data liq.</th>
+            <th class="px-2 py-1.5 text-left min-w-[160px]">Carteira</th>
+            <th class="px-2 py-1.5 text-left min-w-[200px]">Security</th>
+            <th class="px-2 py-1.5 text-right min-w-[60px]">#Tx</th>
+            <th class="px-2 py-1.5 text-right min-w-[140px]">Contribuição (Σ saldo)</th>
+            <th class="px-2 py-1.5 text-left min-w-[60px]">Moeda</th>
+          </tr>
+        </thead>
+        <tbody id="it-groups-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Card 3: Patched positions (with checkboxes per (wallet, date)) ── -->
+  <div id="it-patched-section" class="bg-white rounded-xl shadow px-6 py-4 hidden">
+    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+      <p class="text-xs font-semibold text-gray-700">
+        Posições patcheadas <span class="text-gray-400 font-normal" id="it-patched-count"></span>
+      </p>
+      <div class="flex items-center gap-2">
+        <button onclick="toggleIntradayPatchesAll(true)"  class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Marcar todas</button>
+        <button onclick="toggleIntradayPatchesAll(false)" class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Desmarcar todas</button>
+        <button id="it-download-btn" onclick="downloadIntradayExcel()"
+          class="bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-gray-700 rounded px-3 py-1.5 text-xs">
+          Baixar Excel
+        </button>
+        <button id="it-apply-btn" onclick="runIntradayApply()" disabled
+          class="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-semibold">
+          Enviar selecionadas (<span id="it-apply-count">0</span>)
+        </button>
+      </div>
+    </div>
+    <p class="text-[10px] text-gray-400 mb-2">
+      Linhas em vermelho = <span class="font-mono">unprocessedId</span> que será zerado.
+      Linhas neutras = baseline da posição que segue junto no upload (o endpoint upstream
+      substitui a posição completa da carteira na data).
+    </p>
+    <div id="it-patched-list" class="space-y-3"></div>
+
+    <!-- Transactions that will be created on apply (one securityContributionAdjustment
+         per day-trade group). Defined inside the patched-positions card so it
+         lives in the same lifecycle: built by /build-patches, consumed on apply. -->
+    <div id="it-txn-preview" class="mt-5 hidden">
+      <p class="text-xs font-semibold text-gray-700 mb-1">
+        Transações <span class="font-mono">securityContributionAdjustment</span> que serão criadas
+        <span class="text-gray-400 font-normal" id="it-txn-count"></span>
+      </p>
+      <p class="text-[10px] text-gray-400 mb-2">
+        Uma transação por day-trade selecionado. Estrutura igual à de
+        <span class="italic">Funções › Criar Transações</span>: <span class="font-mono">walletId</span>/<span class="font-mono">entityId</span>/<span class="font-mono">currencyId</span> resolvidos da carteira; <span class="font-mono">balance</span> = contribuição (Σ saldo das transações <span class="font-mono">buySell</span>); descrição = <span class="font-mono">"day-trade " + beehusName</span>.
+      </p>
+      <div class="border rounded overflow-hidden">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 text-gray-500 uppercase">
+            <tr>
+              <th class="px-2 py-1 text-left  min-w-[110px]">Data</th>
+              <th class="px-2 py-1 text-left  min-w-[160px]">Carteira</th>
+              <th class="px-2 py-1 text-left  min-w-[180px]">Security</th>
+              <th class="px-2 py-1 text-left  min-w-[160px]">Descrição</th>
+              <th class="px-2 py-1 text-right min-w-[120px]">Saldo</th>
+              <th class="px-2 py-1 text-left  min-w-[60px]">Moeda</th>
+              <th class="px-2 py-1 text-left  min-w-[120px]">Status</th>
+            </tr>
+          </thead>
+          <tbody id="it-txn-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Card 4: Apply results ───────────────────────────────────── -->
+  <div id="it-results" class="bg-white rounded-xl shadow px-6 py-4 hidden">
+    <p class="text-xs font-semibold text-gray-700 mb-2">Resultado do envio</p>
+    <div id="it-results-list" class="space-y-1"></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block modals %}
+<script>
+  // ── State ─────────────────────────────────────────────────────────────────
+  let _exceptions = [];
+  let _setupState = {
+    editingId: null,
+    companyId: "",
+    sourceWalletId: "",
+    outputWalletIds: [],
+    walletsForCompany: [],   // [{id, name, currencyId}]
+    sourceSecurities: [],    // [{unprocessedId, quantity, pu, balance}]
+    rules: {},               // unprocessedId -> {selected, addToWalletId, removeFromWalletId, caixa}
+  };
+  let _apply = {
+    exceptionId: null,
+    companyId: "",
+    plan: null,
+  };
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const fmtNum = v => v == null
+    ? '<span class="text-gray-300">--</span>'
+    : Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 6, maximumFractionDigits: 6});
+  const fmtMoney = v => v == null
+    ? '<span class="text-gray-300">--</span>'
+    : Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function escHtml(s) {
+    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+  function todayISO() {
+    const d = new Date();
+    const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), dd = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${dd}`;
+  }
+
+  // ── List ──────────────────────────────────────────────────────────────────
+  function loadList() {
+    fetch("/api/excecoes")
+      .then(r => r.json())
+      .then(({ exceptions }) => {
+        _exceptions = exceptions || [];
+        renderList();
+      })
+      .catch(() => {
+        document.getElementById("exc-msg").textContent = "Erro ao carregar exceções.";
+      });
+  }
+
+  function renderList() {
+    const tbody = document.getElementById("exc-tbody");
+    const msg   = document.getElementById("exc-msg");
+    if (!_exceptions.length) {
+      tbody.innerHTML = "";
+      msg.textContent = "Nenhuma exceção configurada.";
+      msg.style.display = "block";
+      return;
+    }
+    msg.style.display = "none";
+    tbody.innerHTML = _exceptions.map(e => {
+      const last = e.lastApplied
+        ? `${escHtml(e.lastApplied.date || "")} <span class="text-[10px] text-gray-400">(${escHtml((e.lastApplied.at || "").slice(0,10))})</span>`
+        : '<span class="text-gray-300">--</span>';
+      return `<tr class="border-t border-gray-100 hover:bg-gray-50">
+        <td class="px-3 py-2 text-gray-700">${escHtml(e.companyName)}</td>
+        <td class="px-3 py-2 font-medium text-gray-800">${escHtml(e.name)}</td>
+        <td class="px-3 py-2 text-gray-700">${escHtml(e.sourceWalletName)}</td>
+        <td class="px-3 py-2 text-gray-700">${(e.outputWalletNames || []).map(escHtml).join(", ")}</td>
+        <td class="px-3 py-2 text-right">${e.ruleCount}</td>
+        <td class="px-3 py-2 text-gray-700">${last}</td>
+        <td class="px-3 py-2 text-center">
+          <button onclick="openApplyModal('${escHtml(e.id)}', '${escHtml(e.companyId)}')"
+            class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-2 py-1 text-[11px] font-semibold mr-1">Aplicar</button>
+          <button onclick="editException('${escHtml(e.id)}', '${escHtml(e.companyId)}')"
+            class="bg-blue-600 hover:bg-blue-700 text-white rounded px-2 py-1 text-[11px]">Editar</button>
+          <button onclick="deleteException('${escHtml(e.id)}', '${escHtml(e.companyId)}')"
+            class="bg-red-600 hover:bg-red-700 text-white rounded px-2 py-1 text-[11px]">Excluir</button>
+        </td>
+      </tr>`;
+    }).join("");
+  }
+
+  function deleteException(id, companyId) {
+    if (!confirm("Excluir esta exceção?")) return;
+    fetch(`/api/excecoes/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`, {method: "DELETE"})
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { alert(d.error); return; }
+        loadList();
+      });
+  }
+
+  // ── Setup wizard ──────────────────────────────────────────────────────────
+  function openSetupModal() {
+    _setupState = {
+      editingId: null,
+      companyId: "",
+      sourceWalletId: "",
+      outputWalletIds: [],
+      walletsForCompany: [],
+      sourceSecurities: [],
+      rules: {},
+    };
+    document.getElementById("setup-modal").classList.remove("hidden");
+    document.getElementById("setup-subtitle").textContent = "";
+    document.getElementById("setup-company").value = "";
+    document.getElementById("setup-name").value = "";
+    document.getElementById("setup-source").innerHTML = '<option value="">Selecione uma empresa primeiro...</option>';
+    document.getElementById("setup-source").disabled = true;
+    document.getElementById("setup-outputs").innerHTML = "Selecione uma carteira de origem primeiro.";
+    document.getElementById("setup-date").value = todayISO();
+    document.getElementById("setup-secs-tbody").innerHTML = "";
+    document.getElementById("setup-secs-msg").textContent = "Configure os passos anteriores e carregue a posição.";
+    document.getElementById("setup-secs-msg").style.display = "block";
+    document.getElementById("setup-status").textContent = "";
+  }
+
+  function closeSetupModal() {
+    document.getElementById("setup-modal").classList.add("hidden");
+  }
+
+  function onSetupCompanyChange() {
+    const cid = document.getElementById("setup-company").value;
+    _setupState.companyId = cid;
+    _setupState.sourceWalletId = "";
+    _setupState.outputWalletIds = [];
+    _setupState.walletsForCompany = [];
+    _setupState.sourceSecurities = [];
+    _setupState.rules = {};
+    document.getElementById("setup-source").innerHTML = '<option value="">Carregando...</option>';
+    document.getElementById("setup-source").disabled = true;
+    document.getElementById("setup-outputs").innerHTML = "Selecione uma carteira de origem primeiro.";
+    document.getElementById("setup-secs-tbody").innerHTML = "";
+    document.getElementById("setup-secs-msg").style.display = "block";
+
+    if (!cid) return;
+    fetch(`/api/excecoes/wallets?companyId=${encodeURIComponent(cid)}`)
+      .then(r => r.json())
+      .then(({ wallets }) => {
+        _setupState.walletsForCompany = wallets || [];
+        const sel = document.getElementById("setup-source");
+        sel.innerHTML = '<option value="">Selecione...</option>'
+          + (_setupState.walletsForCompany).map(w =>
+            `<option value="${escHtml(w.id)}">${escHtml(w.name)}</option>`).join("");
+        sel.disabled = false;
+      })
+      .catch(() => {
+        document.getElementById("setup-source").innerHTML = '<option value="">Erro ao carregar</option>';
+      });
+  }
+
+  function onSetupSourceChange() {
+    _setupState.sourceWalletId = document.getElementById("setup-source").value;
+    _setupState.outputWalletIds = [];
+    renderOutputs();
+  }
+
+  function renderOutputs() {
+    const cont = document.getElementById("setup-outputs");
+    if (!_setupState.sourceWalletId) {
+      cont.innerHTML = "Selecione uma carteira de origem primeiro.";
+      cont.classList.add("text-gray-400");
+      return;
+    }
+    const candidates = _setupState.walletsForCompany.filter(w => w.id !== _setupState.sourceWalletId);
+    if (!candidates.length) {
+      cont.innerHTML = "Nenhuma outra carteira disponível para esta empresa.";
+      return;
+    }
+    cont.classList.remove("text-gray-400");
+    cont.innerHTML = candidates.map(w => `
+      <label class="flex items-center gap-2 py-1 cursor-pointer text-xs text-gray-700">
+        <input type="checkbox" value="${escHtml(w.id)}" onchange="toggleOutputWallet('${escHtml(w.id)}')"
+          ${_setupState.outputWalletIds.includes(w.id) ? "checked" : ""} />
+        <span>${escHtml(w.name)} <span class="text-[10px] text-gray-400">${escHtml(w.currencyId || "")}</span></span>
+      </label>`).join("");
+  }
+
+  function toggleOutputWallet(wid) {
+    const i = _setupState.outputWalletIds.indexOf(wid);
+    if (i >= 0) _setupState.outputWalletIds.splice(i, 1);
+    else _setupState.outputWalletIds.push(wid);
+    // If a rule's add/remove was using this wallet, the dropdown options
+    // change — re-render the rules table.
+    if (_setupState.sourceSecurities.length) renderSetupSecurities();
+  }
+
+  function loadSourcePosition() {
+    const cid  = _setupState.companyId;
+    const wid  = _setupState.sourceWalletId;
+    const date = document.getElementById("setup-date").value;
+    if (!cid || !wid || !date) {
+      alert("Empresa, carteira e data são obrigatórios.");
+      return;
+    }
+    document.getElementById("setup-secs-msg").textContent = "Carregando...";
+    document.getElementById("setup-secs-msg").style.display = "block";
+
+    fetch(`/api/excecoes/source-position?companyId=${encodeURIComponent(cid)}&walletId=${encodeURIComponent(wid)}&date=${encodeURIComponent(date)}`)
+      .then(r => r.json())
+      .then(d => {
+        _setupState.sourceSecurities = d.securities || [];
+        // Initialise rule rows for any new uids; preserve existing.
+        _setupState.sourceSecurities.forEach(s => {
+          if (!_setupState.rules[s.unprocessedId]) {
+            _setupState.rules[s.unprocessedId] = {
+              selected: false,
+              addToWalletId: "",
+              removeFromWalletId: "",
+              caixa: false,
+            };
+          }
+        });
+        renderSetupSecurities();
+      })
+      .catch(() => {
+        document.getElementById("setup-secs-msg").textContent = "Erro ao carregar posição.";
+      });
+  }
+
+  function _walletOpts(selected) {
+    // Allowed = source wallet + selected output wallets.
+    const allowed = [];
+    if (_setupState.sourceWalletId) allowed.push(_setupState.sourceWalletId);
+    _setupState.outputWalletIds.forEach(w => allowed.push(w));
+    const byId = Object.fromEntries(_setupState.walletsForCompany.map(w => [w.id, w]));
+    let html = '<option value="">--</option>';
+    allowed.forEach(wid => {
+      const w = byId[wid] || {id: wid, name: wid};
+      html += `<option value="${escHtml(wid)}" ${selected === wid ? "selected" : ""}>${escHtml(w.name)}</option>`;
+    });
+    return html;
+  }
+
+  function renderSetupSecurities() {
+    const tbody = document.getElementById("setup-secs-tbody");
+    const msg   = document.getElementById("setup-secs-msg");
+    const secs = _setupState.sourceSecurities;
+    if (!secs.length) {
+      tbody.innerHTML = "";
+      msg.textContent = "Nenhum ativo encontrado para esta carteira/data.";
+      msg.style.display = "block";
+      return;
+    }
+    msg.style.display = "none";
+    tbody.innerHTML = secs.map(s => {
+      const r = _setupState.rules[s.unprocessedId] || {};
+      const disabled = r.selected ? "" : "disabled";
+      const rowCls = r.selected ? "" : "opacity-60";
+      return `<tr class="border-t border-gray-100 ${rowCls}">
+        <td class="px-2 py-2 text-center">
+          <input type="checkbox" ${r.selected ? "checked" : ""}
+            onchange="toggleRule('${escHtml(s.unprocessedId)}', this.checked)" />
+        </td>
+        <td class="px-2 py-2 font-mono text-[11px] text-gray-700">${escHtml(s.unprocessedId)}</td>
+        <td class="px-2 py-2 text-right">${fmtNum(s.quantity)}</td>
+        <td class="px-2 py-2 text-right">${fmtNum(s.pu)}</td>
+        <td class="px-2 py-2 text-right">${fmtMoney(s.balance)}</td>
+        <td class="px-2 py-2">
+          <select ${disabled} onchange="updateRule('${escHtml(s.unprocessedId)}', 'addToWalletId', this.value)"
+            class="w-full border rounded px-1 py-0.5 text-[11px] bg-white">
+            ${_walletOpts(r.addToWalletId)}
+          </select>
+        </td>
+        <td class="px-2 py-2">
+          <select ${disabled} onchange="updateRule('${escHtml(s.unprocessedId)}', 'removeFromWalletId', this.value)"
+            class="w-full border rounded px-1 py-0.5 text-[11px] bg-white">
+            ${_walletOpts(r.removeFromWalletId)}
+          </select>
+        </td>
+        <td class="px-2 py-2 text-center">
+          <input type="checkbox" ${r.caixa ? "checked" : ""} ${disabled}
+            onchange="updateRule('${escHtml(s.unprocessedId)}', 'caixa', this.checked)" />
+        </td>
+      </tr>`;
+    }).join("");
+  }
+
+  function toggleRule(uid, selected) {
+    const r = _setupState.rules[uid] || {selected: false, addToWalletId: "", removeFromWalletId: "", caixa: false};
+    r.selected = selected;
+    _setupState.rules[uid] = r;
+    renderSetupSecurities();
+  }
+
+  function updateRule(uid, field, value) {
+    const r = _setupState.rules[uid] || {selected: true, addToWalletId: "", removeFromWalletId: "", caixa: false};
+    r[field] = value;
+    _setupState.rules[uid] = r;
+  }
+
+  function saveException() {
+    const name = document.getElementById("setup-name").value.trim();
+    const cid  = _setupState.companyId;
+    if (!cid)               { alert("Selecione uma empresa."); return; }
+    if (!name)              { alert("Informe um nome."); return; }
+    if (!_setupState.sourceWalletId) { alert("Selecione a carteira de origem."); return; }
+    if (!_setupState.outputWalletIds.length) { alert("Selecione ao menos uma carteira de saída."); return; }
+
+    const rules = [];
+    Object.entries(_setupState.rules).forEach(([uid, r]) => {
+      if (!r.selected) return;
+      if (!r.addToWalletId && !r.removeFromWalletId) return;
+      rules.push({
+        unprocessedId:      uid,
+        addToWalletId:      r.addToWalletId || null,
+        removeFromWalletId: r.removeFromWalletId || null,
+        caixa:              !!r.caixa,
+      });
+    });
+    if (!rules.length) {
+      alert("Selecione ao menos um ativo e configure adicionar/remover.");
+      return;
+    }
+
+    const body = {
+      companyId:       cid,
+      name,
+      sourceWalletId:  _setupState.sourceWalletId,
+      outputWalletIds: _setupState.outputWalletIds,
+      rules,
+    };
+    const url    = _setupState.editingId
+      ? `/api/excecoes/${encodeURIComponent(_setupState.editingId)}`
+      : "/api/excecoes";
+    const method = _setupState.editingId ? "PUT" : "POST";
+
+    document.getElementById("setup-status").textContent = "Salvando...";
+    fetch(url, {method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+      .then(r => r.json().then(d => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        if (!ok || d.error) {
+          document.getElementById("setup-status").textContent = "Erro: " + (d.error || "falha");
+          return;
+        }
+        closeSetupModal();
+        loadList();
+      })
+      .catch(() => {
+        document.getElementById("setup-status").textContent = "Erro de rede.";
+      });
+  }
+
+  function editException(id, cid) {
+    fetch(`/api/excecoes/${encodeURIComponent(id)}?companyId=${encodeURIComponent(cid)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { alert(d.error); return; }
+        const e = d.exception;
+        openSetupModal();
+        _setupState.editingId = e.id;
+        _setupState.companyId = e.companyId;
+        document.getElementById("setup-company").value = e.companyId;
+        document.getElementById("setup-name").value = e.name || "";
+        document.getElementById("setup-subtitle").textContent = "Editando: " + (e.name || "");
+
+        // Need wallets list to render dropdowns
+        return fetch(`/api/excecoes/wallets?companyId=${encodeURIComponent(e.companyId)}`)
+          .then(r => r.json())
+          .then(({ wallets }) => {
+            _setupState.walletsForCompany = wallets || [];
+            const sel = document.getElementById("setup-source");
+            sel.innerHTML = '<option value="">Selecione...</option>'
+              + (wallets || []).map(w => `<option value="${escHtml(w.id)}">${escHtml(w.name)}</option>`).join("");
+            sel.disabled = false;
+            sel.value = e.sourceWalletId;
+            _setupState.sourceWalletId = e.sourceWalletId;
+            _setupState.outputWalletIds = (e.outputWalletIds || []).slice();
+            renderOutputs();
+
+            // Rebuild rules map indexed by uid.
+            _setupState.rules = {};
+            (e.rules || []).forEach(r => {
+              _setupState.rules[r.unprocessedId] = {
+                selected:           true,
+                addToWalletId:      r.addToWalletId || "",
+                removeFromWalletId: r.removeFromWalletId || "",
+                caixa:              !!r.caixa,
+              };
+            });
+            // Render rules using a synthetic source-securities list so the
+            // user sees existing rules even before they reload the position.
+            _setupState.sourceSecurities = (e.rules || []).map(r => ({
+              unprocessedId: r.unprocessedId,
+              quantity: null, pu: null, balance: null,
+            }));
+            renderSetupSecurities();
+          });
+      });
+  }
+
+  // ── Apply (daily routine) ─────────────────────────────────────────────────
+  function openApplyModal(id, companyId) {
+    _apply = {exceptionId: id, companyId, plan: null};
+    document.getElementById("apply-modal").classList.remove("hidden");
+    document.getElementById("apply-subtitle").textContent = "";
+    document.getElementById("apply-date").value = todayISO();
+    document.getElementById("apply-warnings").innerHTML = "";
+    document.getElementById("apply-preview").classList.add("hidden");
+    document.getElementById("apply-results").classList.add("hidden");
+    document.getElementById("apply-results-list").innerHTML = "";
+    document.getElementById("apply-wallets").innerHTML = "";
+    document.getElementById("apply-run-btn").disabled = true;
+    document.getElementById("apply-download-btn").disabled = true;
+
+    const exc = _exceptions.find(e => e.id === id);
+    if (exc) {
+      document.getElementById("apply-subtitle").textContent =
+        `${exc.name} — ${exc.companyName} — origem: ${exc.sourceWalletName}`;
+    }
+  }
+
+  function closeApplyModal() {
+    document.getElementById("apply-modal").classList.add("hidden");
+  }
+
+  function runPreview() {
+    const date = document.getElementById("apply-date").value;
+    if (!date) { alert("Selecione uma data."); return; }
+    document.getElementById("apply-warnings").innerHTML =
+      '<p class="text-xs text-gray-400">Calculando...</p>';
+    document.getElementById("apply-preview").classList.add("hidden");
+    document.getElementById("apply-results").classList.add("hidden");
+    document.getElementById("apply-run-btn").disabled = true;
+    document.getElementById("apply-download-btn").disabled = true;
+
+    fetch(`/api/excecoes/${encodeURIComponent(_apply.exceptionId)}/preview`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({companyId: _apply.companyId, date}),
+    })
+      .then(r => r.json().then(d => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        if (!ok || d.error) {
+          document.getElementById("apply-warnings").innerHTML =
+            `<p class="pill pill-error">${escHtml(d.error || "Falha")}</p>`;
+          return;
+        }
+        _apply.plan = d;
+        renderPreview(d);
+        document.getElementById("apply-run-btn").disabled = false;
+        document.getElementById("apply-download-btn").disabled = false;
+      })
+      .catch(() => {
+        document.getElementById("apply-warnings").innerHTML =
+          '<p class="pill pill-error">Erro de rede ao gerar pré-visualização.</p>';
+      });
+  }
+
+  function renderPreview(plan) {
+    const warns = [];
+    if (plan.fallback) {
+      warns.push(`<span class="pill pill-warn">Posição da origem usou fallback: ${escHtml(plan.sourceDate)} (alvo: ${escHtml(plan.targetDate)})</span>`);
+    }
+    if ((plan.missingRules || []).length) {
+      warns.push(`<span class="pill pill-warn">${plan.missingRules.length} regra(s) sem ativo correspondente: ${plan.missingRules.map(escHtml).join(", ")}</span>`);
+    }
+    if ((plan.transactionsUnmapped || []).length) {
+      warns.push(`<span class="pill pill-warn">${plan.transactionsUnmapped.length} regra(s) sem securityMappings — transações dessas regras não serão migradas: ${plan.transactionsUnmapped.map(escHtml).join(", ")}</span>`);
+    }
+    if (!Object.keys(plan.wallets || {}).length && !(plan.transactions || []).length) {
+      warns.push('<span class="pill pill-error">Nenhuma carteira afetada e nenhuma transação para migrar — nada a enviar.</span>');
+    }
+    document.getElementById("apply-warnings").innerHTML = warns.join(" ") || "";
+
+    const cont = document.getElementById("apply-wallets");
+    // Order: wallets that strip first ("removed"/"both"), then add-only,
+    // then any baseline-only — makes the user's review flow top-down by
+    // intent ("what was taken out" → "what received it").
+    const _opOrder = {removed: 0, both: 1, added: 2};
+    const entries = Object.entries(plan.wallets || {})
+      .sort(([, a], [, b]) => (_opOrder[a.op] ?? 3) - (_opOrder[b.op] ?? 3));
+
+    cont.innerHTML = entries.map(([wid, payload]) => {
+      const wname = (plan.walletNames || {})[wid] || wid;
+      const rowMark = op => {
+        if (op === "added")   return '<span class="pill pill-success" title="Ativo recebido">+ adicionado</span>';
+        if (op === "removed") return '<span class="pill pill-error"   title="Ativo retirado">− removido</span>';
+        if (op === "both")    return '<span class="pill pill-warn"    title="Ativo recebido e retirado">± ambos</span>';
+        return '<span class="pill pill-muted" title="Ativo já existente, não tocado">baseline</span>';
+      };
+      const rowCls = op => {
+        if (op === "added")   return "bg-emerald-50/60";
+        if (op === "removed") return "bg-rose-50/60";
+        if (op === "both")    return "bg-amber-50/60";
+        return "";
+      };
+      const rows = (payload.rows || []).map(r => `
+        <tr class="border-t border-gray-100 ${rowCls(r.op)}">
+          <td class="px-2 py-1 text-center">${rowMark(r.op)}</td>
+          <td class="px-2 py-1 font-mono text-[11px]">${escHtml(r.unprocessedId)}</td>
+          <td class="px-2 py-1 text-right">${fmtNum(r.quantity)}</td>
+          <td class="px-2 py-1 text-right">${fmtNum(r.pu)}</td>
+          <td class="px-2 py-1 text-right">${fmtMoney(r.balance)}</td>
+          <td class="px-2 py-1 text-center">${r.caixa ? "Sim" : "Não"}</td>
+          <td class="px-2 py-1">${escHtml(r.currencyId || "")}</td>
+        </tr>`).join("");
+
+      const headerMark = (() => {
+        if (payload.op === "added")   return '<span class="pill pill-success">Recebe ativos</span>';
+        if (payload.op === "removed") return '<span class="pill pill-error">Sofre strip</span>';
+        if (payload.op === "both")    return '<span class="pill pill-warn">Recebe e sofre strip</span>';
+        return "";
+      })();
+      const sourceMark = payload.isSource
+        ? '<span class="pill pill-info ml-1">Origem</span>' : '';
+
+      return `<div class="border rounded">
+        <div class="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700 flex justify-between items-center gap-2">
+          <span class="flex items-center gap-2">
+            <span>${escHtml(wname)}</span>
+            ${headerMark}${sourceMark}
+          </span>
+          <span class="text-gray-400 font-normal">${(payload.rows || []).length} ativo(s) — ${escHtml(payload.currencyId || "")}</span>
+        </div>
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 text-gray-500 uppercase">
+            <tr>
+              <th class="px-2 py-1 text-center min-w-[100px]">Marca</th>
+              <th class="px-2 py-1 text-left">Ativo</th>
+              <th class="px-2 py-1 text-right">Quant.</th>
+              <th class="px-2 py-1 text-right">PU</th>
+              <th class="px-2 py-1 text-right">Saldo</th>
+              <th class="px-2 py-1 text-center">Caixa</th>
+              <th class="px-2 py-1 text-left">Moeda</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }).join("");
+
+    renderTransactionPreview(plan);
+    document.getElementById("apply-preview").classList.remove("hidden");
+  }
+
+  function renderTransactionPreview(plan) {
+    const txs = plan.transactions || [];
+    const cont = document.getElementById("apply-transactions");
+    const tbody = document.getElementById("apply-tx-tbody");
+    const msg   = document.getElementById("apply-tx-msg");
+    const count = document.getElementById("apply-tx-count");
+    const wn = plan.walletNames || {};
+    const sn = plan.securityNames || {};
+
+    const adjCount = txs.reduce((acc, tx) => acc + ((tx.adjustments || []).length), 0);
+    cont.classList.remove("hidden");
+    count.textContent = `(${txs.length} migração(ões) + ${adjCount} ajuste(s))`;
+
+    if (!txs.length) {
+      tbody.innerHTML = "";
+      msg.textContent = (plan.transactionsUnmapped || []).length
+        ? `Nenhuma transação encontrada. Aviso: ${plan.transactionsUnmapped.length} regra(s) sem mapeamento securityMappings: ${plan.transactionsUnmapped.join(", ")}`
+        : "Nenhuma transação para migrar nesta data.";
+      msg.classList.remove("hidden");
+      return;
+    }
+    msg.classList.add("hidden");
+
+    const rows = [];
+    for (const tx of txs) {
+      const fromName = wn[tx.fromWalletId] || tx.fromWalletId;
+      const toName   = wn[tx.toWalletId]   || tx.toWalletId;
+      const secName  = sn[tx.securityId]   || tx.unprocessedId;
+      rows.push(`<tr class="border-t border-gray-100 bg-amber-50/40">
+        <td class="px-2 py-1">
+          <div class="font-medium text-gray-800">${escHtml(secName)}</div>
+          <div class="text-[10px] text-gray-400 font-mono">${escHtml(tx.unprocessedId)}</div>
+        </td>
+        <td class="px-2 py-1 text-gray-600">${escHtml(tx.type)}</td>
+        <td class="px-2 py-1">
+          <span class="pill pill-error">−</span>
+          <span class="ml-1">${escHtml(fromName)}</span>
+        </td>
+        <td class="px-2 py-1">
+          <span class="pill pill-success">+</span>
+          <span class="ml-1">${escHtml(toName)}</span>
+        </td>
+        <td class="px-2 py-1 text-right">${tx.balance == null ? '<span class="text-gray-300">--</span>' : fmtMoney(tx.balance)}</td>
+        <td class="px-2 py-1 text-right">${tx.quantity == null ? '<span class="text-gray-300">--</span>' : fmtNum(tx.quantity)}</td>
+        <td class="px-2 py-1">${escHtml(tx.liquidationDate)}</td>
+        <td class="px-2 py-1 text-gray-600">${escHtml(tx.description || "")}</td>
+      </tr>`);
+
+      for (const adj of (tx.adjustments || [])) {
+        const wname = wn[adj.walletId] || adj.walletId || "";
+        const isFrom = adj.side === "from";
+        const balCell = adj.balance == null
+          ? '<span class="text-gray-300">--</span>'
+          : fmtMoney(adj.balance);
+        const qtyCell = adj.quantity == null
+          ? '<span class="text-gray-300">--</span>'
+          : fmtNum(adj.quantity);
+        rows.push(`<tr class="border-t border-gray-50 bg-sky-50/40 text-gray-600">
+          <td class="px-2 py-1 pl-6">
+            <div class="text-[10px] uppercase tracking-wide text-sky-700 font-semibold">↳ Ajuste</div>
+            <div class="text-[10px] text-gray-500">${escHtml(adj.description || "")}</div>
+          </td>
+          <td class="px-2 py-1 text-gray-600">${escHtml(adj.type || "securityTransfer")}</td>
+          <td class="px-2 py-1">${isFrom
+            ? `<span class="pill pill-success">+</span><span class="ml-1">${escHtml(wname)}</span>`
+            : '<span class="text-gray-300">--</span>'}</td>
+          <td class="px-2 py-1">${!isFrom
+            ? `<span class="pill pill-error">−</span><span class="ml-1">${escHtml(wname)}</span>`
+            : '<span class="text-gray-300">--</span>'}</td>
+          <td class="px-2 py-1 text-right">${balCell}</td>
+          <td class="px-2 py-1 text-right">${qtyCell}</td>
+          <td class="px-2 py-1">${escHtml(adj.liquidationDate || tx.liquidationDate)}</td>
+          <td class="px-2 py-1 text-gray-500 italic">${escHtml(adj.description || "")}</td>
+        </tr>`);
+      }
+    }
+    tbody.innerHTML = rows.join("");
+  }
+
+  function runApply() {
+    if (!_apply.plan) return;
+    if (!confirm("Confirmar envio para a API Beehus?")) return;
+
+    const date = document.getElementById("apply-date").value;
+    document.getElementById("apply-results-list").innerHTML =
+      '<p class="text-xs text-gray-400">Enviando...</p>';
+    document.getElementById("apply-results").classList.remove("hidden");
+    document.getElementById("apply-run-btn").disabled = true;
+
+    fetch(`/api/excecoes/${encodeURIComponent(_apply.exceptionId)}/apply`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({companyId: _apply.companyId, date}),
+    })
+      .then(r => r.json().then(d => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        renderResults(d);
+        document.getElementById("apply-run-btn").disabled = !ok;
+        if (ok) loadList();
+      })
+      .catch(() => {
+        document.getElementById("apply-results-list").innerHTML =
+          '<p class="pill pill-error">Erro de rede.</p>';
+      });
+  }
+
+  function renderResults(d) {
+    const list = document.getElementById("apply-results-list");
+    const wn = (_apply.plan && _apply.plan.walletNames) || {};
+    const sn = (_apply.plan && _apply.plan.securityNames) || {};
+    let html = "";
+
+    if (d.error) {
+      html += `<p class="pill pill-error">${escHtml(d.error)}</p>`;
+    }
+
+    const txs = d.transactionResults || [];
+    if (txs.length) {
+      html += '<p class="text-xs font-semibold text-gray-700 mt-2 mb-1">Transações</p>';
+      html += txs.map(r => {
+        const pill = `<span class="pill pill-${r.status === "ok" ? "success" : "error"}">${escHtml(r.status)}</span>`;
+        const secName  = sn[r.securityId]   || r.securityId   || "";
+        const extra = r.error ? ` — ${escHtml(r.error)}` : "";
+        if (r.kind === "adjust") {
+          const wname = wn[r.walletId] || r.walletId || "";
+          const sign  = r.side === "to" ? "−" : "+";
+          const bal   = (r.balance == null)
+            ? '<span class="text-gray-300">--</span>'
+            : Number(r.balance).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+          return `<div class="text-xs text-gray-700">${pill} <span class="pill pill-muted">Ajuste ${sign}</span> <strong>${escHtml(secName)}</strong>: ${escHtml(wname)} · ${bal}${extra}</div>`;
+        }
+        const fromName = wn[r.fromWalletId] || r.fromWalletId || "";
+        const toName   = wn[r.toWalletId]   || r.toWalletId   || "";
+        return `<div class="text-xs text-gray-700">${pill} <span class="font-mono text-[10px] text-gray-400">${escHtml(r.id)}</span> <strong>${escHtml(secName)}</strong>: ${escHtml(fromName)} → ${escHtml(toName)}${extra}</div>`;
+      }).join("");
+    }
+
+    const positions = d.results || [];
+    if (positions.length) {
+      html += '<p class="text-xs font-semibold text-gray-700 mt-3 mb-1">Posições</p>';
+      html += positions.map(r => {
+        const cls = r.status === "ok" ? "success" : (r.status === "skipped" ? "muted" : "error");
+        const pill = `<span class="pill pill-${cls}">${escHtml(r.status)}</span>`;
+        let extra = "";
+        if (r.status === "ok") extra = ` — ${r.rows} linha(s)`;
+        else if (r.error) extra = ` — ${escHtml(r.error)}`;
+        else if (r.reason) extra = ` — ${escHtml(r.reason)}`;
+        const wname = wn[r.walletId] || r.walletId;
+        return `<div class="text-xs text-gray-700">${pill} <strong>${escHtml(wname)}</strong>${extra}</div>`;
+      }).join("");
+    }
+
+    list.innerHTML = html || '<p class="text-xs text-gray-400">Nenhum resultado.</p>';
+  }
+
+  function downloadExcel() {
+    const date = document.getElementById("apply-date").value;
+    if (!date) return;
+    const url = `/api/excecoes/${encodeURIComponent(_apply.exceptionId)}/excel?companyId=${encodeURIComponent(_apply.companyId)}&date=${encodeURIComponent(date)}`;
+    window.open(url, "_blank");
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Ajustes day-trade — full-screen view that toggles with the regular list.
+  //
+  // Three-step flow:
+  //   1. Filter (company, dates, optional groupings/wallets) → POST
+  //      /api/excecoes/intraday/check returns the detected groups[].
+  //   2. Operator picks groups via checkbox + "Gerar posições patcheadas" →
+  //      POST /api/excecoes/intraday/build-patches recomputes server-side
+  //      using the same filter envelope plus the picked group keys.
+  //   3. Operator picks (wallet, date) patches via checkbox + "Enviar
+  //      selecionadas" → POST /api/excecoes/intraday/apply uploads only the
+  //      picked patches.
+  //
+  // The server never trusts cached client state: each step ships the full
+  // filter envelope so detection + patch construction run from scratch.
+  // ══════════════════════════════════════════════════════════════════════════
+  let _it = {
+    companyId: "",
+    mode: "single",
+    groupings: [],                     // [{id, name, walletIds: [...]}]
+    groupingSelectedIds: new Set(),
+    wallets: [],                       // [{id, name}]
+    walletSelectedIds: new Set(),
+    detectedGroups:    [],             // groups[] returned by /check
+    selectedGroupKeys: new Set(),      // "wid|sid|date" — checkbox state
+    walletNames:       {},
+    securityNames:     {},
+    patched:           [],             // patched[] returned by /build-patches
+    selectedPatchKeys: new Set(),      // "wid|date" — checkbox state
+  };
+
+  function showIntradayView() {
+    // Reset every piece of view state so reopening the screen feels fresh.
+    _it = {
+      companyId: "", mode: "single",
+      groupings: [], groupingSelectedIds: new Set(),
+      wallets:   [], walletSelectedIds:   new Set(),
+      detectedGroups: [], selectedGroupKeys: new Set(),
+      walletNames: {}, securityNames: {},
+      patched: [], selectedPatchKeys: new Set(),
+      transactions: [],   // securityContributionAdjustment plans (preview)
+    };
+    document.getElementById("exc-list-view").classList.add("hidden");
+    document.getElementById("intraday-view").classList.remove("hidden");
+    document.getElementById("it-company").value = "";
+    document.getElementById("it-initialDate").value = todayISO();
+    document.getElementById("it-finalDate").value   = todayISO();
+    document.getElementById("it-finalDate-wrap").classList.add("hidden");
+    document.getElementById("it-mode-single").classList.add("active");
+    document.getElementById("it-mode-range").classList.remove("active");
+    document.getElementById("it-advanced").classList.add("hidden");
+    document.getElementById("it-toggle-advanced").textContent = "+ Mostrar";
+    document.getElementById("it-warnings").innerHTML = "";
+    document.getElementById("it-status").textContent = "";
+    document.getElementById("it-groups-section").classList.add("hidden");
+    document.getElementById("it-patched-section").classList.add("hidden");
+    document.getElementById("it-results").classList.add("hidden");
+    document.getElementById("it-build-patches-btn").disabled = true;
+    document.getElementById("it-apply-btn").disabled         = true;
+    document.getElementById("it-build-count").textContent = "0";
+    document.getElementById("it-apply-count").textContent = "0";
+    _renderIntradayPanes();
+    _renderIntradayWalletPanes();
+    window.scrollTo(0, 0);
+  }
+
+  function hideIntradayView() {
+    document.getElementById("intraday-view").classList.add("hidden");
+    document.getElementById("exc-list-view").classList.remove("hidden");
+  }
+
+  function onIntradayModeChange(mode) {
+    if (mode !== "range") mode = "single";
+    _it.mode = mode;
+    document.getElementById("it-finalDate-wrap").classList.toggle("hidden", mode !== "range");
+    document.getElementById("it-mode-single").classList.toggle("active", mode === "single");
+    document.getElementById("it-mode-range").classList.toggle("active", mode === "range");
+    document.getElementById("it-initialDate-label").textContent =
+      (mode === "range" ? "Data inicial" : "Data");
+  }
+
+  function toggleIntradayAdvanced() {
+    const adv = document.getElementById("it-advanced");
+    const btn = document.getElementById("it-toggle-advanced");
+    const willShow = adv.classList.contains("hidden");
+    adv.classList.toggle("hidden", !willShow);
+    btn.textContent = willShow ? "− Ocultar" : "+ Mostrar";
+  }
+
+  async function onIntradayCompanyChange() {
+    _it.companyId = document.getElementById("it-company").value;
+    _it.groupings = [];
+    _it.groupingSelectedIds = new Set();
+    _it.wallets = [];
+    _it.walletSelectedIds = new Set();
+    _renderIntradayPanes();
+    _renderIntradayWalletPanes();
+    if (!_it.companyId) return;
+    // The two filter endpoints already enforce `company_visible`, so it's
+    // safe to call them in parallel without a server-side join here.
+    try {
+      const [gResp, wResp] = await Promise.all([
+        fetch(`/api/beehus/filters/groupings?companyId=${encodeURIComponent(_it.companyId)}`).then(r => r.json()),
+        fetch(`/api/beehus/filters/wallets?companyId=${encodeURIComponent(_it.companyId)}`).then(r => r.json()),
+      ]);
+      _it.groupings = Array.isArray(gResp) ? gResp : [];
+      _it.wallets   = Array.isArray(wResp) ? wResp : [];
+    } catch (e) {
+      _it.groupings = [];
+      _it.wallets   = [];
+    }
+    _renderIntradayPanes();
+    _renderIntradayWalletPanes();
+  }
+
+  // Wallets visible in the "Disponíveis" pane = company wallets ∩ union of
+  // selected groupings' walletIds (when at least one grouping is picked).
+  function _intradayWalletFilter() {
+    if (!_it.groupingSelectedIds.size) return null;
+    const ids = new Set();
+    for (const g of _it.groupings) {
+      if (_it.groupingSelectedIds.has(g.id)) {
+        (g.walletIds || []).forEach(w => ids.add(w));
+      }
+    }
+    return ids;
+  }
+
+  function _renderIntradayPanes() {
+    const avail = document.getElementById("it-grp-available");
+    const sel   = document.getElementById("it-grp-selected");
+    const available = _it.groupings.filter(g => !_it.groupingSelectedIds.has(g.id));
+    const selected  = _it.groupings.filter(g =>  _it.groupingSelectedIds.has(g.id));
+    avail.innerHTML = available.map(g => `<option value="${escHtml(g.id)}">${escHtml(g.name)}</option>`).join("");
+    sel.innerHTML   = selected .map(g => `<option value="${escHtml(g.id)}">${escHtml(g.name)}</option>`).join("");
+    document.getElementById("it-grp-available-count").textContent = available.length;
+    document.getElementById("it-grp-selected-count").textContent  = selected.length;
+    // A grouping selection narrows the wallet picker — re-render that pane too.
+    _renderIntradayWalletPanes();
+  }
+
+  function _renderIntradayWalletPanes() {
+    const filter = _intradayWalletFilter();
+    const avail  = document.getElementById("it-wal-available");
+    const sel    = document.getElementById("it-wal-selected");
+    const available = _it.wallets.filter(w =>
+      (!filter || filter.has(w.id)) && !_it.walletSelectedIds.has(w.id)
+    );
+    const selected  = _it.wallets.filter(w => _it.walletSelectedIds.has(w.id));
+    avail.innerHTML = available.map(w => `<option value="${escHtml(w.id)}">${escHtml(w.name)}</option>`).join("");
+    sel.innerHTML   = selected .map(w => `<option value="${escHtml(w.id)}">${escHtml(w.name)}</option>`).join("");
+    document.getElementById("it-wal-available-count").textContent = available.length;
+    document.getElementById("it-wal-selected-count").textContent  = selected.length;
+  }
+
+  function _itHighlighted(id) {
+    return Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
+  }
+
+  function addIntradayGroupingSelected()    { _itHighlighted("it-grp-available").forEach(id => _it.groupingSelectedIds.add(id)); _renderIntradayPanes(); }
+  function addIntradayGroupingAll()         { Array.from(document.getElementById("it-grp-available").options).forEach(o => o.value && _it.groupingSelectedIds.add(o.value)); _renderIntradayPanes(); }
+  function removeIntradayGroupingSelected() { _itHighlighted("it-grp-selected").forEach(id => _it.groupingSelectedIds.delete(id)); _renderIntradayPanes(); }
+  function removeIntradayGroupingAll()      { _it.groupingSelectedIds.clear(); _renderIntradayPanes(); }
+
+  function addIntradayWalletSelected()    { _itHighlighted("it-wal-available").forEach(id => _it.walletSelectedIds.add(id)); _renderIntradayWalletPanes(); }
+  function addIntradayWalletAll()         { Array.from(document.getElementById("it-wal-available").options).forEach(o => o.value && _it.walletSelectedIds.add(o.value)); _renderIntradayWalletPanes(); }
+  function removeIntradayWalletSelected() { _itHighlighted("it-wal-selected").forEach(id => _it.walletSelectedIds.delete(id)); _renderIntradayWalletPanes(); }
+  function removeIntradayWalletAll()      { _it.walletSelectedIds.clear(); _renderIntradayWalletPanes(); }
+
+  function _intradayBuildPayload() {
+    const cid = _it.companyId;
+    const ini = document.getElementById("it-initialDate").value;
+    const fin = _it.mode === "range"
+      ? document.getElementById("it-finalDate").value
+      : ini;
+    return {
+      companyId:    cid,
+      initialDate:  ini,
+      finalDate:    fin,
+      groupingIds:  Array.from(_it.groupingSelectedIds),
+      walletIds:    Array.from(_it.walletSelectedIds),
+    };
+  }
+
+  function _intradayValidate(payload) {
+    if (!payload.companyId)   { alert("Selecione uma empresa."); return false; }
+    if (!payload.initialDate) { alert("Informe a data."); return false; }
+    if (_it.mode === "range" && !payload.finalDate) { alert("Informe a data final."); return false; }
+    if (payload.initialDate > payload.finalDate) { alert("Data inicial > data final."); return false; }
+    return true;
+  }
+
+  // ── Step 1: detect ────────────────────────────────────────────────────
+  // Hits /intraday/check and renders the day-trade groups table with one
+  // checkbox per row. Operator picks which rows survive into step 2.
+  async function runIntradayCheck() {
+    const payload = _intradayBuildPayload();
+    if (!_intradayValidate(payload)) return;
+
+    document.getElementById("it-status").textContent = "Calculando...";
+    document.getElementById("it-warnings").innerHTML = "";
+    document.getElementById("it-groups-section").classList.add("hidden");
+    document.getElementById("it-patched-section").classList.add("hidden");
+    document.getElementById("it-results").classList.add("hidden");
+    _it.detectedGroups    = [];
+    _it.selectedGroupKeys = new Set();
+    _it.patched           = [];
+    _it.selectedPatchKeys = new Set();
+    _it.transactions      = [];
+    document.getElementById("it-build-patches-btn").disabled = true;
+    document.getElementById("it-apply-btn").disabled         = true;
+    document.getElementById("it-build-count").textContent = "0";
+    document.getElementById("it-apply-count").textContent = "0";
+    document.getElementById("it-txn-preview").classList.add("hidden");
+
+    let resp;
+    try {
+      const r = await fetch("/api/excecoes/intraday/check", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      resp = await r.json();
+      if (!r.ok || resp.error) {
+        document.getElementById("it-status").textContent = "";
+        document.getElementById("it-warnings").innerHTML =
+          `<p class="pill pill-error">${escHtml(resp.error || "Falha")}</p>`;
+        return;
+      }
+    } catch (e) {
+      document.getElementById("it-status").textContent = "";
+      document.getElementById("it-warnings").innerHTML =
+        '<p class="pill pill-error">Erro de rede.</p>';
+      return;
+    }
+
+    _it.detectedGroups = resp.groups || [];
+    _it.walletNames    = resp.walletNames   || {};
+    _it.securityNames  = resp.securityNames || {};
+    // Default to all groups checked — the operator typically wants
+    // everything that was detected; deselecting is faster than picking N.
+    _it.selectedGroupKeys = new Set(
+      _it.detectedGroups.map(g => `${g.walletId}|${g.securityId}|${g.date}`),
+    );
+
+    document.getElementById("it-status").textContent =
+      `${resp.candidateWalletCount || 0} carteira(s) inspecionada(s).`;
+    _renderIntradayGroups();
+
+    if (!_it.detectedGroups.length) {
+      document.getElementById("it-warnings").innerHTML =
+        '<p class="pill pill-muted">Nenhum day-trade detectado para os filtros informados.</p>';
+    }
+  }
+
+  function _renderIntradayGroups() {
+    const sec    = document.getElementById("it-groups-section");
+    const tbody  = document.getElementById("it-groups-tbody");
+    const count  = document.getElementById("it-groups-count");
+    const master = document.getElementById("it-groups-master");
+    const groups = _it.detectedGroups;
+    const wn = _it.walletNames, sn = _it.securityNames;
+
+    if (!groups.length) {
+      sec.classList.add("hidden");
+      tbody.innerHTML = "";
+      return;
+    }
+    sec.classList.remove("hidden");
+    count.textContent = `(${groups.length})`;
+    tbody.innerHTML = groups.map(g => {
+      const key = `${g.walletId}|${g.securityId}|${g.date}`;
+      const wname = wn[g.walletId]   || g.walletId;
+      const sname = sn[g.securityId] || g.securityId;
+      const checked = _it.selectedGroupKeys.has(key) ? "checked" : "";
+      return `<tr class="border-t border-gray-100">
+        <td class="px-2 py-1.5 text-center">
+          <input type="checkbox" data-it-group-key="${escHtml(key)}" ${checked} onchange="onIntradayGroupToggle(this)" />
+        </td>
+        <td class="px-2 py-1.5">${escHtml(g.date)}</td>
+        <td class="px-2 py-1.5">${escHtml(wname)}</td>
+        <td class="px-2 py-1.5">
+          <div class="font-medium text-gray-800">${escHtml(sname)}</div>
+          <div class="text-[10px] text-gray-400 font-mono">${escHtml(g.securityId)}</div>
+        </td>
+        <td class="px-2 py-1.5 text-right">${g.transactionCount}</td>
+        <td class="px-2 py-1.5 text-right">${fmtMoney(g.contribution)}</td>
+        <td class="px-2 py-1.5">${escHtml(g.currencyId || "")}</td>
+      </tr>`;
+    }).join("");
+
+    master.checked = groups.length > 0
+      && groups.every(g => _it.selectedGroupKeys.has(`${g.walletId}|${g.securityId}|${g.date}`));
+    _refreshIntradayBuildButton();
+  }
+
+  function onIntradayGroupToggle(cb) {
+    const key = cb.dataset.itGroupKey;
+    if (cb.checked) _it.selectedGroupKeys.add(key);
+    else            _it.selectedGroupKeys.delete(key);
+    document.getElementById("it-groups-master").checked = _it.detectedGroups.length > 0
+      && _it.detectedGroups.every(g => _it.selectedGroupKeys.has(`${g.walletId}|${g.securityId}|${g.date}`));
+    _refreshIntradayBuildButton();
+  }
+
+  function toggleIntradayGroupsAll(checked) {
+    _it.selectedGroupKeys = new Set(
+      checked
+        ? _it.detectedGroups.map(g => `${g.walletId}|${g.securityId}|${g.date}`)
+        : [],
+    );
+    _renderIntradayGroups();
+  }
+
+  function _refreshIntradayBuildButton() {
+    const n = _it.selectedGroupKeys.size;
+    document.getElementById("it-build-count").textContent = String(n);
+    document.getElementById("it-build-patches-btn").disabled = (n === 0);
+  }
+
+  // ── Step 2: build patches for selected groups ───────────────────────
+  async function runIntradayBuildPatches() {
+    if (!_it.selectedGroupKeys.size) return;
+    const payload = _intradayBuildPayload();
+    if (!_intradayValidate(payload)) return;
+
+    payload.selectedGroups = Array.from(_it.selectedGroupKeys).map(k => {
+      const [walletId, securityId, date] = k.split("|");
+      return {walletId, securityId, date};
+    });
+
+    document.getElementById("it-status").textContent = "Calculando posições...";
+    document.getElementById("it-patched-section").classList.add("hidden");
+    document.getElementById("it-results").classList.add("hidden");
+    _it.patched           = [];
+    _it.selectedPatchKeys = new Set();
+    _it.transactions      = [];
+    document.getElementById("it-txn-preview").classList.add("hidden");
+
+    let resp;
+    try {
+      const r = await fetch("/api/excecoes/intraday/build-patches", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      resp = await r.json();
+      if (!r.ok || resp.error) {
+        document.getElementById("it-status").textContent = "";
+        document.getElementById("it-warnings").innerHTML =
+          `<p class="pill pill-error">${escHtml(resp.error || "Falha")}</p>`;
+        return;
+      }
+    } catch (e) {
+      document.getElementById("it-status").textContent = "";
+      document.getElementById("it-warnings").innerHTML =
+        '<p class="pill pill-error">Erro de rede.</p>';
+      return;
+    }
+
+    _it.patched = resp.patched || [];
+    // Names may have grown (build-patches resolves walletNames for the
+    // patched wallets even if some weren't in the detected groups list).
+    Object.assign(_it.walletNames,   resp.walletNames   || {});
+    Object.assign(_it.securityNames, resp.securityNames || {});
+    _it.transactions = resp.transactions || [];
+    // Default selection: every patch that has at least one row to zero —
+    // skipping the no-op patches reduces accidental empty uploads.
+    _it.selectedPatchKeys = new Set(
+      _it.patched
+        .filter(p => (p.zeroedUnprocessedIds || []).length > 0)
+        .map(p => `${p.walletId}|${p.date}`),
+    );
+
+    _renderIntradayPatched();
+    _renderIntradayTransactionsPreview();
+    document.getElementById("it-status").textContent =
+      `${_it.patched.length} posição(ões) gerada(s) · ${_it.transactions.length} transação(ões) planejada(s).`;
+  }
+
+  function _renderIntradayTransactionsPreview() {
+    const wrap  = document.getElementById("it-txn-preview");
+    const tbody = document.getElementById("it-txn-tbody");
+    const count = document.getElementById("it-txn-count");
+    const txns  = _it.transactions;
+    if (!txns.length) {
+      wrap.classList.add("hidden");
+      tbody.innerHTML = "";
+      return;
+    }
+    wrap.classList.remove("hidden");
+    count.textContent = `(${txns.length})`;
+    tbody.innerHTML = txns.map(t => {
+      const wname = _it.walletNames[t.walletId]   || t.walletId;
+      const sname = t.securityBeehusName
+                  || _it.securityNames[t.securityId]
+                  || t.securityId;
+      // Skipped rows show their reason in muted pill so the operator
+      // knows why a planned transaction won't actually be created.
+      const status = t.skip
+        ? `<span class="pill pill-warn" title="${escHtml(t.skipReason || '')}">skip — ${escHtml(t.skipReason || '')}</span>`
+        : '<span class="pill pill-info">criar</span>';
+      return `<tr class="border-t border-gray-100">
+        <td class="px-2 py-1.5">${escHtml(t.date)}</td>
+        <td class="px-2 py-1.5">${escHtml(wname)}</td>
+        <td class="px-2 py-1.5">
+          <div class="font-medium text-gray-800">${escHtml(sname)}</div>
+          <div class="text-[10px] text-gray-400 font-mono">${escHtml(t.securityId)}</div>
+        </td>
+        <td class="px-2 py-1.5 text-gray-600">${escHtml(t.description || "")}</td>
+        <td class="px-2 py-1.5 text-right">${fmtMoney(t.balance)}</td>
+        <td class="px-2 py-1.5">${escHtml(t.currencyId || "")}</td>
+        <td class="px-2 py-1.5">${status}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function _renderIntradayPatched() {
+    const sec   = document.getElementById("it-patched-section");
+    const count = document.getElementById("it-patched-count");
+    const list  = document.getElementById("it-patched-list");
+    const patched = _it.patched;
+    const wn = _it.walletNames;
+
+    // Aggregate warnings/info about mappings + positions. "added" rows
+    // (synthetic zero entries for round-trips that left no carry) and
+    // "no position doc" cases are reported as info pills rather than
+    // warnings — they're the expected shape for clean intraday closes.
+    const warns = [];
+    const unmapped = new Set();
+    let addedCount = 0;
+    let noPositionCount = 0;
+    patched.forEach(p => {
+      (p.unmappedSecurityIds || []).forEach(s => unmapped.add(s));
+      addedCount += (p.addedUnprocessedIds || []).length;
+      if (!p.hasPosition) noPositionCount++;
+    });
+    if (unmapped.size) {
+      warns.push(`<p class="pill pill-warn">${unmapped.size} security(ies) sem <span class="font-mono">beehusName</span> em <span class="font-mono">db.securities</span> — não há nome para usar como Ativo no patch.</p>`);
+    }
+    if (addedCount) {
+      warns.push(`<p class="pill pill-info">${addedCount} linha(s) day-trade adicionada(s) ao patch (Ativo = <span class="font-mono">beehusName</span> da security, valores zerados).</p>`);
+    }
+    if (noPositionCount) {
+      warns.push(`<p class="pill pill-warn">${noPositionCount} (carteira, data) sem documento em <span class="font-mono">unprocessedSecurityPositions</span>.</p>`);
+    }
+    document.getElementById("it-warnings").innerHTML = warns.join(" ");
+
+    if (!patched.length) {
+      sec.classList.add("hidden");
+      list.innerHTML = "";
+      return;
+    }
+    sec.classList.remove("hidden");
+    count.textContent = `(${patched.length})`;
+    list.innerHTML = patched.map(p => {
+      const key   = `${p.walletId}|${p.date}`;
+      const wname = wn[p.walletId] || p.walletId;
+      const zeroedSet = new Set(p.zeroedUnprocessedIds || []);
+      const checked   = _it.selectedPatchKeys.has(key) ? "checked" : "";
+      // Disable the checkbox when the patch has nothing to zero — the
+      // server would skip it anyway, no point letting the operator pick it.
+      const disabled  = zeroedSet.size ? "" : "disabled";
+      const addedSet = new Set(p.addedUnprocessedIds || []);
+      const rows = (p.rows || []).map(r => {
+        const cls = r.zeroed ? "it-row-zeroed" : "";
+        const mark = r.added
+          ? '<span class="pill pill-info"  title="linha adicionada (security não estava na posição original)">adicionar</span>'
+          : (r.zeroed
+              ? '<span class="pill pill-error" title="zerado">zerar</span>'
+              : '<span class="pill pill-muted" title="baseline — não tocado">baseline</span>');
+        return `<tr class="border-t border-gray-100 ${cls}">
+          <td class="px-2 py-1 text-center">${mark}</td>
+          <td class="px-2 py-1 font-mono text-[11px]">${escHtml(r.unprocessedId)}</td>
+          <td class="px-2 py-1 text-right">${fmtNum(r.quantity)}</td>
+          <td class="px-2 py-1 text-right">${fmtNum(r.pu)}</td>
+          <td class="px-2 py-1 text-right">${fmtMoney(r.balance)}</td>
+          <td class="px-2 py-1">${escHtml(r.currencyId || "")}</td>
+        </tr>`;
+      }).join("");
+      const zeroedExisting = zeroedSet.size - addedSet.size;
+      const headerInfo = [
+        `${(p.rows || []).length} ativo(s)`,
+        zeroedExisting > 0 ? `<span class="pill pill-error">${zeroedExisting} zerado(s)</span>` : "",
+        addedSet.size      ? `<span class="pill pill-info">${addedSet.size} adicionado(s)</span>` : "",
+        zeroedSet.size === 0 ? '<span class="pill pill-muted">nenhum a zerar/adicionar</span>' : "",
+        p.hasPosition ? "" : '<span class="pill pill-warn">sem doc de posição</span>',
+      ].filter(Boolean).join(" ");
+      const emptyMsg = (p.rows || []).length
+        ? ""
+        : '<p class="text-center text-gray-400 text-xs py-3">Nenhuma linha em unprocessedSecurityPositions.</p>';
+      return `<div class="border rounded">
+        <div class="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700 flex justify-between items-center gap-2">
+          <span class="flex items-center gap-2">
+            <input type="checkbox" data-it-patch-key="${escHtml(key)}" ${checked} ${disabled} onchange="onIntradayPatchToggle(this)" />
+            <span>${escHtml(wname)} — ${escHtml(p.date)}</span>
+          </span>
+          <span class="text-gray-400 font-normal">${headerInfo}</span>
+        </div>
+        ${(p.rows || []).length ? `<table class="w-full text-xs">
+          <thead class="bg-gray-50 text-gray-500 uppercase">
+            <tr>
+              <th class="px-2 py-1 text-center min-w-[80px]">Marca</th>
+              <th class="px-2 py-1 text-left">Ativo</th>
+              <th class="px-2 py-1 text-right">Quant.</th>
+              <th class="px-2 py-1 text-right">PU</th>
+              <th class="px-2 py-1 text-right">Saldo</th>
+              <th class="px-2 py-1 text-left">Moeda</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>` : emptyMsg}
+      </div>`;
+    }).join("");
+
+    _refreshIntradayApplyButton();
+  }
+
+  function onIntradayPatchToggle(cb) {
+    const key = cb.dataset.itPatchKey;
+    if (cb.checked) _it.selectedPatchKeys.add(key);
+    else            _it.selectedPatchKeys.delete(key);
+    _refreshIntradayApplyButton();
+  }
+
+  function toggleIntradayPatchesAll(checked) {
+    if (checked) {
+      // Only check patches that have rows to zero (the disabled ones).
+      _it.selectedPatchKeys = new Set(
+        _it.patched
+          .filter(p => (p.zeroedUnprocessedIds || []).length > 0)
+          .map(p => `${p.walletId}|${p.date}`),
+      );
+    } else {
+      _it.selectedPatchKeys = new Set();
+    }
+    _renderIntradayPatched();
+  }
+
+  function _refreshIntradayApplyButton() {
+    const n = _it.selectedPatchKeys.size;
+    document.getElementById("it-apply-count").textContent = String(n);
+    document.getElementById("it-apply-btn").disabled      = (n === 0);
+  }
+
+  // ── Excel download (uses the patched-positions selection) ───────────
+  function downloadIntradayExcel() {
+    const payload = _intradayBuildPayload();
+    if (!_intradayValidate(payload)) return;
+    // Pass selectedGroups so the workbook covers what the operator picked
+    // in step 1; without it the server would produce a "snapshot of
+    // everything detected" which doesn't match what's on screen.
+    if (_it.selectedGroupKeys.size) {
+      payload.selectedGroups = Array.from(_it.selectedGroupKeys).map(k => {
+        const [walletId, securityId, date] = k.split("|");
+        return {walletId, securityId, date};
+      });
+    }
+    fetch("/api/excecoes/intraday/excel", {
+      method:  "POST",
+      headers: {"Content-Type": "application/json"},
+      body:    JSON.stringify(payload),
+    }).then(async r => {
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({error: "falha"}));
+        alert("Erro ao baixar Excel: " + (d.error || r.status));
+        return;
+      }
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url;
+      a.download = `intraday_${payload.companyId}_${payload.initialDate}_${payload.finalDate}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }).catch(() => alert("Erro de rede ao baixar Excel."));
+  }
+
+  // ── Step 3: apply (upload selected patches) ─────────────────────────
+  // Mirrors `submitSelectedTransactions` in templates/correcoes.html: each
+  // transaction is shipped via its own HTTP call so the operator gets per-
+  // row progress and a 401 short-circuits the whole batch. After the txn
+  // sweep (which fans out from the client) the patched positions go up
+  // in the same single bulk call as before — the upstream replaces the
+  // entire wallet position in one request, so per-row HTTP gains nothing.
+  async function runIntradayApply() {
+    if (!_it.selectedPatchKeys.size) { alert("Marque pelo menos uma posição patcheada."); return; }
+    const payload = _intradayBuildPayload();
+    if (!_intradayValidate(payload)) return;
+
+    const groupPayloads = Array.from(_it.selectedGroupKeys).map(k => {
+      const [walletId, securityId, date] = k.split("|");
+      return {walletId, securityId, date};
+    });
+    payload.selectedGroups  = groupPayloads;
+    payload.selectedPatches = Array.from(_it.selectedPatchKeys).map(k => {
+      const [walletId, date] = k.split("|");
+      return {walletId, date};
+    });
+
+    // Plans that survived the build-patches preview unmarked as `skip`
+    // are the ones the per-row submit will actually attempt.
+    const txnPlans = (_it.transactions || [])
+      .filter(t => !t.skip);
+    const confirmMsg =
+      `Enviar para a API Beehus:\n` +
+      `  • ${txnPlans.length} transação(ões) securityContributionAdjustment\n` +
+      `  • ${payload.selectedPatches.length} posição(ões) patcheada(s)\n\n` +
+      `Confirmar?`;
+    if (!confirm(confirmMsg)) return;
+
+    document.getElementById("it-results").classList.remove("hidden");
+    document.getElementById("it-apply-btn").disabled = true;
+    const list = document.getElementById("it-results-list");
+    list.innerHTML = '<p class="text-xs text-gray-400">Enviando transações...</p>';
+
+    // ── Phase 1: sequential transaction submit ─────────────────────────
+    const txnResults = [];
+    let authBroke = null;
+    for (let i = 0; i < txnPlans.length; i++) {
+      const t = txnPlans[i];
+      list.innerHTML =
+        `<p class="text-xs text-gray-400">Enviando transação ${i + 1}/${txnPlans.length}...</p>`;
+      let r, data;
+      try {
+        r = await fetch("/api/excecoes/intraday/transactions/submit", {
+          method:  "POST",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify({
+            ...payload,                             // filter envelope
+            group: {walletId: t.walletId, securityId: t.securityId, date: t.date},
+          }),
+        });
+        data = await r.json().catch(() => ({}));
+      } catch (e) {
+        txnResults.push({...t, status: "error", error: "rede: " + (e.message || "")});
+        continue;
+      }
+      if (r.ok && data.ok) {
+        txnResults.push({...t, ...data});
+      } else {
+        txnResults.push({...t, ...data,
+                         status: data.status || (r.status === 401 ? "auth_error" : "error"),
+                         error:  data.error || `HTTP ${r.status}`});
+        if (r.status === 401) {
+          authBroke = data;
+          break;
+        }
+      }
+    }
+
+    // ── Phase 2: bulk patched-position upload (only if auth still good) ─
+    let posData = null;
+    if (!authBroke) {
+      list.innerHTML += '<p class="text-xs text-gray-400 mt-2">Enviando posições patcheadas...</p>';
+      try {
+        const r = await fetch("/api/excecoes/intraday/apply", {
+          method:  "POST",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify(payload),
+        });
+        posData = await r.json().catch(() => ({}));
+      } catch (e) {
+        posData = {error: "rede: " + (e.message || "")};
+      }
+    }
+
+    _renderIntradayApplyResults({
+      transactionResults: txnResults,
+      ...(posData || {}),
+      ...(authBroke ? {error: authBroke.error} : {}),
+    });
+    _refreshIntradayApplyButton();
+  }
+
+  function _renderIntradayApplyResults(d) {
+    const list = document.getElementById("it-results-list");
+    const wn = _it.walletNames || {};
+    const sn = _it.securityNames || {};
+    let html = "";
+    if (d.error) {
+      html += `<p class="pill pill-error">${escHtml(d.error)}</p>`;
+    }
+
+    const txns = d.transactionResults || [];
+    if (txns.length) {
+      html += '<p class="text-xs font-semibold text-gray-700 mt-1 mb-1">Transações criadas</p>';
+      html += txns.map(r => {
+        const cls = r.status === "ok" ? "success"
+                  : (r.status === "skipped" ? "muted" : "error");
+        const pill = `<span class="pill pill-${cls}">${escHtml(r.status)}</span>`;
+        let extra = "";
+        if (r.status === "ok") {
+          extra = r.createdId ? ` — id <span class="font-mono text-[10px]">${escHtml(r.createdId)}</span>` : "";
+        } else if (r.error)  extra = ` — ${escHtml(r.error)}`;
+        else if (r.reason)   extra = ` — ${escHtml(r.reason)}`;
+        const wname = wn[r.walletId]   || r.walletId;
+        const sname = r.securityBeehusName
+                    || sn[r.securityId] || r.securityId || "";
+        return `<div class="text-xs text-gray-700">${pill} <strong>${escHtml(sname)}</strong> · ${escHtml(wname)} · ${escHtml(r.date)} · ${fmtMoney(r.balance)}${extra}</div>`;
+      }).join("");
+    }
+
+    const rows = d.results || [];
+    if (rows.length) {
+      html += '<p class="text-xs font-semibold text-gray-700 mt-3 mb-1">Posições patcheadas</p>';
+      html += rows.map(r => {
+        const cls = r.status === "ok" ? "success" : (r.status === "skipped" ? "muted" : "error");
+        const pill = `<span class="pill pill-${cls}">${escHtml(r.status)}</span>`;
+        let extra = "";
+        if (r.status === "ok") extra = ` — ${r.rows} linha(s), ${r.zeroed} zerada(s)`;
+        else if (r.error)  extra = ` — ${escHtml(r.error)}`;
+        else if (r.reason) extra = ` — ${escHtml(r.reason)}`;
+        const wname = wn[r.walletId] || r.walletId;
+        return `<div class="text-xs text-gray-700">${pill} <strong>${escHtml(wname)}</strong> · ${escHtml(r.date)}${extra}</div>`;
+      }).join("");
+    }
+    list.innerHTML = html || '<p class="text-xs text-gray-400">Nenhum resultado.</p>';
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  loadList();
+  // Deep-link: `#day-trade` opens straight into the Ajustes day-trade view.
+  // Used by the workflow helper on /painel so step 3 lands the operator on
+  // the intraday screen without an extra click.
+  if (location.hash === "#day-trade") {
+    showIntradayView();
+  }
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      closeSetupModal();
+      closeApplyModal();
+      // Esc on the day-trade view returns to the list view (only when the
+      // view is actually showing — otherwise it'd clobber other dialogs).
+      if (!document.getElementById("intraday-view").classList.contains("hidden")) {
+        hideIntradayView();
+      }
+    }
+  });
+</script>
+{% endblock %}

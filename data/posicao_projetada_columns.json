@@ -1,0 +1,9 @@
+{
+  "hiddenColumns": [
+    "securityId",
+    "unprocessedId",
+    "pricing",
+    "offset",
+    "flags"
+  ]
+}

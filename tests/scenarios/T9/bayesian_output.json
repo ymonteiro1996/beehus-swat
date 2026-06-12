@@ -1,0 +1,107 @@
+{
+  "walletId": "T9-all-tiers",
+  "date": "2026-02-10",
+  "factors": {
+    "gap_cash": -100000,
+    "flags": [
+      {
+        "flag": "MISSING_PROVISION",
+        "securityId": "s9",
+        "securityName": "Fund I",
+        "impact": -60000,
+        "absImpact": 60000,
+        "tier": 1,
+        "confidence": 0.90,
+        "distribution": {"type": "delta", "value": 60000}
+      },
+      {
+        "flag": "WITHHOLDING_TAX",
+        "securityId": "s10",
+        "securityName": "Fund J",
+        "impact": -2000,
+        "absImpact": 2000,
+        "tier": 2,
+        "confidence": 0.75,
+        "distribution": {"type": "discrete", "param": "taxRate", "options": {"15.0": 0.6, "22.5": 0.4}}
+      },
+      {
+        "flag": "CASH_MISMATCH",
+        "securityId": "",
+        "securityName": "(caixa)",
+        "impact": -40000,
+        "absImpact": 40000,
+        "tier": 1,
+        "confidence": 0.90,
+        "distribution": {"type": "delta", "value": -40000}
+      },
+      {
+        "flag": "ANOMALY",
+        "securityId": "s9",
+        "securityName": "Fund I",
+        "impact": 0,
+        "absImpact": 0,
+        "tier": 3,
+        "confidence": 0.20,
+        "distribution": {"type": "indicator", "zScore": 25.05}
+      }
+    ]
+  },
+  "optimization": {
+    "bestFix": {
+      "flags": ["MISSING_PROVISION", "CASH_MISMATCH"],
+      "flagDetails": [
+        {"flag": "MISSING_PROVISION", "securityId": "s9", "securityName": "Fund I", "impact": -60000, "confidence": 0.90, "tier": 1},
+        {"flag": "CASH_MISMATCH", "securityId": "", "securityName": "(caixa)", "impact": -40000, "confidence": 0.90, "tier": 1}
+      ],
+      "totalImpact": -100000,
+      "residualGap": 0,
+      "posterior": 1.0,
+      "gapResolved": true,
+      "validation": {
+        "valid": true,
+        "gapResolved": true,
+        "cashConsistent": true,
+        "newGapPct": 0.0,
+        "newGapCash": 0.0,
+        "newReturnNavPS": -0.07,
+        "newReturnContrib": -0.04,
+        "newProjectedCash": 1000,
+        "currentCash": 1000
+      }
+    },
+    "alternatives": [
+      {"flags": ["MISSING_PROVISION"], "totalImpact": -60000, "residualGap": -40000, "posterior": 0.0, "gapResolved": false},
+      {"flags": ["CASH_MISMATCH"], "totalImpact": -40000, "residualGap": -60000, "posterior": 0.0, "gapResolved": false},
+      {"flags": ["WITHHOLDING_TAX"], "totalImpact": -2000, "residualGap": -98000, "posterior": 0.0, "gapResolved": false},
+      {"flags": ["MISSING_PROVISION", "WITHHOLDING_TAX", "CASH_MISMATCH"], "totalImpact": -102000, "residualGap": 2000, "posterior": 0.0, "gapResolved": false}
+    ],
+    "totalScenarios": 7,
+    "noFixPosterior": 0.0,
+    "indicativeFlags": [
+      {"flag": "ANOMALY", "securityId": "s9", "securityName": "Fund I", "distribution": {"type": "indicator", "zScore": 25.05}}
+    ],
+    "monteCarlo": {"samples": 200, "tier2Count": 1},
+    "validationUsed": true
+  },
+  "summary": {
+    "gapPctAbs": 0.05,
+    "gapCashAbs": 100000,
+    "gapToNavRatio": 0.05,
+    "suspectCount": 2,
+    "eliminatedCount": 2,
+    "suspectRatio": 0.5,
+    "flagCount": 2,
+    "flagTypes": {"MISSING_PROVISION": 1, "WITHHOLDING_TAX": 1},
+    "totalImpact": 62000,
+    "impactCoverage": 0.62,
+    "unclassifiedTxns": 0,
+    "wrongSecurityCount": 0,
+    "misclassifiedCount": 0,
+    "cashConsistent": 0,
+    "cashDiffAbs": 40000,
+    "walletAnomaly": 0,
+    "securityAnomalyCount": 1,
+    "maxZScore": 25.05,
+    "complexityScore": 6
+  }
+}

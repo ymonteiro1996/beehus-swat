@@ -1,0 +1,30 @@
+{
+  "_comment": "navPackage documents for wallet T9-all-tiers",
+  "former": {
+    "walletId": "T9-all-tiers",
+    "companyId": "company-test",
+    "positionDate": "2026-02-07",
+    "nav": 2000000,
+    "navPerShare": 100,
+    "amount": 20000,
+    "inAndOutFlows": 0,
+    "returnNavPerShare": 0.001,
+    "returnContribution": 0.001,
+    "formerNav": 1998000,
+    "trashed": false
+  },
+  "current": {
+    "walletId": "T9-all-tiers",
+    "companyId": "company-test",
+    "positionDate": "2026-02-10",
+    "nav": 1909000,
+    "navPerShare": 96,
+    "amount": 19885.42,
+    "inAndOutFlows": 0,
+    "returnNavPerShare": -0.04,
+    "returnContribution": 0.01,
+    "formerNav": 2000000,
+    "trashed": false,
+    "_comment_nav": "s9: 8000*20=160000 + s10: 9000*5=45000 + s-elim-1: 1500*1002=1503000 + s-elim-2: 3000*101=303000 + cash: 1000 = 2,012,000 BUT gap makes returnNavPerShare=-0.04 → nav includes error from missing provision"
+  }
+}

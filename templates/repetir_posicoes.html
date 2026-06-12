@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% set active = "repetir_posicoes" %}
+{% block title %}Posição Projetada{% endblock %}
+
+{% block head %}
+<style>
+  {% include 'partials/_repetir_styles.html' %}
+
+  /* Override: na página standalone, #repetir-view nasce visível. No
+     controlpanel.html o wrapper nasce com `.hidden-view` (display:none)
+     e o `Repetir.open()` é quem remove a classe. Aqui não temos esse
+     fluxo — então neutralizamos a classe pra esse elemento. Mesmo padrão
+     usado por stripping.html. */
+  #repetir-view.hidden-view { display: block; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{# View + script extraídos para partials reaproveitados pelo painel inline
+   em controlpanel.html (chip "Projetada"). O partial do script NÃO chama
+   Repetir.init() — o template standalone (este aqui) é quem dispara o
+   init no DOMContentLoaded abaixo. No painel, quem dispara é Repetir.open(). #}
+{% include 'partials/_repetir_view.html' %}
+{% include 'partials/_repetir_script.html' %}
+
+<script>
+  // Boot da página standalone /repetir-posicoes. Equivalente ao DOMContent
+  // Loaded original do template — só não pode viver no partial porque, no
+  // painel inline, o chip é quem comanda o init (lazy).
+  document.addEventListener("DOMContentLoaded", () => {
+    Repetir.init();
+    // Tab click via event delegation — fallback caso o inline `onclick`
+    // seja suprimido por CSP/iframe sandbox. Idempotente com a inline
+    // (switchTab é idempotente).
+    document.addEventListener("click", e => {
+      const btn = e.target && e.target.closest && e.target.closest("[data-tab]");
+      if (!btn) return;
+      const tab = btn.getAttribute("data-tab");
+      if (tab) Repetir.switchTab(tab);
+    });
+    // Live "name exists" hint + chip highlighting in the save-list modal.
+    const nameInput = document.getElementById("rp-save-list-name");
+    if (nameInput) {
+      nameInput.addEventListener("input", e => {
+        const v = (e.target.value || "").trim();
+        const exists = v && Repetir._st.walletLists.some(l => l.name === v);
+        document.getElementById("rp-save-list-hint").classList.toggle("hidden", !exists);
+        Repetir._renderSaveListExisting();
+      });
+      nameInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); Repetir.saveWalletList(); }
+      });
+    }
+    // Sinaliza que a inicialização standalone já rodou — Repetir.open()
+    // (no caminho inline) checa esse flag pra não reinicializar.
+    Repetir._inited = true;
+  });
+</script>
+{% endblock %}

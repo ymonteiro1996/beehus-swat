@@ -1,0 +1,90 @@
+{
+  "$schema": "API Contract for Controle de Cargas",
+  "version": "1.0.0",
+  "baseUrl": "http://localhost:5000",
+
+  "modules": {
+    "setup": {
+      "pages": [{"method": "GET", "path": "/setup"}],
+      "endpoints": [
+        {"method": "POST", "path": "/api/setup/test-connection", "body": {"uri": "string"}, "response": {"ok": true}},
+        {"method": "POST", "path": "/api/setup/save-connection", "body": {"uri": "string"}, "response": {"ok": true}}
+      ]
+    },
+
+    "config": {
+      "pages": [{"method": "GET", "path": "/config"}, {"method": "GET", "path": "/settings"}],
+      "endpoints": [
+        {"method": "GET", "path": "/api/config/entities", "response": {"companyId": "str", "companyName": "str", "entities": [{"entityId": "str", "entityName": "str", "selected": false, "delay": 0, "method": "", "responsible": ""}]}},
+        {"method": "POST", "path": "/api/config/save", "body": {"selected": [{"companyId": "str", "entityId": "str", "delay": 0, "method": "", "responsible": ""}]}, "response": {"saved": 0}},
+        {"method": "GET", "path": "/api/settings/load", "response": {"only_daily_position": false, "only_with_consumption": false, "wizard_blacklist": [], "company_filter": []}},
+        {"method": "POST", "path": "/api/settings/save", "body": {"only_daily_position": false}, "response": {"ok": true}},
+        {"method": "GET", "path": "/api/settings/companies", "response": {"companies": [{"id": "str", "name": "str", "visible": true}], "filterActive": false}}
+      ]
+    },
+
+    "conciliacao": {
+      "pages": [{"method": "GET", "path": "/conciliacao"}],
+      "endpoints": [
+        {"method": "GET", "path": "/api/conciliacao/dates", "params": {"companyId": "str", "endDate": "str?"}, "response": {"cards": [{"date": "2026-04-03", "total": 5}]}},
+        {"method": "GET", "path": "/api/conciliacao/rows", "params": {"companyId": "str", "date": "str"}, "response": {"rows": [{"walletId": "str", "walletName": "str", "nav": 0, "navPerShare": 0, "amount": 0, "inAndOutFlows": 0, "returnNavPerShare": 0, "returnContribution": 0}], "date": "str"}},
+        {"method": "GET", "path": "/api/conciliacao/wallet-detail", "params": {"walletId": "str", "date": "str"}, "response": {"securities": [{"securityId": "str", "beehusName": "str", "pu": 0, "quantity": 0, "balance": 0, "totalContribution": 0, "formerPu": 0, "formerQuantity": 0, "formerBalance": 0, "amountDifference": 0, "returnPU": 0, "returnContrib": 0, "diffRent": 0, "transactionBalance": 0}], "formerDate": "str", "formerCash": 0, "totalTransactions": 0, "projectedCash": 0, "currentCash": 0, "cashDifference": 0, "alerts": []}},
+        {"method": "GET", "path": "/api/conciliacao/transactions", "params": {"walletId": "str", "date": "str"}, "response": {"transactions": [{"operationDate": "str", "liquidationDate": "str", "securityId": "str", "securityName": "str", "beehusTransactionType": "str", "quantity": 0, "price": 0, "balance": 0, "description": "str"}], "date": "str"}},
+        {"method": "GET", "path": "/api/conciliacao/provisions", "params": {"walletId": "str", "date": "str"}, "response": {"provisions": [{"securityId": "str", "securityName": "str", "initialDate": "str", "liquidationDate": "str", "amount": 0, "provisionType": "str", "description": "str"}], "total": 0}},
+        {"method": "GET", "path": "/api/conciliacao/diagnose", "params": {"walletId": "str", "date": "str"}, "response": {"walletId": "str", "date": "str", "step1": {"status": "gap", "returnNavPerShare": 0, "returnContribution": 0, "gapPct": 0, "gapCash": 0, "formerNav": 0}, "step2": {"status": "done", "eliminatedCount": 0, "suspectCount": 0, "suspects": []}, "step3": {"status": "done", "securities": []}, "step4": {"status": "done", "unclassified": [], "wrongSecurity": []}, "step5": {"status": "ok", "formerCash": 0, "currentCash": 0, "totalTransactions": 0, "projectedCash": 0, "cashDiff": 0, "diagnosis": "consistent"}, "step6": {"status": "ok", "walletAnomaly": null, "securityAnomalies": []}}},
+        {"method": "POST", "path": "/api/conciliacao/diagnose/feedback", "body": {"walletId": "str", "date": "str", "gapCash": 0, "confirmed": true}, "response": {"ok": true}},
+        {"method": "POST", "path": "/api/conciliacao/generate-transactions", "body": {"walletId": "str", "date": "str", "items": []}, "response": {"companyId": "str", "transactions": []}},
+        {"method": "POST", "path": "/api/conciliacao/generate-provisions", "body": {"walletId": "str", "date": "str", "items": []}, "response": {"provisions": []}}
+      ]
+    },
+
+    "validacao_rentabilidades": {
+      "pages": [{"method": "GET", "path": "/validacao-rentabilidades"}],
+      "endpoints": [
+        {"method": "GET", "path": "/api/validacao-rentabilidades/dates", "params": {"companyId": "str", "endDate": "str?"}, "response": {"cards": [{"date": "str", "total": 0}]}},
+        {"method": "GET", "path": "/api/validacao-rentabilidades/securities", "params": {"companyId": "str", "date": "str"}, "response": {"securities": [{"walletId": "str", "securityId": "str", "beehusName": "str", "mainId": "str", "pricingType": "str", "formerDate": "str", "eventContribution": 0, "rentabPU": 0, "rentabContribution": 0, "threshold": null, "isAnomaly": false}], "thresholdsAvailable": false}},
+        {"method": "GET", "path": "/api/validacao-rentabilidades/security-detail", "params": {"walletId": "str", "securityId": "str", "date": "str"}, "response": {"current": {}, "former": {}, "puHistory": []}},
+        {"method": "POST", "path": "/api/validacao-rentabilidades/calculate-thresholds", "body": {"companyId": "str", "numDays": 60}, "response": {"ok": true, "count": 0}}
+      ]
+    },
+
+    "nav": {
+      "pages": [{"method": "GET", "path": "/nav"}],
+      "endpoints": [
+        {"method": "GET", "path": "/api/nav/rows", "params": {"limit": 10}, "response": {"rows": [], "dates": []}},
+        {"method": "GET", "path": "/api/nav/detail", "params": {"companyId": "str", "entityId": "str", "date": "str"}, "response": {"detail": [], "date": "str"}},
+        {"method": "GET", "path": "/api/nav/settings/load", "response": {"only_daily_position": false, "only_with_consumption": false}},
+        {"method": "POST", "path": "/api/nav/settings/save", "body": {}, "response": {"ok": true}}
+      ]
+    },
+
+    "precos": {
+      "pages": [{"method": "GET", "path": "/precos"}],
+      "endpoints": [
+        {"method": "GET", "path": "/api/precos/search", "params": {"q": "str"}, "response": {"results": []}},
+        {"method": "GET", "path": "/api/precos/filters", "response": {"securityTypes": [], "currencies": []}},
+        {"method": "GET", "path": "/api/precos/price-sources", "params": {"securityId": "str"}, "response": {"sources": []}},
+        {"method": "GET", "path": "/api/precos/history", "params": {"docId": "str[]"}, "response": {"series": [], "dates": []}}
+      ]
+    },
+
+    "impostos": {
+      "pages": [{"method": "GET", "path": "/impostos"}],
+      "endpoints": [
+        {"method": "GET", "path": "/api/impostos/companies", "response": [{"id": "str", "name": "str"}]},
+        {"method": "GET", "path": "/api/impostos/wallets", "params": {"companyId": "str"}, "response": [{"id": "str", "name": "str"}]},
+        {"method": "GET", "path": "/api/impostos/wallet-securities", "params": {"walletId": "str"}, "response": {"securities": [], "positionDate": "str"}}
+      ]
+    },
+
+  },
+
+  "summary": {
+    "totalModules": 8,
+    "totalEndpoints": "50+",
+    "database": "MongoDB Atlas (Beehus)",
+    "backend": "Python Flask",
+    "frontend": "HTML + Tailwind CSS + vanilla JS",
+    "auth": "Per-user MongoDB connection via /setup"
+  }
+}

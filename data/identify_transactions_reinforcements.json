@@ -1,0 +1,1277 @@
+{
+  "rules": {
+    "RESGATE DE COTAS NO FUNDO - TESOURO SEL FIRF PCO - TESOURO SEL FIRF PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "09.215.250/0001-13",
+      "lastDescriptionRaw": "Resgate de cotas no fundo - TESOURO SEL FIRF PCO - TESOURO SEL FIRF PCO",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 810
+    },
+    "09.591.381/0001-03 - DI MAX PRIVATE": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbde956efc7ce2275b6c5",
+      "securityName": "CS Evolution DI Max Private FICFI RF",
+      "securityMainId": "09.591.381/0001-03",
+      "lastDescriptionRaw": "09.591.381/0001-03 - DI MAX PRIVATE",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 427
+    },
+    "29.562.673/0001-17 - TESOURO SELIC": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9df4871f5e8c88f760549",
+      "securityName": "Btg Pactual Digital Tesouro Selic Simples FI RF",
+      "securityMainId": "29562673000117",
+      "lastDescriptionRaw": "29.562.673/0001-17 - TESOURO SELIC",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:51:23Z",
+      "hits": 851
+    },
+    "09.636.818/0001-70 - CSHG SOBERANO DI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbde556efc7ce2275b63d",
+      "securityName": "Cshg Soberano Exclusivo FICFI RF DI",
+      "securityMainId": "09.636.818/0001-70",
+      "lastDescriptionRaw": "09.636.818/0001-70 - CSHG SOBERANO DI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 192
+    },
+    "04.299.610/0001-99 - DI PRIVATE": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9e11f71f5e8c88f760581",
+      "securityName": "CS Evolution Di Private FICFI RF",
+      "securityMainId": "04299610000199",
+      "lastDescriptionRaw": "04.299.610/0001-99 - DI PRIVATE",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 278
+    },
+    "COMPRA - FUNDO_OFFSHORE - KYG9554E1035 - WESTERN ASSET CLASS 1": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67fee96b56efc7ce227522f3",
+      "securityName": "Western Asset Class 1",
+      "securityMainId": "KYG9554E1035",
+      "lastDescriptionRaw": "Compra - fundo_offshore - KYG9554E1035 - WESTERN ASSET CLASS 1",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 209
+    },
+    "DIVIDENDO - FUNDO_OFFSHORE - KYG9554E1035 - WESTERN ASSET CLASS 1": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67fee96b56efc7ce227522f3",
+      "securityName": "Western Asset Class 1",
+      "securityMainId": "KYG9554E1035",
+      "lastDescriptionRaw": "Dividendo - fundo_offshore - KYG9554E1035 - WESTERN ASSET CLASS 1",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 167
+    },
+    "AMORTIZACAO - GENERICO - FIDC_KOVI_II - FIDC KOVI SENIOR II": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbe7756efc7ce2275b8e9",
+      "securityName": "FIDC Kovi I Senior II",
+      "securityMainId": "38.137.153/0001-58_senior",
+      "lastDescriptionRaw": "Amortização - generico - FIDC_KOVI_II - FIDC KOVI SENIOR II",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 285
+    },
+    "RENDIMENTO - GENERICO - FIDC_KOVI_II - FIDC KOVI SENIOR II": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67ffbe7756efc7ce2275b8e9",
+      "securityName": "FIDC Kovi I Senior II",
+      "securityMainId": "38.137.153/0001-58_senior",
+      "lastDescriptionRaw": "Rendimento - generico - FIDC_KOVI_II - FIDC KOVI SENIOR II",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 250
+    },
+    "COMPRA - GENERICO - FIDC_KOVI_II - FIDC KOVI SENIOR II": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbe7756efc7ce2275b8e9",
+      "securityName": "FIDC Kovi I Senior II",
+      "securityMainId": "38.137.153/0001-58_senior",
+      "lastDescriptionRaw": "Compra - generico - FIDC_KOVI_II - FIDC KOVI SENIOR II",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 13
+    },
+    "CUPOM - CRI - CETIP_21I0183215 - CRI GRAMADO IPCA+10,00% 21/JAN/2030": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67d9e1b571f5e8c88f760596",
+      "securityName": "CRI Gramado Pós-fixado 21/Jan/2030",
+      "securityMainId": "CRI21I0183215",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_21I0183215 - CRI GRAMADO IPCA+10,00% 21/Jan/2030",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 739
+    },
+    "AMORTIZACAO - CRI - CETIP_21I0183215 - CRI GRAMADO IPCA+10,00% 21/JAN/2030": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67d9e1b571f5e8c88f760596",
+      "securityName": "CRI Gramado Pós-fixado 21/Jan/2030",
+      "securityMainId": "CRI21I0183215",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_21I0183215 - CRI GRAMADO IPCA+10,00% 21/Jan/2030",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 499
+    },
+    "COMPRA - CRI - CETIP_21I0183215 - CRI GRAMADO IPCA+10,00% 21/JAN/2030": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9e1b571f5e8c88f760596",
+      "securityName": "CRI Gramado Pós-fixado 21/Jan/2030",
+      "securityMainId": "CRI21I0183215",
+      "lastDescriptionRaw": "Compra - cri - CETIP_21I0183215 - CRI GRAMADO IPCA+10,00% 21/Jan/2030",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 27
+    },
+    "CUPOM - TITULO - NTNB_07032006_15052035 - NTN-B MAI/2035": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67feea9d56efc7ce22752d4c",
+      "securityName": "NTN-B P Mai/2035",
+      "securityMainId": "BRSTNCNTB3E2",
+      "lastDescriptionRaw": "Cupom - titulo - NTNB_07032006_15052035 - NTN-B Mai/2035",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 561
+    },
+    "VENDA TOTAL - TITULO - NTNB_07032006_15052035 - NTN-B MAI/2035": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67feea9d56efc7ce22752d4c",
+      "securityName": "NTN-B P Mai/2035",
+      "securityMainId": "BRSTNCNTB3E2",
+      "lastDescriptionRaw": "Venda Total - titulo - NTNB_07032006_15052035 - NTN-B Mai/2035",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 320
+    },
+    "COMPRA - FUNDO - 10.843.445/0001-97 - XP REF FI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9db1771f5e8c88f760520",
+      "securityName": "Xp Ref DI FI RF CP",
+      "securityMainId": "10843445000197",
+      "lastDescriptionRaw": "Compra - fundo - 10.843.445/0001-97 - XP REF FI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 913
+    },
+    "COMPRA - FUNDO - 08.915.927/0001-63 - BEM DI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc1b56efc7ce2275b114",
+      "securityName": "Bem FI RF Simples TPF",
+      "securityMainId": "08.915.927/0001-63",
+      "lastDescriptionRaw": "Compra_1 - fundo - 08.915.927/0001-63 - BEM DI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 698
+    },
+    "IR SOBRE RESGATE/VENDA DE BEM FI REF DI TPF": {
+      "beehusTransactionType": "taxes",
+      "securityId": "67ffbc1b56efc7ce2275b114",
+      "securityName": "Bem FI RF Simples TPF",
+      "securityMainId": "08.915.927/0001-63",
+      "lastDescriptionRaw": "IR sobre Resgate/Venda de BEM FI REF DI TPF",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 233
+    },
+    "COME-COTAS DE BEM FI REF DI TPF": {
+      "beehusTransactionType": "bzFundTaxes",
+      "securityId": "67ffbc1b56efc7ce2275b114",
+      "securityName": "Bem FI RF Simples TPF",
+      "securityMainId": "08.915.927/0001-63",
+      "lastDescriptionRaw": "Come-cotas de BEM FI REF DI TPF",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 23
+    },
+    "AMORTIZACAO - CRI - CETIP_20L0483929 - CRI BARRETOS IGPM+10,42% ABR/2026": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67d9e3ef71f5e8c88f7605ab",
+      "securityName": "CRI Barretos Pós-fixado 20/Abr/2026",
+      "securityMainId": "CRI20L0483929",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_20L0483929 - CRI BARRETOS IGPM+10,42% Abr/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 593
+    },
+    "CUPOM - CRI - CETIP_20L0483929 - CRI BARRETOS IGPM+10,42% ABR/2026": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67d9e3ef71f5e8c88f7605ab",
+      "securityName": "CRI Barretos Pós-fixado 20/Abr/2026",
+      "securityMainId": "CRI20L0483929",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_20L0483929 - CRI BARRETOS IGPM+10,42% Abr/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 400
+    },
+    "COMPRA - CRI - CETIP_20L0483929 - CRI BARRETOS IGPM+10,42% ABR/2026": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9e3ef71f5e8c88f7605ab",
+      "securityName": "CRI Barretos Pós-fixado 20/Abr/2026",
+      "securityMainId": "CRI20L0483929",
+      "lastDescriptionRaw": "Compra - cri - CETIP_20L0483929 - CRI BARRETOS IGPM+10,42% Abr/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 33
+    },
+    "CUPOM - CRI - CETIP_21H0850158 - CRI BEWIKI IPCA+10,00% 20/AGO/2031": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67d9e18271f5e8c88f760590",
+      "securityName": "CRI Bewiki Pós-fixado 20/Ago/2031",
+      "securityMainId": "CRI21H0850158",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_21H0850158 - CRI BEWIKI IPCA+10,00% 20/Ago/2031",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 919
+    },
+    "AMORTIZACAO - CRI - CETIP_21H0850158 - CRI BEWIKI IPCA+10,00% 20/AGO/2031": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67d9e18271f5e8c88f760590",
+      "securityName": "CRI Bewiki Pós-fixado 20/Ago/2031",
+      "securityMainId": "CRI21H0850158",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_21H0850158 - CRI BEWIKI IPCA+10,00% 20/Ago/2031",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 64
+    },
+    "COMPRA - CRI - CETIP_21H0850158 - CRI BEWIKI IPCA+10,00% 20/AGO/2031": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9e18271f5e8c88f760590",
+      "securityName": "CRI Bewiki Pós-fixado 20/Ago/2031",
+      "securityMainId": "CRI21H0850158",
+      "lastDescriptionRaw": "Compra - cri - CETIP_21H0850158 - CRI BEWIKI IPCA+10,00% 20/Ago/2031",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 35
+    },
+    "CUPOM - CRI - CETIP_20K0659367 - CRI REAL PARQUE IPCA+11,25% 10/NOV/2026": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67d9e14771f5e8c88f760589",
+      "securityName": "CRI Real Parque Pós-fixado 10/Nov/2026",
+      "securityMainId": "CRI20K0659367",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_20K0659367 - CRI REAL PARQUE IPCA+11,25% 10/Nov/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 886
+    },
+    "AMORTIZACAO - CRI - CETIP_20K0659367 - CRI REAL PARQUE IPCA+11,25% 10/NOV/2026": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67d9e14771f5e8c88f760589",
+      "securityName": "CRI Real Parque Pós-fixado 10/Nov/2026",
+      "securityMainId": "CRI20K0659367",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_20K0659367 - CRI REAL PARQUE IPCA+11,25% 10/Nov/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 78
+    },
+    "COMPRA - CRI - CETIP_20K0659367 - CRI REAL PARQUE IPCA+11,25% 10/NOV/2026": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9e14771f5e8c88f760589",
+      "securityName": "CRI Real Parque Pós-fixado 10/Nov/2026",
+      "securityMainId": "CRI20K0659367",
+      "lastDescriptionRaw": "Compra - cri - CETIP_20K0659367 - CRI REAL PARQUE IPCA+11,25% 10/Nov/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 24
+    },
+    "VENDA - FUNDO - 29.152.383/0001-03 - ITAU PRIVATE WEALTH": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbf7f56efc7ce2275bdfb",
+      "securityName": "Itaú Private Wealth IQ RF FICFI",
+      "securityMainId": "29.152.383/0001-03",
+      "lastDescriptionRaw": "Venda_1 - fundo - 29.152.383/0001-03 - ITAÚ PRIVATE WEALTH",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 948
+    },
+    "IR SOBRE RESGATE/VENDA DE <ACCT> PRIVATE WEALTH IQ RF": {
+      "beehusTransactionType": "taxes",
+      "securityId": "67ffbf7f56efc7ce2275bdfb",
+      "securityName": "Itaú Private Wealth IQ RF FICFI",
+      "securityMainId": "29.152.383/0001-03",
+      "lastDescriptionRaw": "IR sobre Resgate/Venda de (53632) PRIVATE WEALTH IQ RF",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 116
+    },
+    "AMORTIZACAO - GENERICO - FIDC_KOVI - FIDC KOVI": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbe7756efc7ce2275b8ed",
+      "securityName": "FIDC Kovi I",
+      "securityMainId": "38.137.153/0001-58",
+      "lastDescriptionRaw": "Amortização - generico - FIDC_KOVI - FIDC KOVI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 599
+    },
+    "RENDIMENTO - GENERICO - FIDC_KOVI - FIDC KOVI": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67ffbe7756efc7ce2275b8ed",
+      "securityName": "FIDC Kovi I",
+      "securityMainId": "38.137.153/0001-58",
+      "lastDescriptionRaw": "Rendimento - generico - FIDC_KOVI - FIDC KOVI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 264
+    },
+    "COMPRA - GENERICO - FIDC_KOVI - FIDC KOVI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbe7756efc7ce2275b8ed",
+      "securityName": "FIDC Kovi I",
+      "securityMainId": "38.137.153/0001-58",
+      "lastDescriptionRaw": "Compra - generico - FIDC_KOVI - FIDC KOVI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 15
+    },
+    "TED TER BCO 208 AGE 1 CTA 9172094 - TED APLICACAO FUNDOS OBY AGIL FIRF RL": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68f4198b6d2e3dd123c9babf",
+      "securityName": "Oby Ágil FI RF",
+      "securityMainId": "43.104.966/0001-81",
+      "lastDescriptionRaw": "TED TER BCO 208 AGE 1 CTA 9172094  - TED APLICAÇÃO FUNDOS Oby Ágil FIRF RL",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 1112
+    },
+    "CUPOM - DEBENTURE - PGTE12 - DEB. PLUGIFY CDI+8,5% SET/2024": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67fef11156efc7ce227569ec",
+      "securityName": "DEB PGTE Pós-fixado 30/Set/2024",
+      "securityMainId": "PGTE12",
+      "lastDescriptionRaw": "Cupom_1 - debenture - PGTE12 - DEB. PLUGIFY CDI+8,5% Set/2024",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 709
+    },
+    "COMPRA - DEBENTURE - PGTE12 - DEB. PLUGIFY CDI+8,5% SET/2024": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67fef11156efc7ce227569ec",
+      "securityName": "DEB PGTE Pós-fixado 30/Set/2024",
+      "securityMainId": "PGTE12",
+      "lastDescriptionRaw": "Compra - debenture - PGTE12 - DEB. PLUGIFY CDI+8,5% Set/2024",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 56
+    },
+    "VENDA - FUNDO - 31.611.503/0001-27 - CSHG PREV DI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbde456efc7ce2275b637",
+      "securityName": "Cshg Prev Master Soberano FI RF DI",
+      "securityMainId": "31.611.503/0001-27",
+      "lastDescriptionRaw": "Venda_1 - fundo - 31.611.503/0001-27 - CSHG PREV DI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 945
+    },
+    "CUPOM - CRI - CETIP_21I0142394 - CRI SOLAR PEDRA IPCA+9,95% 22/MAI/2028": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67feefca56efc7ce22754fc0",
+      "securityName": "CRI Solar Pedra Pós-fixado 20/Mai/2028",
+      "securityMainId": "CRI21I0142394",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_21I0142394 - CRI SOLAR PEDRA IPCA+9,95% 22/Mai/2028",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 381
+    },
+    "AMORTIZACAO - CRI - CETIP_21I0142394 - CRI SOLAR PEDRA IPCA+9,95% 22/MAI/2028": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67feefca56efc7ce22754fc0",
+      "securityName": "CRI Solar Pedra Pós-fixado 20/Mai/2028",
+      "securityMainId": "CRI21I0142394",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_21I0142394 - CRI SOLAR PEDRA IPCA+9,95% 22/Mai/2028",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 371
+    },
+    "VENDA TOTAL - CRI - CETIP_21I0142394 - CRI SOLAR PEDRA IPCA+9,95% 22/MAI/2028": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67feefca56efc7ce22754fc0",
+      "securityName": "CRI Solar Pedra Pós-fixado 20/Mai/2028",
+      "securityMainId": "CRI21I0142394",
+      "lastDescriptionRaw": "Venda Total - cri - CETIP_21I0142394 - CRI SOLAR PEDRA IPCA+9,95% 22/Mai/2028",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 24
+    },
+    "VENDA TOTAL - GENERICO - REPOBTG9990CDI - COMPROMISSADA BTG PACTUAL 99,90%CDI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "686458ae3446b6450bea7064",
+      "securityName": "Compromissada BTG Pactual",
+      "securityMainId": "Compromissada_TS_BTG",
+      "lastDescriptionRaw": "Venda Total_1 - generico - REPOBTG9990CDI - COMPROMISSADA BTG PACTUAL 99,90%CDI",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 537
+    },
+    "DIVIDENDO - IE0030624948": {
+      "beehusTransactionType": "coupon",
+      "securityId": "686576e7f0e008b693b897ce",
+      "securityName": "BNY Mellon US Treasury Fund",
+      "securityMainId": "IE0030624948",
+      "lastDescriptionRaw": "Dividendo - IE0030624948",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 49
+    },
+    "COMPRA - IE0030624948": {
+      "beehusTransactionType": "buySell",
+      "securityId": "686576e7f0e008b693b897ce",
+      "securityName": "BNY Mellon US Treasury Fund",
+      "securityMainId": "IE0030624948",
+      "lastDescriptionRaw": "Compra - IE0030624948",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 77
+    },
+    "RENDIMENTO - IE0030624948": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "686576e7f0e008b693b897ce",
+      "securityName": "BNY Mellon US Treasury Fund",
+      "securityMainId": "IE0030624948",
+      "lastDescriptionRaw": "Rendimento - IE0030624948",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 17
+    },
+    "RENDIMENTO - GENERICO - FIDC_PLUGIFY - FIDC PLUGIFY MEZANINO": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67ffbe7856efc7ce2275b8ff",
+      "securityName": "Plugify Tech I FIDC",
+      "securityMainId": "43.866.371/0001-63",
+      "lastDescriptionRaw": "Rendimento_3 - generico - FIDC_PLUGIFY - FIDC PLUGIFY MEZANINO",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 270
+    },
+    "AMORTIZACAO - GENERICO - FIDC_PLUGIFY - FIDC PLUGIFY MEZANINO": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbe7856efc7ce2275b8ff",
+      "securityName": "Plugify Tech I FIDC",
+      "securityMainId": "43.866.371/0001-63",
+      "lastDescriptionRaw": "Amortização_2 - generico - FIDC_PLUGIFY - FIDC PLUGIFY MEZANINO",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 311
+    },
+    "COMPRA - GENERICO - FIDC_PLUGIFY - FIDC PLUGIFY MEZANINO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbe7856efc7ce2275b8ff",
+      "securityName": "Plugify Tech I FIDC",
+      "securityMainId": "43.866.371/0001-63",
+      "lastDescriptionRaw": "Compra - generico - FIDC_PLUGIFY - FIDC PLUGIFY MEZANINO",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 34
+    },
+    "AMORTIZACAO - FUNDO - 35.819.274/0001-91 - JIVE DISTRESSED III": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbfde56efc7ce2275bfed",
+      "securityName": "Cshg Jive Distressed Allocation III FICFI MM CP",
+      "securityMainId": "35.819.274/0001-91",
+      "lastDescriptionRaw": "Amortização - fundo - 35.819.274/0001-91 - JIVE DISTRESSED III",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 558
+    },
+    "COMPRA - FUNDO - 35.819.274/0001-91 - JIVE DISTRESSED III": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbfde56efc7ce2275bfed",
+      "securityName": "Cshg Jive Distressed Allocation III FICFI MM CP",
+      "securityMainId": "35.819.274/0001-91",
+      "lastDescriptionRaw": "Compra - fundo - 35.819.274/0001-91 - JIVE DISTRESSED III",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 65
+    },
+    "RENDIMENTO - GENERICO - ZAGH11_ARKHOS - ZAGH11": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67fee84456efc7ce22750701",
+      "securityName": "Zagh11 II - FII",
+      "securityMainId": "ZAGH11_ARKHOS",
+      "lastDescriptionRaw": "Rendimento_1 - generico - ZAGH11_ARKHOS - ZAGH11",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 382
+    },
+    "DIVIDENDO - IE0005070622": {
+      "beehusTransactionType": "coupon",
+      "securityId": "68657c7ef0e008b693bbf954",
+      "securityName": "BNY Mellon US Dollar Liquidity Adm Shares",
+      "securityMainId": "IE0032177440",
+      "lastDescriptionRaw": "Dividendo - IE0005070622",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 65
+    },
+    "COMPRA - IE0005070622": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68657c7ef0e008b693bbf954",
+      "securityName": "BNY Mellon US Dollar Liquidity Adm Shares",
+      "securityMainId": "IE0032177440",
+      "lastDescriptionRaw": "Compra - IE0005070622",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 69
+    },
+    "RENDIMENTO - IE0005070622": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "68657c7ef0e008b693bbf954",
+      "securityName": "BNY Mellon US Dollar Liquidity Adm Shares",
+      "securityMainId": "IE0032177440",
+      "lastDescriptionRaw": "Rendimento - IE0005070622",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 34
+    },
+    "TED TER BCO 17 AGE 1 CTA 6298 7 - TED APLICACAO FUNDOS MAPFRE CONFIANZA FIF RF R": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68657990f0e008b693ba1afb",
+      "securityName": "Mapfre Confianza FI DI",
+      "securityMainId": "51253495000100",
+      "lastDescriptionRaw": "TED TER BCO 17 AGE 1 CTA 6298 7 - TED APLICAÇÃO FUNDOS Mapfre Confianza FIF RF R",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 646
+    },
+    "COMPRA - TITULO - LFT_05012022_01032028 - LFT MAR/2028": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67feea9a56efc7ce22752cd4",
+      "securityName": "LFT Mar/2028",
+      "securityMainId": "BRSTNCLF1RI1",
+      "lastDescriptionRaw": "Compra - titulo - LFT_05012022_01032028 - LFT Mar/2028",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 389
+    },
+    "COMPRA <OPCODE> | CRI VIRGO SEC - SET/2031": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68f8d22ba4cc5ae8aab4bc91",
+      "securityName": "CRI Virgo Pós-fixado 24/Set/2031",
+      "securityMainId": "24I1827028",
+      "lastDescriptionRaw": "COMPRA 24I1827028 | CRI VIRGO SEC - SET/2031",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 86
+    },
+    "AMORTIZACAO - CRI <OPCODE> - BARIGUI SECURITIZADORA S.A. - <OPCODE> - IPC-A - 10.5 - 2033-09-20T00:00:00": {
+      "beehusTransactionType": "amortization",
+      "securityId": "69d5056fbbf646d7e3e77e44",
+      "securityName": "CRI Barigui Pós-fixado 20/Set/2033",
+      "securityMainId": "25I1899772",
+      "lastDescriptionRaw": "Amortização - CRI 25I1899772 - BARIGUI SECURITIZADORA S.A. - 25I1899772 - IPC-A - 10.5 - 2033-09-20T00:00:00",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 277
+    },
+    "JUROS - CRI <OPCODE> - BARIGUI SECURITIZADORA S.A. - <OPCODE> - IPC-A - 10.5 - 2033-09-20T00:00:00": {
+      "beehusTransactionType": "coupon",
+      "securityId": "69d5056fbbf646d7e3e77e44",
+      "securityName": "CRI Barigui Pós-fixado 20/Set/2033",
+      "securityMainId": "25I1899772",
+      "lastDescriptionRaw": "Juros - CRI 25I1899772 - BARIGUI SECURITIZADORA S.A. - 25I1899772 - IPC-A - 10.5 - 2033-09-20T00:00:00",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 277
+    },
+    "DIVIDENDO - ACAO - US:SPY - SPDR S&P 500 TRUST": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67fee84c56efc7ce22750a7c",
+      "securityName": "SPDR S&P 500 Trust ETF",
+      "securityMainId": "US:SPY",
+      "lastDescriptionRaw": "Dividendo - acao - US:SPY - SPDR S&P 500 TRUST",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 162
+    },
+    "COMPRA - ACAO - US:SPY - SPDR S&P 500 TRUST": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67fee84c56efc7ce22750a7c",
+      "securityName": "SPDR S&P 500 Trust ETF",
+      "securityMainId": "US:SPY",
+      "lastDescriptionRaw": "Compra - acao - US:SPY - SPDR S&P 500 TRUST",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 196
+    },
+    "RENDIMENTO - GENERICO - ANGA_SOLFACIL_SR - ANGA SOLFACIL SR": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67ffbc1456efc7ce2275b036",
+      "securityName": "FIDC Is Green Solfácil I De",
+      "securityMainId": "36.771.685/0001-17_senior1",
+      "lastDescriptionRaw": "Rendimento - generico - ANGA_SOLFACIL_SR - ANGÁ SOLFÁCIL SR",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 95
+    },
+    "AMORTIZACAO - GENERICO - ANGA_SOLFACIL_SR - ANGA SOLFACIL SR": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbc1456efc7ce2275b036",
+      "securityName": "FIDC Is Green Solfácil I De",
+      "securityMainId": "36.771.685/0001-17_senior1",
+      "lastDescriptionRaw": "Amortização - generico - ANGA_SOLFACIL_SR - ANGÁ SOLFÁCIL SR",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 68
+    },
+    "COMPRA - GENERICO - ANGA_SOLFACIL - ANGA SOLFACIL": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc1456efc7ce2275b036",
+      "securityName": "FIDC Is Green Solfácil I De",
+      "securityMainId": "36.771.685/0001-17_senior1",
+      "lastDescriptionRaw": "Compra - generico - ANGA_SOLFACIL - ANGÁ SOLFÁCIL",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 15
+    },
+    "AMORTIZACAO - CRI - CETIP_20L0483914 - CRI BARRETOS SUB. IGPM+16,0% ABR/2026": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67feefbe56efc7ce22754d63",
+      "securityName": "CRI Barretos Pós-fixado 20/Abr/2026",
+      "securityMainId": "CRI20L0483914",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_20L0483914 - CRI BARRETOS SUB. IGPM+16,0% Abr/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 285
+    },
+    "CUPOM - CRI - CETIP_20L0483914 - CRI BARRETOS SUB. IGPM+16,0% ABR/2026": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67feefbe56efc7ce22754d63",
+      "securityName": "CRI Barretos Pós-fixado 20/Abr/2026",
+      "securityMainId": "CRI20L0483914",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_20L0483914 - CRI BARRETOS SUB. IGPM+16,0% Abr/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 169
+    },
+    "COMPRA - CRI - CETIP_20L0483914 - CRI BARRETOS SUB. IGPM+16,0% ABR/2026": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67feefbe56efc7ce22754d63",
+      "securityName": "CRI Barretos Pós-fixado 20/Abr/2026",
+      "securityMainId": "CRI20L0483914",
+      "lastDescriptionRaw": "Compra - cri - CETIP_20L0483914 - CRI BARRETOS SUB. IGPM+16,0% Abr/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 12
+    },
+    "CUPOM - CRI - CETIP_21F0950052 - CRI GVI SUB IPCA+14,50% 20/DEZ/2029": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67feefc056efc7ce22754def",
+      "securityName": "CRI GVI IPCA+14.50% 20/Dez/2029",
+      "securityMainId": "CRI21F0950052",
+      "lastDescriptionRaw": "Cupom - cri - CETIP_21F0950052 - CRI GVI SUB IPCA+14,50% 20/Dez/2029",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 232
+    },
+    "AMORTIZACAO - CRI - CETIP_21F0950052 - CRI GVI SUB IPCA+14,50% 20/DEZ/2029": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67feefc056efc7ce22754def",
+      "securityName": "CRI GVI IPCA+14.50% 20/Dez/2029",
+      "securityMainId": "CRI21F0950052",
+      "lastDescriptionRaw": "Amortização - cri - CETIP_21F0950052 - CRI GVI SUB IPCA+14,50% 20/Dez/2029",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 100
+    },
+    "COMPRA <OPCODE> | CRI GIP CAMPOS (CASA DI SIRENA) - AGO/2029": {
+      "beehusTransactionType": "buySell",
+      "securityId": "69aa0812f2cea3b2b7169ffb",
+      "securityName": "CRI Riza Securitizadora Pós-fixado 29/Ago/2029",
+      "securityMainId": "24H2367531",
+      "lastDescriptionRaw": "COMPRA 24H2367531 | CRI GIP CAMPOS (CASA DI SIRENA) - AGO/2029",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 53
+    },
+    "PGTO JUROS <OPCODE> | CRI LVCP SECURITIZADORA - SET/2029": {
+      "beehusTransactionType": "coupon",
+      "securityId": "69c5aec60ed0c65eb2da8d56",
+      "securityName": "CRI Parque dos Ingleses Pós-fixado 20/Jun/2029",
+      "securityMainId": "CRI24I1656558",
+      "lastDescriptionRaw": "Pgto Juros 24I1656558 | CRI LVCP SECURITIZADORA - SET/2029",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 93
+    },
+    "PGTO AMORTIZACAO <OPCODE> | CRI LVCP SECURITIZADORA - SET/2029": {
+      "beehusTransactionType": "amortization",
+      "securityId": "69c5aec60ed0c65eb2da8d56",
+      "securityName": "CRI Parque dos Ingleses Pós-fixado 20/Jun/2029",
+      "securityMainId": "CRI24I1656558",
+      "lastDescriptionRaw": "Pgto Amortização 24I1656558 | CRI LVCP SECURITIZADORA - SET/2029",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 93
+    },
+    "PGTO JUROS <OPCODE> | CRI LVCP SECURITIZADORA - JUN/2034": {
+      "beehusTransactionType": "coupon",
+      "securityId": "69d5056cbbf646d7e3e77e26",
+      "securityName": "CRI Maranhão Pós-fixado 20/Jun/2034",
+      "securityMainId": "24G1967273",
+      "lastDescriptionRaw": "Pgto Juros 24G1967273 | CRI LVCP SECURITIZADORA - JUN/2034",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 191
+    },
+    "RENDIMENTO - ACAO - VIGT11 - VINCI ENERGIA": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67d9df9271f5e8c88f760558",
+      "securityName": "Vinci Energia - FII",
+      "securityMainId": "VIGT11",
+      "lastDescriptionRaw": "Rendimento - acao - VIGT11 - VINCI ENERGIA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 205
+    },
+    "VENDA - ACAO - VIGT11 - VINCI ENERGIA": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9df9271f5e8c88f760558",
+      "securityName": "Vinci Energia - FII",
+      "securityMainId": "VIGT11",
+      "lastDescriptionRaw": "Venda - acao - VIGT11 - VINCI ENERGIA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 143
+    },
+    "AMORTIZACAO - ACAO - VIGT11 - VINCI ENERGIA": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67d9df9271f5e8c88f760558",
+      "securityName": "Vinci Energia - FII",
+      "securityMainId": "VIGT11",
+      "lastDescriptionRaw": "Amortização - acao - VIGT11 - VINCI ENERGIA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 14
+    },
+    "COMPRA - TITULO - NTNB_10022010_15082050 - NTN-B AGO/2050": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67feea9d56efc7ce22752d38",
+      "securityName": "NTN-B Ago/2050",
+      "securityMainId": "BRSTNCNTB476",
+      "lastDescriptionRaw": "Compra - titulo - NTNB_10022010_15082050 - NTN-B Ago/2050",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 115
+    },
+    "CUPOM - TITULO - NTNB_10022010_15082050 - NTN-B AGO/2050": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67feea9d56efc7ce22752d38",
+      "securityName": "NTN-B Ago/2050",
+      "securityMainId": "BRSTNCNTB476",
+      "lastDescriptionRaw": "Cupom_1 - titulo - NTNB_10022010_15082050 - NTN-B Ago/2050",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 119
+    },
+    "APLICACAO NO FUNDO I ZERAGEM RF REF FI <ACCT>": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68bb3c17c7b90491612e7843",
+      "securityName": "Itau Zeragem RF Ref DI FIF RL",
+      "securityMainId": "35823433000121",
+      "lastDescriptionRaw": "Aplicação no Fundo I ZERAGEM RF REF FI 54582",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 377
+    },
+    "RENDIMENTO - ACAO - GGRC11 - GGR COVEPI RENDA": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67fee83856efc7ce2275019a",
+      "securityName": "Ggr Covepi Renda - FII",
+      "securityMainId": "GGRC11",
+      "lastDescriptionRaw": "Rendimento - acao - GGRC11 - GGR COVEPI RENDA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 53
+    },
+    "VENDA - ACAO - GGRC11 - GGR COVEPI RENDA": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67fee83856efc7ce2275019a",
+      "securityName": "Ggr Covepi Renda - FII",
+      "securityMainId": "GGRC11",
+      "lastDescriptionRaw": "Venda_6 - acao - GGRC11 - GGR COVEPI RENDA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 179
+    },
+    "VENDA - 26.559.284/0001-44": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffc19656efc7ce2275ca40",
+      "securityName": "Trend Pós-Fixado FICFI RF Simples",
+      "securityMainId": "26.559.284/0001-44",
+      "lastDescriptionRaw": "Venda - 26.559.284/0001-44",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 346
+    },
+    "VENDA - 09.636.393/0001-07": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc1b56efc7ce2275b120",
+      "securityName": "Bnp Paribas Match Di FI RF CP",
+      "securityMainId": "09.636.393/0001-07",
+      "lastDescriptionRaw": "Venda - 09.636.393/0001-07",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 230
+    },
+    "COMPRA - FUNDO - 37.910.132/0001-60 - TREND INVESTBACK XP": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffc19656efc7ce2275ca3a",
+      "securityName": "Trend Investback FICFI RF Simples",
+      "securityMainId": "37.910.132/0001-60",
+      "lastDescriptionRaw": "Compra - fundo - 37.910.132/0001-60 - TREND INVESTBACK XP",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 153
+    },
+    "COMPRA - MERCFUT - FUTDI1F26 - DI FUTURO JAN/2026": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67fee86c56efc7ce22750e5a",
+      "securityName": "Futuro de DI - Jan/2026",
+      "securityMainId": "FUTDI1F26",
+      "lastDescriptionRaw": "Compra - mercfut - FUTDI1F26 - DI FUTURO Jan/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 137
+    },
+    "COMPRA - TITULO - LFT_06092019_01032026 - LFT MAR/2026": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67feea9a56efc7ce22752ccc",
+      "securityName": "LFT Mar/2026",
+      "securityMainId": "BRSTNCLF1RE0",
+      "lastDescriptionRaw": "Compra - titulo - LFT_06092019_01032026 - LFT Mar/2026",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 96
+    },
+    "AMORTIZACAO - FUNDO - 28.549.930/0001-18 - JIVE DISTRESSED II": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbfdd56efc7ce2275bfe1",
+      "securityName": "Cshg Jive Distressed Allocation II FICFI MM CP",
+      "securityMainId": "28.549.930/0001-18",
+      "lastDescriptionRaw": "Amortização - fundo - 28.549.930/0001-18 - JIVE DISTRESSED II",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 223
+    },
+    "RENDIMENTO - FUNDO - 28.549.930/0001-18 - JIVE DISTRESSED II": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67ffbfdd56efc7ce2275bfe1",
+      "securityName": "Cshg Jive Distressed Allocation II FICFI MM CP",
+      "securityMainId": "28.549.930/0001-18",
+      "lastDescriptionRaw": "Rendimento - fundo - 28.549.930/0001-18 - JIVE DISTRESSED II",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 44
+    },
+    "COMPRA - FUNDO - 28.549.930/0001-18 - JIVE DISTRESSED II": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbfdd56efc7ce2275bfe1",
+      "securityName": "Cshg Jive Distressed Allocation II FICFI MM CP",
+      "securityMainId": "28.549.930/0001-18",
+      "lastDescriptionRaw": "Compra - fundo - 28.549.930/0001-18 - JIVE DISTRESSED II",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 20
+    },
+    "AMORTIZACAO - ACAO - PICE11 - PATRIA INFRAESTRUTURA": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67d9deef71f5e8c88f760536",
+      "securityName": "Patria Infraestrutura - FII",
+      "securityMainId": "PICE11",
+      "lastDescriptionRaw": "Amortização - acao - PICE11 - PATRIA INFRAESTRUTURA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 267
+    },
+    "VENDA - ACAO - PICE11 - PATRIA INFRAESTRUTURA": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9deef71f5e8c88f760536",
+      "securityName": "Patria Infraestrutura - FII",
+      "securityMainId": "PICE11",
+      "lastDescriptionRaw": "Venda - acao - PICE11 - PATRIA INFRAESTRUTURA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 33
+    },
+    "RENDIMENTO - ACAO - PICE11 - PATRIA INFRAESTRUTURA": {
+      "beehusTransactionType": "coupon",
+      "securityId": "67d9deef71f5e8c88f760536",
+      "securityName": "Patria Infraestrutura - FII",
+      "securityMainId": "PICE11",
+      "lastDescriptionRaw": "Rendimento - acao - PICE11 - PATRIA INFRAESTRUTURA",
+      "addedAt": "2026-06-03T22:23:23Z",
+      "lastSeenAt": "2026-06-03T22:23:23Z",
+      "hits": 16
+    },
+    "COTAS NO FUNDO VICC FEE A A FIP": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffc20956efc7ce2275cde6",
+      "securityName": "Vinci Climate Change Feeder A FIP Multiestratégia",
+      "securityMainId": "46.375.590/0001-38_classeA",
+      "lastDescriptionRaw": "COTAS NO FUNDO VICC FEE A A FIP",
+      "addedAt": "2026-06-03T22:36:29Z",
+      "lastSeenAt": "2026-06-03T22:36:29Z",
+      "hits": 1
+    },
+    "BTGP LOGCP FII": {
+      "beehusTransactionType": "dividend",
+      "securityId": "67fee83a56efc7ce22750283",
+      "securityName": "Btg Logística - FII",
+      "securityMainId": "BTLC11",
+      "lastDescriptionRaw": "BTGP LOGCP FII",
+      "addedAt": "2026-06-03T22:39:42Z",
+      "lastSeenAt": "2026-06-03T22:39:42Z",
+      "hits": 1
+    },
+    "SUB A INFRA RL PERFIN VOYAGER FIP": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffc11456efc7ce2275c5cc",
+      "securityName": "Perfin Voyager FIP IE",
+      "securityMainId": "46.375.484/0001-54",
+      "lastDescriptionRaw": "SUB A INFRA RL PERFIN VOYAGER FIP",
+      "addedAt": "2026-06-03T22:40:33Z",
+      "lastSeenAt": "2026-06-03T22:40:33Z",
+      "hits": 1
+    },
+    "COPA V FEEDER PRIVATE FUNDO DE INVESTIME": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbd5156efc7ce2275b462",
+      "securityName": "Copa V Feeder Private FIP Multiestratégia",
+      "securityMainId": "42.102.615/0001-79",
+      "lastDescriptionRaw": "COPA V FEEDER PRIVATE FUNDO DE INVESTIME",
+      "addedAt": "2026-06-03T22:52:08Z",
+      "lastSeenAt": "2026-06-03T22:52:08Z",
+      "hits": 1
+    },
+    "IOF S/CAMBIO": {
+      "beehusTransactionType": "taxes",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "IOF S/CAMBIO",
+      "addedAt": "2026-06-03T22:55:56Z",
+      "lastSeenAt": "2026-06-03T22:55:56Z",
+      "hits": 2
+    },
+    "LIQ CAMBIO": {
+      "beehusTransactionType": "withdrawalDeposit",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "LIQ CAMBIO",
+      "addedAt": "2026-06-03T22:55:56Z",
+      "lastSeenAt": "2026-06-03T22:55:56Z",
+      "hits": 1
+    },
+    "AMORTIZACAO DO FUNDO SPECTRA V LATAM FIM IE": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffc12056efc7ce2275c70b",
+      "securityName": "Spectra V Latam FI MM IE",
+      "securityMainId": "37.443.548/0001-16",
+      "lastDescriptionRaw": "AMORTIZAÇÃO DO FUNDO SPECTRA V LATAM FIM IE",
+      "addedAt": "2026-06-05T13:44:41Z",
+      "lastSeenAt": "2026-06-05T13:44:41Z",
+      "hits": 1
+    },
+    "PPEI11": {
+      "beehusTransactionType": "",
+      "securityId": "67fee83856efc7ce227501a4",
+      "securityName": "Prisma Proton Energia - FII",
+      "securityMainId": "",
+      "lastDescriptionRaw": "PPEI11",
+      "addedAt": "2026-06-05T14:33:03Z",
+      "lastSeenAt": "2026-06-05T14:33:03Z",
+      "hits": 1
+    },
+    "RENDIMENTOS DE CLIENTES PPEI11": {
+      "beehusTransactionType": "coupon",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "RENDIMENTOS DE CLIENTES PPEI11",
+      "addedAt": "2026-06-05T14:33:26Z",
+      "lastSeenAt": "2026-06-05T14:33:26Z",
+      "hits": 1
+    },
+    "COR JSCP": {
+      "beehusTransactionType": "interestOnEquity",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "COR JSCP",
+      "addedAt": "2026-06-05T16:55:53Z",
+      "lastSeenAt": "2026-06-05T16:56:24Z",
+      "hits": 2
+    },
+    "RESGATE DE COTAS NO FUNDO - DGO FIM CP": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68506c5a312f8eeb4167260f",
+      "securityName": "DGO FI Mult",
+      "securityMainId": "23781789000160",
+      "lastDescriptionRaw": "Resgate de cotas no fundo - DGO FIM CP",
+      "addedAt": "2026-06-05T17:07:42Z",
+      "lastSeenAt": "2026-06-05T17:07:42Z",
+      "hits": 1
+    },
+    "LIQ BOLSA": {
+      "beehusTransactionType": "buySell",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "LIQ BOLSA",
+      "addedAt": "2026-06-05T17:23:26Z",
+      "lastSeenAt": "2026-06-05T17:23:26Z",
+      "hits": 1
+    },
+    "AJ POS DE FUT - PRG": {
+      "beehusTransactionType": "buySell",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "25E040710032",
+      "lastDescriptionRaw": "AJ POS DE FUT - PRG",
+      "addedAt": "2026-06-05T20:03:00Z",
+      "lastSeenAt": "2026-06-05T20:03:00Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "FX SPOT": {
+      "beehusTransactionType": "withdrawalDeposit",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "FX Spot",
+      "addedAt": "2026-06-10T21:27:26Z",
+      "lastSeenAt": "2026-06-10T21:27:26Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "HOTWIRE": {
+      "beehusTransactionType": "withdrawalDeposit",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "HOTWIRE",
+      "addedAt": "2026-06-10T21:28:37Z",
+      "lastSeenAt": "2026-06-10T21:28:37Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "INTEREST INCOME|MORGAN STANLEY BANK": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Interest Income|MORGAN STANLEY BANK",
+      "addedAt": "2026-06-10T21:33:10Z",
+      "lastSeenAt": "2026-06-10T21:33:10Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "UNITED STATES TREASURY BILLDUE: 10/01/2026": {
+      "beehusTransactionType": "buySell",
+      "securityId": "6973b245566b35e1cc23ae59",
+      "securityName": "US T Bill 01/Oct/2026",
+      "securityMainId": "USTBILL01102026",
+      "lastDescriptionRaw": "UNITED STATES TREASURY BILLDUE: 10/01/2026",
+      "addedAt": "2026-06-10T21:35:20Z",
+      "lastSeenAt": "2026-06-10T21:35:20Z",
+      "hits": 1
+    },
+    "CLICKPAY": {
+      "beehusTransactionType": "withdrawalDeposit",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "ClickPay",
+      "addedAt": "2026-06-10T21:38:22Z",
+      "lastSeenAt": "2026-06-10T21:38:22Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "SAFRA NATIONAL B CR CD": {
+      "beehusTransactionType": "withdrawalDeposit",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "SAFRA NATIONAL B CR CD",
+      "addedAt": "2026-06-10T21:38:48Z",
+      "lastSeenAt": "2026-06-10T21:38:48Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "TRF FR CORP CK": {
+      "beehusTransactionType": "withdrawalDeposit",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Trf fr Corp CK",
+      "addedAt": "2026-06-10T21:39:20Z",
+      "lastSeenAt": "2026-06-10T21:39:20Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "PROG AMERICAN INS": {
+      "beehusTransactionType": "taxes",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "PROG AMERICAN INS",
+      "addedAt": "2026-06-10T21:39:56Z",
+      "lastSeenAt": "2026-06-10T21:39:56Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "LIQ BOLSA (OPERACOES)": {
+      "beehusTransactionType": "buySell",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "LIQ BOLSA (Operacoes)",
+      "addedAt": "2026-06-10T22:07:59Z",
+      "lastSeenAt": "2026-06-10T22:07:59Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "CONTA REMUNERADA - RESGATE REMUNERACAO - BANCO BTG PACTUAL S.A.": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "CONTA REMUNERADA - RESGATE REMUNERAÇÃO - BANCO BTG PACTUAL S.A.",
+      "addedAt": "2026-06-10T23:08:31Z",
+      "lastSeenAt": "2026-06-10T23:08:31Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "COMPRA - CRI OPEA SECURITIZADORA S.A. - VENC.: 16/07/2029 <OPCODE>": {
+      "beehusTransactionType": "buySell",
+      "securityId": "693487b7c1cc90272b1cafab",
+      "securityName": "CRI Direcional Pós-fixado 16/Jul/2029",
+      "securityMainId": "24G02736838",
+      "lastDescriptionRaw": "COMPRA - CRI OPEA SECURITIZADORA S.A. - Venc.: 16/07/2029 24F1277566",
+      "addedAt": "2026-06-10T23:12:30Z",
+      "lastSeenAt": "2026-06-10T23:12:30Z",
+      "hits": 1
+    },
+    "CASHBACK GESTAO DE CARTEIRA": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Cashback Gestão de Carteira",
+      "addedAt": "2026-06-10T23:15:00Z",
+      "lastSeenAt": "2026-06-10T23:15:00Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "IMPOSTO - BLUEOAK SSI FIP SUBCLASSE A - TREND PE XXVI FIC FIRF SIMPLES RL": {
+      "beehusTransactionType": "taxes",
+      "securityId": "697ceef5e767ebc6576045c0",
+      "securityName": "Trend PE XXVI FIF",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Imposto - Blueoak SSI FIP Subclasse A - Trend PE XXVI FIC FIRF Simples RL",
+      "addedAt": "2026-06-11T17:37:05Z",
+      "lastSeenAt": "2026-06-11T17:37:05Z",
+      "hits": 1
+    },
+    "COMPRA - AXA WF US DYNAMIC HIGH YIELD BONDS CLASSE FIC CLASSES FIM CP RL": {
+      "beehusTransactionType": "buySell",
+      "securityId": "6a2af36303ff00588ce2af73",
+      "securityName": "Axa WF US Dynamic High Yield Bonds FIM",
+      "securityMainId": "45823918000179",
+      "lastDescriptionRaw": "Compra - Axa WF US Dynamic High Yield Bonds Classe FIC Classes FIM CP RL",
+      "addedAt": "2026-06-11T17:44:05Z",
+      "lastSeenAt": "2026-06-11T17:44:05Z",
+      "hits": 1
+    },
+    "LIQ BOLSA (TAXA SOBRE VALOR EM CUSTODIA TAXA": {
+      "beehusTransactionType": "brokerageFee",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "LIQ BOLSA (TAXA SOBRE VALOR EM CUSTÓDIA TAXA",
+      "addedAt": "2026-06-11T18:03:06Z",
+      "lastSeenAt": "2026-06-11T18:03:06Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "LIQ BOLSA (TAXA SOBRE VALOR EM CUSTODIA ESTORNO DE TAXA SOBRE POSICAO": {
+      "beehusTransactionType": "brokerageFee",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "LIQ BOLSA (TAXA SOBRE VALOR EM CUSTÓDIA ESTORNO DE TAXA SOBRE POSIÇÃO",
+      "addedAt": "2026-06-11T18:04:08Z",
+      "lastSeenAt": "2026-06-11T18:04:08Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "COTAS NO FUNDO - UJAY QUANT FIA": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffc19b56efc7ce2275cad6",
+      "securityName": "Ujay Quantamental FIA",
+      "securityMainId": "57.897.771/0001-40",
+      "lastDescriptionRaw": "cotas no fundo - UJAY QUANT FIA",
+      "addedAt": "2026-06-12T00:08:38Z",
+      "lastSeenAt": "2026-06-12T00:08:38Z",
+      "hits": 1
+    },
+    "DEBITO CBLC IRRF S/ RENDIMENTO DE BTC GGBR": {
+      "beehusTransactionType": "taxes",
+      "securityId": "67fee83e56efc7ce2275046a",
+      "securityName": "Gerdau - PN",
+      "securityMainId": "GGBR4",
+      "lastDescriptionRaw": "DEBITO CBLC IRRF S/ RENDIMENTO DE BTC GGBR",
+      "addedAt": "2026-06-12T14:12:59Z",
+      "lastSeenAt": "2026-06-12T14:12:59Z",
+      "hits": 1
+    },
+    "DEBITO CBLC IRRF S/ RENDIMENTO DE BTC RENT": {
+      "beehusTransactionType": "taxes",
+      "securityId": "67fee84356efc7ce22750692",
+      "securityName": "Localiza - ON",
+      "securityMainId": "RENT3",
+      "lastDescriptionRaw": "DEBITO CBLC IRRF S/ RENDIMENTO DE BTC RENT",
+      "addedAt": "2026-06-12T14:13:07Z",
+      "lastSeenAt": "2026-06-12T14:13:20Z",
+      "hits": 2
+    },
+    "DEBITO CBLC IRRF S/ RENDIMENTO DE BTC B3SA": {
+      "beehusTransactionType": "taxes",
+      "securityId": "67fee83a56efc7ce227502a6",
+      "securityName": "B3 - ON",
+      "securityMainId": "B3SA3",
+      "lastDescriptionRaw": "DEBITO CBLC IRRF S/ RENDIMENTO DE BTC B3SA",
+      "addedAt": "2026-06-12T14:13:14Z",
+      "lastSeenAt": "2026-06-12T14:13:14Z",
+      "hits": 1
+    },
+    "COMPRA DE CESSAO DE COTAS XP CDI 93 FOF NOV/26 FII RL": {
+      "beehusTransactionType": "buySell",
+      "securityId": "69c27e7f84ea99045aafd83a",
+      "securityName": "Fundo XP CDI 98 II (FIC FI RF)",
+      "securityMainId": "63638500000173",
+      "lastDescriptionRaw": "COMPRA DE CESSÃO DE COTAS XP CDI 93 FOF NOV/26 FII RL",
+      "addedAt": "2026-06-12T14:16:31Z",
+      "lastSeenAt": "2026-06-12T14:16:31Z",
+      "hits": 1
+    },
+    "RENDIMENTO FUNDO FECHADO BALCAO - VGPR11 - VALORA IMOB": {
+      "beehusTransactionType": "coupon",
+      "securityId": "69d3e0c778c1345fa867352d",
+      "securityName": "Valora Imobiliário MM Premium FII",
+      "securityMainId": "50180894000117",
+      "lastDescriptionRaw": "RENDIMENTO FUNDO FECHADO BALCÃO - VGPR11 - VALORA IMOB",
+      "addedAt": "2026-06-12T14:18:06Z",
+      "lastSeenAt": "2026-06-12T14:18:06Z",
+      "hits": 1
+    }
+  }
+}

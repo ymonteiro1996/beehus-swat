@@ -1,0 +1,14 @@
+{
+  "_comment": "Provisions for wallet T9-all-tiers — EMPTY because the missing provision is the error",
+  "activeProvisions": [],
+  "_expected_provision": {
+    "_comment": "This is what SHOULD exist but doesn't — the Bayesian engine detects this as MISSING_PROVISION",
+    "walletId": "T9-all-tiers",
+    "securityId": "s9",
+    "initialDate": "2026-02-10",
+    "liquidationDate": "2026-02-25",
+    "provisionType": "buySell",
+    "balance": 60000,
+    "description": "Provisao para compra de Fund I (3,000 cotas @ PU 20, D+15)"
+  }
+}

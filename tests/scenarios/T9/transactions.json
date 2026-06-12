@@ -1,0 +1,33 @@
+{
+  "_comment": "Transactions on liquidationDate=2026-02-10 for wallet T9-all-tiers",
+  "transactions": [
+    {
+      "_comment": "Fund J redemption — received R$ 3,000 instead of expected R$ 5,000 (IR withheld)",
+      "walletId": "T9-all-tiers",
+      "securityId": "s10",
+      "operationDate": "2026-02-10",
+      "liquidationDate": "2026-02-10",
+      "beehusTransactionType": "buySell",
+      "quantity": -1000,
+      "price": 5,
+      "balance": 3000,
+      "description": "Resgate Fund J — IR retido na fonte"
+    },
+    {
+      "_comment": "Other transactions inflating cash (R$ 37,000 extra that should not exist)",
+      "walletId": "T9-all-tiers",
+      "securityId": null,
+      "operationDate": "2026-02-10",
+      "liquidationDate": "2026-02-10",
+      "beehusTransactionType": "gainsExpenses",
+      "quantity": null,
+      "price": null,
+      "balance": 37000,
+      "description": "Transacao erronea — causa do cash mismatch"
+    }
+  ],
+  "_totals": {
+    "totalTransactions": 40000,
+    "_breakdown": "3,000 (Fund J buySell) + 37,000 (erroneous gainsExpenses) = 40,000"
+  }
+}

@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Credentials — never commit these
+user_connections.json
+
+# Local runtime data / caches (may contain real customer data)
+data/config.json
+data/securities_cache.json
+data/unprocessed_security_types.json
+data/rentability_thresholds.json
+data/saved_reports.json
+data/correcoes/
+data/refinement_feedback/
+data/dismissed_flags/
+data/excecoes/
+data/repeat_positions_logs/
+data/.tmp/
+data/settings.json
+data/*.backup-*.json
+data/precificacao_lists-*.json
+
+# Captured scenario snapshots (may contain real customer data — review before committing)
+tests/scenarios/T*/
+!tests/scenarios/T9/
+
+# Excel report outputs
+*.xlsx
+
+# Environment variables (contains passwords)
+.env
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Flask server logs (created by start.ps1, filenames include machine name)
+.swat-server*.out
+.swat-server*.err
+
+# Claude Code session logs and config
+*.jsonl
+.claude/
+
+# Duplicate subfolder created by OneDrive sync conflicts
+/Controle de cargas/
+
+# OS files
+.DS_Store
+Thumbs.db

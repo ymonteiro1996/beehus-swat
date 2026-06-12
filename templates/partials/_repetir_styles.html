@@ -1,0 +1,360 @@
+  {# ── Repetir Pos (Posição Projetada) ─────────────────────────────────
+     CSS extraído de repetir_posicoes.html para que o painel inline em
+     controlpanel.html e a página standalone /repetir-posicoes
+     compartilhem a mesma folha. Sem <style> wrapper: incluído dentro
+     do <style> do template pai (igual aos partials do Strip).
+
+     Regras `.fb-chip*` aqui são reaplicadas — em controlpanel.html já
+     existe um conjunto idêntico definido antes deste include, então
+     o redefine no fim ganha por ordem (e bate visualmente). Se algum
+     dia o chip do painel divergir do chip do Repetir, considere
+     escopar via `#repetir-view .fb-chip`. #}
+  /* Scoped under .rp- so this page can't bleed onto neighbours. Mirrors the
+     visual language of /carteira (filters, transfer-list, table). */
+  .rp-label { display:block; font-size:0.625rem; color:#6b7280; margin-bottom:0.15rem; }
+  .rp-input { width:100%; border:1px solid #d1d5db; border-radius:0.375rem; padding:0.25rem 0.45rem; font-size:0.6875rem; background:white; }
+  .rp-input-date { width:8.5rem; }
+  .rp-input:focus { outline:none; box-shadow:0 0 0 2px #93c5fd; border-color:#93c5fd; }
+  .rp-btn { padding:0.3rem 0.7rem; font-size:0.6875rem; border-radius:0.375rem; cursor:pointer; border:1px solid transparent; }
+  .rp-btn-primary { background:#2563eb; color:white; }
+  .rp-btn-primary:hover:not(:disabled) { background:#1d4ed8; }
+  .rp-btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
+  .rp-btn-muted { background:#e5e7eb; color:#374151; }
+  .rp-btn-muted:hover { background:#d1d5db; }
+  .rp-btn-success { background:#059669; color:white; }
+  .rp-btn-success:hover:not(:disabled) { background:#047857; }
+
+  /* `.rp-tab-btn` foi substituído por `.fb-chip` (padrão do
+     /controlpanel). Mantemos `.rp-tabs-bar` como wrapper porque o
+     z-index sticky abaixo ainda referencia ele. */
+  /* Defensive: keep the tab bar above any sticky/positioned descendant
+     (preview-pane sticky header lives at z-index 5; the wallet roster
+     table sits below the bar). Without this, a sticky child elsewhere
+     on the page could rise above the tabs and steal clicks. */
+  .rp-tabs-bar { position:relative; z-index:9999; pointer-events:auto; }
+
+  /* Transfer-list — copied from /carteira so the operator gets a familiar
+     interaction model when flagging wallets. */
+  .rp-xfer { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:stretch; }
+  .rp-xfer-pane { display:flex; flex-direction:column; min-height:200px; }
+  .rp-xfer-pane h4 { font-size:10px; text-transform:uppercase; color:#6b7280; margin:0 0 4px 2px; display:flex; justify-content:space-between; }
+  .rp-xfer select { flex:1; min-height:200px; border:1px solid #d1d5db; border-radius:6px; font-size:11px; padding:4px; background:white; }
+  .rp-xfer-actions { display:flex; flex-direction:column; justify-content:center; gap:4px; }
+  .rp-xfer-actions button { width:32px; height:28px; font-size:12px; border:1px solid #d1d5db; border-radius:4px; background:white; cursor:pointer; }
+  .rp-xfer-actions button:hover { background:#f3f4f6; }
+
+  /* Bloco NAV (Anterior/Projetada/Atual) acima da tabela — pode ser
+     ocultado via botão no canto direito. O wrapper recebe a classe
+     `.rp-nav-collapsed`; o conteúdo flex some, mas a barra (com o
+     botão) continua visível para o usuário restaurar. */
+  .rp-nav-bar { transition:padding 120ms ease; }
+  .rp-nav-bar.rp-nav-collapsed { padding:2px 0; }
+  .rp-nav-bar.rp-nav-collapsed .rp-nav-content { display:none !important; }
+  .rp-nav-bar > button:hover { background:#f3f4f6; }
+
+  .rp-tbl { width:100%; border-collapse:collapse; font-size:11px; }
+  .rp-tbl thead th { background:#eef2ff; color:#4338ca; text-transform:uppercase; font-size:9px; letter-spacing:0.02em; font-weight:600; padding:4px 6px; text-align:center; border-bottom:1px solid #c7d2fe; }
+  /* Sticky table header inside scroll containers (.rp-preview-scroll
+     etc). `position:sticky` on `<thead>` is patchy across browsers,
+     so apply to each `<th>` — that has universal support. */
+  .rp-tbl thead th { position:sticky; top:0; z-index:3; }
+  .rp-tbl tbody td { padding:4px 6px; border-bottom:1px solid #f3f4f6; text-align:right; font-variant-numeric:tabular-nums; font-size:11px; }
+  .rp-tbl tbody td.rp-tbl-left { text-align:left; }
+  .rp-tbl tbody tr:hover td { background:#f9fafb; }
+  /* Coloração de linhas dirigida por divergência VS target — linhas
+     sem divergência ficam sem cor de fundo (limpo). Linhas com
+     divergência (qtd/pu/saldo fora da tolerância, security ausente do
+     target, ou quantityMismatch) recebem fundo amarelo. As classes
+     antigas (`rp-row-changed`, `rp-row-matured`, `rp-row-new`) não
+     pintam mais o fundo — eram baseadas em "rep mudou em relação ao
+     source", que é informação ortogonal à divergência VS target. */
+  .rp-tbl tbody tr.rp-row-has-diff td { background:#fef9c3; }
+  .rp-tbl tbody tr.rp-row-matured td { color:#7f1d1d; }
+  html.dark .rp-tbl tbody tr.rp-row-has-diff td { background:#713f12; }
+
+  .rp-flag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:9999px; margin-right:4px; }
+  .rp-flag-buysell { background:#fef3c7; color:#92400e; }
+  .rp-flag-maturity { background:#fee2e2; color:#991b1b; }
+  .rp-flag-pendingPrice { background:#ede9fe; color:#6d28d9; }
+  .rp-flag-priceUnchanged { background:#f3f4f6; color:#6b7280; }
+  .rp-flag-curvaPrice { background:#dbeafe; color:#1e40af; }
+  .rp-flag-b1Price { background:#d1fae5; color:#065f46; }
+  .rp-flag-missingB1Price { background:#fee2e2; color:#991b1b; }
+  .rp-flag-targetPrice { background:#fae8ff; color:#86198f; }
+  /* `amtDiffOverride` — `rep.quantity` foi sobrescrita pela do
+     `targetProcessed` quando havia Δqty real sem buySell/provisão
+     (o caixa correspondente vai pro bloco "Provisões esperadas").
+     Vermelho-claro pra casar com a pill da pendência. */
+  .rp-flag-amtDiffOverride { background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; }
+
+  /* TARGET marker — when RULE_TARGET_PROCESSED_PRICE pulled the PU
+     from processedPosition at targetDate (the new authoritative
+     source), the repetição PU cell is highlighted in fuchsia + TARGET
+     tag. Wins over CURVA and B1 markers. */
+  .rp-target-cell { background:#fae8ff; padding:2px 6px; border-radius:4px;
+                    display:inline-flex; align-items:center; gap:6px;
+                    border:1px solid #f0abfc; }
+  .rp-target-tag  { font-size:9px; font-weight:700; letter-spacing:0.04em;
+                    color:#86198f; background:white; padding:1px 5px;
+                    border-radius:9999px; border:1px solid #f0abfc; }
+  html.dark .rp-target-cell { background:#581c87; border-color:#a855f7; }
+  html.dark .rp-target-tag  { background:#3b0764; color:#f5d0fe; border-color:#a855f7; }
+
+  /* Diff cells — green when repetição matches target, amber when there's
+     a small drift, red when the divergence crosses 0.01 on balance. */
+  .rp-diff-pos { color:#b45309; font-weight:600; }
+  .rp-diff-neg { color:#991b1b; font-weight:600; }
+  .rp-diff-zero { color:#16a34a; }
+  .rp-diff-na { color:#9ca3af; font-style:italic; }
+
+  /* Provisions chip in the wallet header */
+  .rp-prov-chip { font-size:10px; padding:1px 8px; border-radius:9999px;
+                  background:#fef3c7; color:#92400e; }
+  html.dark .rp-prov-chip { background:#78350f; color:#fde68a; }
+
+  /* Special preview rows (Provisões / Caixa) — visually distinct from
+     security rows so the operator can scan the table without confusing
+     them. Provisões on amber, Caixa on green; both with a left accent
+     stripe and slightly muted background. */
+  .rp-tbl tbody tr.rp-row-provision td { background:#fffbeb; }
+  .rp-tbl tbody tr.rp-row-provision td:first-child { border-left:3px solid #f59e0b; }
+  .rp-tbl tbody tr.rp-row-cash td { background:#f0fdf4; font-weight:500; }
+  .rp-tbl tbody tr.rp-row-cash td:first-child { border-left:3px solid #16a34a; }
+  html.dark .rp-tbl tbody tr.rp-row-provision td { background:#451a03; }
+  html.dark .rp-tbl tbody tr.rp-row-cash td { background:#052e16; }
+
+  /* "Provisão esperada" — provisão sugerida pelo sistema quando há
+     `amountDifference` sem buySell/provisão correspondente. A pill
+     vermelha-clara aparece na coluna `Provisões` da row do security
+     (sinalizando pendência) e dentro do bloco "Provisões esperadas"
+     do CRUD de provisões. */
+  .rp-expected-prov-pill {
+    display:inline-flex; align-items:center;
+    padding:0 6px; border-radius:3px;
+    background:#fee2e2; color:#b91c1c;
+    font-size:10px; font-weight:600;
+    border:1px solid #fca5a5;
+  }
+  html.dark .rp-expected-prov-pill {
+    background:#7f1d1d; color:#fecaca; border-color:#b91c1c;
+  }
+
+  /* Divisores verticais entre os grupos de colunas da prévia. Cada
+     grupo começa numa coluna conhecida pelo `data-col`; adicionando
+     `border-left` ali, o operador vê uma "moldura" suave separando
+     Original / Repetição / Target. A última (`diff`) fecha o grupo
+     Target. Cor pega o mesmo azul da borda do header para integrar. */
+  .rp-tbl [data-col="qtyOriginal"],
+  .rp-tbl [data-col="qtyRep"],
+  .rp-tbl [data-col="qtyTarget"],
+  .rp-tbl [data-col="diff"] { border-left:2px solid #c7d2fe; }
+  html.dark .rp-tbl [data-col="qtyOriginal"],
+  html.dark .rp-tbl [data-col="qtyRep"],
+  html.dark .rp-tbl [data-col="qtyTarget"],
+  html.dark .rp-tbl [data-col="diff"] { border-left-color:#4338ca; }
+
+  /* "Apenas com divergência" filter — quando o pane carrega
+     `rp-only-diffs`, linhas sem divergência VS target e as linhas de
+     contexto (caixa, provisão) somem. A marcação `rp-row-no-diff` é
+     aplicada por _renderPreview a cada `<tr>` cujo
+     hasDivergence = false; o filtro inteiro é CSS, então o toggle é
+     instantâneo (sem rerender). */
+  .rp-only-diffs .rp-row-no-diff,
+  .rp-only-diffs .rp-row-cash:not(.rp-row-cash-diverge),
+  .rp-only-diffs .rp-row-provision { display:none; }
+
+  /* Quantity-mismatch flag — rows where rep.quantity != target.quantity
+     get a thick amber left border so the operator can scan the table
+     for "quantity diverged" cases at a glance. The action TBD will
+     branch on this signal. */
+  .rp-tbl tbody tr.rp-row-qty-mismatch td:first-child { border-left:3px solid #dc2626; }
+  .rp-tbl tbody tr.rp-row-qty-mismatch td.rp-tbl-qty-rep {
+    background:#fee2e2; font-weight:600;
+  }
+  html.dark .rp-tbl tbody tr.rp-row-qty-mismatch td.rp-tbl-qty-rep {
+    background:#7f1d1d; color:#fecaca;
+  }
+
+  /* B1 marker — when the "Incluir preços B1" button has overridden the
+     repetição PU with a value from securityPrices.historyPrice (type=B1),
+     the cell is highlighted with a green pill + B1 tag so the operator
+     can tell at a glance which rows had the PU sourced from the system. */
+  .rp-b1-cell { background:#d1fae5; padding:2px 6px; border-radius:4px;
+                display:inline-flex; align-items:center; gap:6px;
+                border:1px solid #6ee7b7; }
+  .rp-b1-tag  { font-size:9px; font-weight:700; letter-spacing:0.04em;
+                color:#065f46; background:white; padding:1px 5px;
+                border-radius:9999px; border:1px solid #6ee7b7; }
+  html.dark .rp-b1-cell { background:#064e3b; border-color:#10b981; }
+  html.dark .rp-b1-tag  { background:#022c22; color:#a7f3d0; border-color:#10b981; }
+
+  /* CURVA marker — when the backend's RULE_CURVA_PRICE applied a PU from
+     the saved template of /precificacao (sidebar "Preços na Curva"), the
+     repetição PU cell is highlighted and a small CURVA tag is shown. */
+  .rp-curva-cell { background:#dbeafe; padding:2px 6px; border-radius:4px;
+                   display:inline-flex; align-items:center; gap:6px;
+                   border:1px solid #93c5fd; }
+  .rp-curva-tag  { font-size:9px; font-weight:700; letter-spacing:0.04em;
+                   color:#1e3a8a; background:white; padding:1px 5px;
+                   border-radius:9999px; border:1px solid #93c5fd; }
+  html.dark .rp-curva-cell { background:#1e3a8a; border-color:#3b82f6; }
+  html.dark .rp-curva-tag  { background:#0c1b3a; color:#bfdbfe; border-color:#3b82f6; }
+
+  /* Transaction column — multi-line, monospace for the balance, muted
+     description below. Width-capped so a wide description doesn't push
+     the rest of the table sideways. */
+  .rp-tx-cell    { max-width:240px; }
+  .rp-tx-row     { line-height:1.25; padding:1px 0; }
+  .rp-tx-row + .rp-tx-row { border-top:1px dashed #e5e7eb; margin-top:2px; padding-top:2px; }
+  .rp-tx-balance { font-family:ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
+
+  /* Painel de análise do Claude — inserido após o bloco NAV na prévia.
+     Mesma régua visual da Conciliação (violeta=pending, verde=done,
+     vermelho=error). Conteúdo principal em <pre> com whitespace
+     preservado pra que o markdown que o Claude escreve mantenha
+     quebras de linha e indentação. */
+  .rp-analysis-panel { padding:0 12px; margin-bottom:6px; }
+  .rp-analysis-card  { border:1px solid #ddd; border-radius:8px; padding:8px 12px; margin-top:6px; }
+  .rp-analysis-card.rp-analysis-pending { background:#f5f3ff; border-color:#ddd6fe; }
+  .rp-analysis-card.rp-analysis-done    { background:#ecfdf5; border-color:#a7f3d0; }
+  .rp-analysis-card.rp-analysis-error   { background:#fef2f2; border-color:#fecaca; }
+  .rp-analysis-card.rp-analysis-warn    { background:#fffbeb; border-color:#fde68a; }
+  .rp-analysis-header { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:600; }
+  .rp-analysis-pending .rp-analysis-title { color:#5b21b6; }
+  .rp-analysis-done    .rp-analysis-title { color:#065f46; }
+  .rp-analysis-error   .rp-analysis-title { color:#991b1b; }
+  .rp-analysis-warn    .rp-analysis-title { color:#92400e; }
+  .rp-analysis-spinner {
+    display:inline-block; width:11px; height:11px;
+    border:2px solid #c4b5fd; border-top-color:transparent;
+    border-radius:50%; animation:rp-spin 0.9s linear infinite;
+  }
+  @keyframes rp-spin { to { transform:rotate(360deg); } }
+  .rp-analysis-content {
+    font-family:ui-monospace,Consolas,monospace; font-size:11px;
+    color:#374151; margin:6px 0 0 0; padding:6px 8px;
+    background:#ffffff; border-radius:4px;
+    white-space:pre-wrap; word-break:break-word;
+    max-height:360px; overflow-y:auto;
+  }
+  html.dark .rp-analysis-card.rp-analysis-pending { background:#1e1b4b; border-color:#312e81; }
+  html.dark .rp-analysis-card.rp-analysis-done    { background:#064e3b; border-color:#065f46; }
+  html.dark .rp-analysis-card.rp-analysis-error   { background:#450a0a; border-color:#7f1d1d; }
+  html.dark .rp-analysis-content { background:#0b1220; color:#e5e7eb; }
+  /* Thread de mensagens (análise inicial + follow-ups). Diferencia
+     visualmente IA (à esquerda, fundo branco) de operador (à direita,
+     fundo lavanda) — padrão de chat clássico. */
+  .rp-analysis-msg { margin-top:6px; }
+  .rp-analysis-msg-label { font-size:10px; font-weight:600; color:#6b7280;
+                           margin-bottom:2px; text-transform:uppercase; letter-spacing:.3px; }
+  .rp-analysis-msg-user            { padding-left:24px; }
+  .rp-analysis-msg-user .rp-analysis-msg-label { text-align:right; color:#5b21b6; }
+  .rp-analysis-msg-user .rp-analysis-content   { background:#f5f3ff; border:1px solid #ddd6fe; }
+  html.dark .rp-analysis-msg-user .rp-analysis-content { background:#1e1b4b; color:#e5e7eb; border-color:#312e81; }
+  /* Área de follow-up: textarea + botão. Fica colado no final da última
+     resposta da IA. O `auto` no max-height da textarea segue o conteúdo. */
+  .rp-analysis-followup { margin-top:8px; display:flex; gap:6px; align-items:flex-end; }
+  .rp-analysis-followup textarea {
+    flex:1; min-height:34px; max-height:140px; resize:vertical;
+    font-family:inherit; font-size:11px; padding:6px 8px;
+    border:1px solid #d1d5db; border-radius:4px; background:#fff;
+  }
+  html.dark .rp-analysis-followup textarea { background:#0b1220; color:#e5e7eb; border-color:#374151; }
+  .rp-analysis-followup textarea:focus { outline:none; border-color:#7c3aed; }
+  .rp-analysis-followup button { font-size:11px; padding:6px 12px; }
+  /* Toggle "Ver N mensagens anteriores" — discreto, fica acima da
+     mensagem visível. Sem caixa: aparece como um link inline. */
+  .rp-analysis-toggle { margin-top:4px; }
+  .rp-analysis-toggle-btn {
+    background:none; border:none; padding:2px 0;
+    font-size:10px; color:#6b7280; cursor:pointer;
+    text-decoration:underline; text-decoration-style:dotted;
+  }
+  .rp-analysis-toggle-btn:hover { color:#374151; }
+  html.dark .rp-analysis-toggle-btn         { color:#9ca3af; }
+  html.dark .rp-analysis-toggle-btn:hover   { color:#e5e7eb; }
+  .rp-tx-desc    { font-size:10px; color:#6b7280; display:block;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+                   max-width:240px; }
+  html.dark .rp-tx-row + .rp-tx-row { border-color:#374151; }
+  html.dark .rp-tx-desc { color:#9ca3af; }
+
+  /* Modal overlay — minimal, mirrors the pattern used in /correcoes/excecoes. */
+  .rp-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:50; display:flex; align-items:center; justify-content:center; }
+  /* Tailwind's `.hidden` sets display:none, but the higher-specificity
+     selector `.rp-modal-overlay { display:flex }` above would defeat it
+     in some cascade orders. Force the hidden state explicitly so a
+     modal that ships in the markup never blocks clicks on the tabs. */
+  .rp-modal-overlay.hidden { display:none !important; }
+  .rp-modal { background:white; border-radius:0.5rem; max-width:90vw; max-height:85vh; width:900px; display:flex; flex-direction:column; overflow:hidden; }
+  .rp-modal-head { padding:14px 18px; border-bottom:1px solid #e5e7eb; font-weight:600; color:#1f2937; }
+  .rp-modal-body { overflow-y:auto; padding:14px 18px; flex:1; }
+  .rp-modal-foot { padding:12px 18px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:8px; }
+
+  html.dark .rp-label { color:#9ca3af; }
+  html.dark .rp-input { background:#1f2937; border-color:#4b5563; color:#d1d5db; }
+  html.dark .rp-btn-muted { background:#374151; color:#d1d5db; }
+  html.dark .rp-btn-muted:hover { background:#4b5563; }
+  html.dark .rp-xfer select { background:#1f2937; border-color:#4b5563; color:#d1d5db; }
+  html.dark .rp-xfer-actions button { background:#374151; color:#d1d5db; border-color:#4b5563; }
+  html.dark .rp-tbl thead th { background:#1e3a8a; color:#c7d2fe; }
+  html.dark .rp-modal { background:#1f2937; color:#d1d5db; }
+  html.dark .rp-modal-head, html.dark .rp-modal-foot { border-color:#374151; }
+
+  /* ── fb-chip: padrão do Painel de Controle ──────────────────────
+     Operador pediu unificar com o estilo dos chips do `/controlpanel`
+     (templates/controlpanel.html §227). Cores `data-kind` espelham
+     1:1 o conjunto original. Aqui aplicamos tanto para as **tabs**
+     (Posição projetada / Seleção de Wallets / Regras) quanto para o
+     **menu de ações** que migrou pro topo da barra. */
+  .fb-chip {
+    display:inline-flex; align-items:center; gap:0.25rem;
+    padding:0.2rem 0.4rem;
+    border:1px solid transparent;
+    border-radius:0.3rem;
+    background:transparent;
+    color:#374151;
+    font-size:0.6875rem;
+    line-height:1;
+    cursor:pointer;
+    white-space:nowrap;
+    transition:background-color .1s ease, border-color .1s ease, color .1s ease;
+  }
+  .fb-chip:hover:not(:disabled) { background:#eff6ff; border-color:#bfdbfe; color:#1d4ed8; }
+  .fb-chip:active:not(:disabled) { background:#dbeafe; }
+  .fb-chip:disabled { opacity:0.5; cursor:not-allowed; }
+  .fb-chip svg { width:0.8125rem; height:0.8125rem; flex-shrink:0; }
+  .fb-chip[data-kind=create]  svg { color:#059669; }
+  .fb-chip[data-kind=delete]  svg { color:#dc2626; }
+  .fb-chip[data-kind=process] svg { color:#2563eb; }
+  .fb-chip[data-kind=nav]     svg { color:#7c3aed; }
+  .fb-chip[data-kind=publish] svg { color:#d97706; }
+  .fb-chip[data-kind=flow]    svg { color:#0891b2; }
+  .fb-chip.active {
+    background:#2563eb !important;
+    border-color:#2563eb !important;
+    color:white !important;
+  }
+  .fb-chip.active svg { color:white !important; }
+  html.dark .fb-chip { color:#d1d5db; }
+  html.dark .fb-chip:hover:not(:disabled) { background:#1e3a8a; border-color:#3b82f6; color:#dbeafe; }
+  html.dark .fb-chip.active {
+    background:#3b82f6 !important;
+    border-color:#3b82f6 !important;
+    color:white !important;
+  }
+
+  /* Top bar layout: tabs + menu de ações alinhados à esquerda.
+     Wrap em telas estreitas. */
+  .rp-topbar {
+    display:flex; align-items:center; gap:0.25rem;
+    flex-wrap:wrap;
+    padding-bottom:0.25rem;
+    border-bottom:1px solid #e5e7eb;
+  }
+  html.dark .rp-topbar { border-bottom-color:#374151; }
+  .rp-topbar-divider {
+    width:1px; height:1rem; background:#e5e7eb;
+    margin:0 0.25rem; flex:0 0 auto;
+  }
+  html.dark .rp-topbar-divider { background:#374151; }

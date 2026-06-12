@@ -1,0 +1,69 @@
+{
+  "wallets": [
+    {
+      "companyId": "23313334000110",
+      "walletId": "68278511bff73f3c321e6066",
+      "addedAt": "2026-05-12T21:36:45Z"
+    },
+    {
+      "companyId": "23313334000110",
+      "walletId": "680a9ce73b2296d86127142a",
+      "addedAt": "2026-05-12T21:36:45Z"
+    },
+    {
+      "companyId": "23313334000110",
+      "walletId": "680a9ce73b2296d86127143f",
+      "addedAt": "2026-05-12T21:36:45Z"
+    },
+    {
+      "companyId": "23313334000110",
+      "walletId": "680a9cea3b2296d861271652",
+      "addedAt": "2026-05-12T21:36:45Z"
+    },
+    {
+      "companyId": "23313334000110",
+      "walletId": "680a9ce73b2296d86127145b",
+      "addedAt": "2026-05-12T21:36:45Z"
+    }
+  ],
+  "priceRepeatSecurities": [],
+  "walletLists": [
+    {
+      "name": "Oikos",
+      "walletIds": [
+        "694470b86c55498714ee410d"
+      ],
+      "addedAt": "2026-05-15T21:01:13Z"
+    },
+    {
+      "name": "Blue3 (2)",
+      "walletIds": [
+        "69b99c5a84ea99045a763086"
+      ],
+      "addedAt": "2026-05-15T22:41:21Z"
+    },
+    {
+      "name": "XP (57)",
+      "walletIds": [
+        "6a1ddbb8652463baa44e0df5",
+        "6a1ddbdd652463baa44e0e0e",
+        "6a1ddb51652463baa44e0ddc",
+        "6a1ddf4e652463baa44e114e",
+        "6a1ddf86652463baa44e1299",
+        "6a1ddf31652463baa44e110b",
+        "6a1ddfe8652463baa44e1356",
+        "6a1de0b2652463baa44e13c0",
+        "6a1de06c652463baa44e138a",
+        "6a1ddfc9652463baa44e132d",
+        "6a1de28e652463baa44e7cc0",
+        "6a1ddf70652463baa44e1267",
+        "6a1de08c652463baa44e13a7",
+        "6a1ddc22652463baa44e0f53",
+        "6a1de152652463baa44e1512",
+        "6a1ddc98652463baa44e0f72",
+        "6a1de174652463baa44e152b"
+      ],
+      "addedAt": "2026-06-02T11:22:54Z"
+    }
+  ]
+}

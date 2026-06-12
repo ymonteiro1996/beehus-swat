@@ -1,0 +1,128 @@
+{
+  "date": "2026-02-10",
+  "walletId": "T9-all-tiers",
+  "step1": {
+    "formerNav": 2000000,
+    "gapCash": -100000,
+    "gapPct": -0.05,
+    "returnContribution": 0.01,
+    "returnNavPerShare": -0.04,
+    "status": "gap"
+  },
+  "step2": {
+    "eliminatedCount": 2,
+    "suspectCount": 2,
+    "status": "done",
+    "suspects": [
+      {
+        "securityId": "s9",
+        "name": "Fund I",
+        "amountDiff": 3000,
+        "diffRent": 0.0,
+        "formerBalance": 100000,
+        "formerPu": 20,
+        "formerQuantity": 5000,
+        "pu": 20,
+        "quantity": 8000,
+        "executionPrice": 20,
+        "eventContribution": 0,
+        "totalContribution": 60000,
+        "securityType": "brazilianFund",
+        "failedConditions": ["amountDifference"]
+      },
+      {
+        "securityId": "s10",
+        "name": "Fund J",
+        "amountDiff": -1000,
+        "diffRent": 0.0,
+        "formerBalance": 50000,
+        "formerPu": 5,
+        "formerQuantity": 10000,
+        "pu": 5,
+        "quantity": 9000,
+        "executionPrice": 5,
+        "eventContribution": 0,
+        "totalContribution": -5000,
+        "securityType": "brazilianFund",
+        "failedConditions": ["amountDifference", "hasTransactions"]
+      }
+    ]
+  },
+  "step3": {
+    "status": "done",
+    "securities": [
+      {
+        "securityId": "s9",
+        "name": "Fund I",
+        "amountDiff": 3000,
+        "diffRent": 0.0,
+        "eliminated": false,
+        "step3_1": {
+          "status": "flag",
+          "flag": "MISSING_PROVISION",
+          "impact": 60000,
+          "offset": 15,
+          "detail": "Liquidacao futura (offset=15) mas provisao nao encontrada",
+          "provisionData": {
+            "balance": 60000,
+            "initialDate": "2026-02-10",
+            "liquidationDate": "2026-02-25",
+            "provisionType": "buySell"
+          }
+        },
+        "step3_2": null,
+        "step3_3": null
+      },
+      {
+        "securityId": "s10",
+        "name": "Fund J",
+        "amountDiff": -1000,
+        "diffRent": 0.0,
+        "eliminated": false,
+        "step3_1": {
+          "status": "ok",
+          "offset": 0,
+          "detail": "Transacao buySell encontrada"
+        },
+        "step3_2": null,
+        "step3_3": {
+          "status": "flag",
+          "flag": "WITHHOLDING_TAX",
+          "impact": 2000,
+          "actualBalance": 3000,
+          "expectedValue": 5000,
+          "detail": "Provavel IR retido na fonte (brazilianFunds)"
+        }
+      }
+    ]
+  },
+  "step4": {
+    "status": "done",
+    "unclassified": [],
+    "wrongSecurity": [],
+    "misclassified": []
+  },
+  "step5": {
+    "status": "warning",
+    "formerCash": 1000,
+    "currentCash": 1000,
+    "totalTransactions": 40000,
+    "projectedCash": 41000,
+    "cashDiff": 40000,
+    "diagnosis": "value_error"
+  },
+  "step6": {
+    "status": "warning",
+    "walletAnomaly": null,
+    "securityAnomalies": [
+      {
+        "securityId": "s9",
+        "securityName": "Fund I",
+        "currentReturn": -0.50,
+        "mean": 0.001,
+        "stdDev": 0.02,
+        "isAnomaly": true
+      }
+    ]
+  }
+}

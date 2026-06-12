@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% set active = "stripping" %}
+{% block title %}Stripping{% endblock %}
+
+{% block head %}
+<style>
+  /* Estilos compartilhados com o painel inline do controlpanel.html — o
+     partial define só as classes .sp-* usadas pelo wizard, lista e
+     modais. */
+  {% include 'partials/_strip_styles.html' %}
+
+  /* Override: na página standalone, #strip-view nasce visível. No
+     controlpanel o div nasce com `.hidden-view` (display:none) e o
+     `Strip.open()` é quem remove a classe. Aqui não temos esse fluxo —
+     então neutralizamos a classe pra esse elemento. */
+  #strip-view.hidden-view { display: block; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Header dedicado da página /stripping. Mantém o padrão visual das
+     outras páginas standalone (Conciliação, Repetir Posições) com
+     título à esquerda. O título no controlpanel inline fica embutido
+     no toolbar do próprio strip-view; aqui ele sobe pro header da
+     página pra equilibrar o layout. -->
+<header class="bg-white shadow px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+  <h1 class="font-semibold text-gray-700">Stripping</h1>
+  <!-- Manual refresh para casos em que a primeira carga falhou (ex.: Mongo
+       fora do ar no momento em que o iframe foi criado pelo shell). No
+       controlpanel o chip "Reiniciar" cobre isso; aqui o operador não tem
+       chip equivalente, então o botão fica visível no header da página. -->
+  <button type="button" onclick="Strip.open(null)"
+    class="text-xs px-3 py-1.5 border rounded text-gray-700 bg-white hover:bg-gray-50">
+    Atualizar
+  </button>
+</header>
+
+<!-- Chart.js: usada APENAS pelo relatório A4 da exceção "Carteira
+     gerencial" (line chart de rentabilidade acumulada + donut por
+     classe). Hospedada no jsdelivr; preserved scope =Chart no global
+     do iframe via UMD. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<!-- View extraída para partial; mesmo conteúdo do painel inline do
+     controlpanel. Aqui o div já nasce visível (CSS acima neutraliza o
+     `.hidden-view`). -->
+{% include 'partials/_strip_view.html' %}
+
+<!-- JS extraído para partial. Quando carregado fora do controlpanel,
+     o partial instala stubs no-op para `Funcoes` (chip-swap não se
+     aplica aqui). Dispara `Strip.open()` no DOMContentLoaded pra
+     carregar a lista de empresas + exceções automaticamente — mesmo
+     fluxo de inicialização que o chip do controlpanel dispara. -->
+{% include 'partials/_strip_script.html' %}
+
+<script>
+  // Boot da página standalone: aciona o open() do Strip pra carregar a
+  // lista de companies + as exceções. Equivalente ao que o chip do
+  // controlpanel faz quando o operador clica em "Stripping". Sem isso,
+  // o painel renderiza vazio e o operador precisaria clicar em algo
+  // pra disparar o load.
+  document.addEventListener('DOMContentLoaded', () => {
+    if (typeof Strip !== 'undefined' && typeof Strip.open === 'function') {
+      Strip.open(null);
+    }
+  });
+</script>
+{% endblock %}

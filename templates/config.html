@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% set active = "config" %}
+
+{% block title %}Seleção{% endblock %}
+
+{% block content %}
+  <header class="bg-white shadow px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="font-semibold text-gray-700">Seleção</h1>
+    <button onclick="save()" class="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs">Salvar</button>
+  </header>
+
+  <div class="px-6 pt-4 flex gap-4 items-center">
+    <input id="search" type="text" placeholder="Buscar..."
+      oninput="filter()"
+      class="border rounded px-3 py-1.5 w-64 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-400" />
+    <button onclick="toggleAll(true)"  class="text-blue-600 hover:underline text-xs">Selecionar tudo</button>
+    <button onclick="toggleAll(false)" class="text-red-500 hover:underline text-xs">Desmarcar tudo</button>
+    <span id="counter" class="ml-auto text-gray-400 text-xs"></span>
+  </div>
+
+  <div class="px-6 pt-3 pb-1">
+    <p class="text-xs text-gray-400">Prazo padrão: número de dias úteis esperados para o dado estar disponível após a data de referência.</p>
+  </div>
+
+  <div id="list" class="px-6 py-4 space-y-3">
+    <p class="text-center text-gray-400 py-10">Carregando...</p>
+  </div>
+
+<script>
+  function escHtml(s) {
+    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+  fetch("/api/config/entities")
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById("list").innerHTML = data.map(co => `
+        <div class="bg-white rounded-xl shadow overflow-hidden company-block" data-name="${escHtml(String(co.companyName ?? "").toLowerCase())}">
+          <div class="flex items-center gap-3 px-5 py-3 bg-gray-50 border-b">
+            <input type="checkbox" class="company-cb w-4 h-4 accent-blue-600"
+              onchange="toggleCompany('${escHtml(co.companyId)}', this.checked)" />
+            <span class="font-semibold text-gray-700 text-xs">${escHtml(co.companyName)}</span>
+          </div>
+          <div class="px-5 py-2 divide-y divide-gray-50">
+            ${co.entities.map(e => `
+              <div class="entity-row flex items-center gap-2 py-1.5" data-name="${escHtml(String(e.entityName ?? "").toLowerCase())}">
+                <input type="checkbox" class="entity-cb w-4 h-4 accent-blue-600 shrink-0"
+                  data-company="${escHtml(co.companyId)}" data-entity="${escHtml(e.entityId)}"
+                  ${e.selected ? "checked" : ""}
+                  onchange="syncCompany('${escHtml(co.companyId)}'); updateCounter()" />
+                <span class="truncate text-gray-700 text-xs flex-1 min-w-0" title="${escHtml(e.entityName)}">${escHtml(e.entityName)}</span>
+                <select class="method-input border rounded px-1 py-0.5 text-xs text-gray-600 bg-white shrink-0 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  data-company="${escHtml(co.companyId)}" data-entity="${escHtml(e.entityId)}"
+                  title="Método de consumo">
+                  <option value="">—</option>
+                  <option value="API"          ${e.method === 'API'          ? 'selected' : ''}>API</option>
+                  <option value="scraping"     ${e.method === 'scraping'     ? 'selected' : ''}>Scraping</option>
+                  <option value="XML"          ${e.method === 'XML'          ? 'selected' : ''}>XML</option>
+                  <option value="SFTP"         ${e.method === 'SFTP'         ? 'selected' : ''}>SFTP</option>
+                  <option value="pdf"          ${e.method === 'pdf'          ? 'selected' : ''}>PDF</option>
+                  <option value="excel"        ${e.method === 'excel'        ? 'selected' : ''}>Excel</option>
+                  <option value="open finance" ${e.method === 'open finance' ? 'selected' : ''}>Open Finance</option>
+                  <option value="other"        ${e.method === 'other'        ? 'selected' : ''}>Outro</option>
+                </select>
+                <select class="responsible-input border rounded px-1 py-0.5 text-xs text-gray-600 bg-white shrink-0 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  data-company="${escHtml(co.companyId)}" data-entity="${escHtml(e.entityId)}"
+                  title="Responsável pelo consumo">
+                  <option value="">—</option>
+                  <option value="Beehus"   ${e.responsible === 'Beehus'   ? 'selected' : ''}>Beehus</option>
+                  <option value="Parceiro" ${e.responsible === 'Parceiro' ? 'selected' : ''}>Parceiro</option>
+                </select>
+                <input type="number" min="0" max="60"
+                  value="${escHtml(e.delay)}"
+                  class="delay-input w-12 border rounded px-1 py-0.5 text-xs text-gray-600 text-center shrink-0 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  data-company="${escHtml(co.companyId)}" data-entity="${escHtml(e.entityId)}"
+                  title="Prazo padrão (dias úteis)" />
+              </div>`).join("")}
+          </div>
+        </div>`).join("");
+
+      data.forEach(co => syncCompany(co.companyId));
+      updateCounter();
+    });
+
+  function toggleCompany(cid, checked) {
+    document.querySelectorAll(`.entity-cb[data-company="${cid}"]`)
+      .forEach(cb => { cb.checked = checked; });
+    updateCounter();
+  }
+
+  function syncCompany(cid) {
+    const cbs  = [...document.querySelectorAll(`.entity-cb[data-company="${cid}"]`)];
+    const all  = cbs.every(c => c.checked);
+    const none = cbs.every(c => !c.checked);
+    const header = [...document.querySelectorAll(".company-cb")]
+      .find((_, i) => document.querySelectorAll(".company-block")[i]
+        ?.querySelector(`.entity-cb[data-company="${cid}"]`));
+    if (header) { header.checked = all; header.indeterminate = !all && !none; }
+  }
+
+  function toggleAll(checked) {
+    document.querySelectorAll(".entity-cb").forEach(cb => cb.checked = checked);
+    document.querySelectorAll(".company-cb").forEach(cb => { cb.checked = checked; cb.indeterminate = false; });
+    updateCounter();
+  }
+
+  function filter() {
+    const q = document.getElementById("search").value.toLowerCase();
+    document.querySelectorAll(".company-block").forEach(block => {
+      const companyMatch = block.dataset.name.includes(q);
+      let any = false;
+      block.querySelectorAll(".entity-row").forEach(row => {
+        const show = companyMatch || row.dataset.name.includes(q);
+        row.style.display = show ? "" : "none";
+        if (show) any = true;
+      });
+      block.style.display = any ? "" : "none";
+    });
+  }
+
+  function updateCounter() {
+    const total   = document.querySelectorAll(".entity-cb").length;
+    const checked = document.querySelectorAll(".entity-cb:checked").length;
+    document.getElementById("counter").textContent = `${checked} / ${total} selecionadas`;
+  }
+
+  function save() {
+    const selected = [...document.querySelectorAll(".entity-cb:checked")]
+      .map(cb => {
+        const delayEl       = document.querySelector(`.delay-input[data-company="${cb.dataset.company}"][data-entity="${cb.dataset.entity}"]`);
+        const methodEl      = document.querySelector(`.method-input[data-company="${cb.dataset.company}"][data-entity="${cb.dataset.entity}"]`);
+        const responsibleEl = document.querySelector(`.responsible-input[data-company="${cb.dataset.company}"][data-entity="${cb.dataset.entity}"]`);
+        return {
+          companyId:   cb.dataset.company,
+          entityId:    cb.dataset.entity,
+          delay:       delayEl       ? (parseInt(delayEl.value) || 0) : 0,
+          method:      methodEl      ? methodEl.value      : "",
+          responsible: responsibleEl ? responsibleEl.value : "",
+        };
+      });
+    fetch("/api/config/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selected })
+    }).then(() => window.location.href = "/");
+  }
+
+  document.addEventListener("keydown", e => { if (e.key === "Escape") history.back(); });
+</script>
+{% endblock %}

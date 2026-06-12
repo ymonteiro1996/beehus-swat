@@ -1,0 +1,40 @@
+{
+  "_comment": "Expected corrections to resolve the gap — what the system should generate when the user clicks 'Aceitar Correcao'",
+
+  "provision_to_create": {
+    "walletId": "T9-all-tiers",
+    "securityId": "s9",
+    "initialDate": "2026-02-10",
+    "liquidationDate": "2026-02-25",
+    "provisionType": "buySell",
+    "balance": 60000,
+    "description": "Provisao gerada por conciliacao — Fund I",
+    "provisionSource": "adjustments",
+    "currencyId": "BRL"
+  },
+
+  "transaction_to_create": {
+    "_comment": "gainsExpenses transaction to correct the cash mismatch (remove the erroneous R$ 37k + adjust WT R$ 2k)",
+    "companyId": "company-test",
+    "entityId": "entity-test",
+    "walletId": "T9-all-tiers",
+    "currencyId": "BRL",
+    "operationDate": "2026-02-10",
+    "liquidationDate": "2026-02-10",
+    "balance": -40000,
+    "description": "Correcao: transacao de caixa faltante — (caixa)",
+    "inputType": "sheets",
+    "beehusTransactionType": "gainsExpenses",
+    "hide": true
+  },
+
+  "_validation_after_corrections": {
+    "newGapCash": 0.0,
+    "newGapPct": 0.0,
+    "newProjectedCash": 1000,
+    "currentCash": 1000,
+    "gapResolved": true,
+    "cashConsistent": true,
+    "valid": true
+  }
+}

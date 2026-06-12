@@ -1,0 +1,320 @@
+{
+  "_version": "0.2.0-draft",
+  "_description": "Rule dictionary for beehusTransactionType classification. Used by funcoes > identificar transactions. Hybrid model: rules evaluated first, ML fallback for unmatched rows.",
+  "_changelog": {
+    "0.2.0-draft": "Coverage validation against transactions_base.json (6056 rows). Added prefix-override rules for IR-/Custos Despesas/Ganho Rendimento/Ajuste contrib/Fee-, fixed dividend_en (English Dividend → coupon, US ETF convention), flipped resgate_cdb to buySell to match data, added BTC remuneration / matured bond / aplicacao fundos / debito CC / wired funds / interest income / pagamento juros BDA / pending card / sold-bought.",
+    "0.1.0-draft": "Initial draft from previous chat patterns."
+  },
+  "_schema": {
+    "rules": "Array evaluated top-to-bottom; first matching rule wins. Order = priority. Most specific rules MUST come before generic ones.",
+    "rules.id": "Stable identifier for traceability in classifier output.",
+    "rules.type": "Target beehusTransactionType (must be in `classes`).",
+    "rules.match": "'regex' | 'contains' | 'startswith'. All patterns are matched against the NORMALIZED description.",
+    "rules.pattern": "Pattern matched against the description AFTER normalization (uppercase, mojibake-fixed, accent-stripped, whitespace-collapsed).",
+    "rules.examples": "Sample RAW descriptions (pre-normalization) that should match this rule. Used for unit tests.",
+    "rules.counter_examples": "Optional. RAW descriptions that look similar but should NOT match (catch over-matching).",
+    "rules.notes": "Free-text rationale, edge-case warnings, or source of the rule."
+  },
+  "_normalization": {
+    "fix_mojibake": "Repair latin-1 ↔ utf-8 corruption (e.g., 'Ã§'→'ç', 'Ã'→'É').",
+    "uppercase": "Convert to upper case.",
+    "strip_accents": "Remove diacritics (Ç→C, Á→A, etc.).",
+    "collapse_whitespace": "Replace runs of whitespace with single space, trim ends.",
+    "_note": "After normalization, 'Aquisição de cotas' becomes 'AQUISICAO DE COTAS'. Patterns must be written against the normalized form."
+  },
+  "_thresholds": {
+    "rule_match_confidence": 1.0,
+    "ml_review_below": 0.70,
+    "ml_review_critical_below": 0.50,
+    "_note": "Rule matches always score 1.0. ML predictions below `ml_review_below` flagged as 'needs_review'. Below `ml_review_critical_below` are treated as unclassified. CONFIRMED by user (Q12)."
+  },
+  "classes": [
+    "taxes",
+    "coupon",
+    "buySell",
+    "maturity",
+    "withdrawalDeposit",
+    "dividend",
+    "amortization",
+    "interestOnEquity",
+    "gainsExpenses",
+    "otherFee",
+    "brokerageFee",
+    "rebate",
+    "securityContributionAdjustment",
+    "withdrawalDepositAdjustment",
+    "securityTransfer",
+    "managementFee",
+    "other"
+  ],
+  "rules": [
+
+    { "id": "tax_ir_prefix",               "type": "taxes",                          "match": "regex",      "pattern": "^IR\\s*-",
+      "examples": ["IR - Venda LFT 3/2028", "IR - RESGATE CDB12643P73", "IR - BTC BOVA11"],
+      "notes": "PREFIX OVERRIDE — CONFIRMED by user. 'IR - X' is always tax; the suffix names what the tax is on. Must fire before sell_pt / resgate_cdb / fee rules." },
+
+    { "id": "ajuste_contrib_lote",         "type": "securityContributionAdjustment", "match": "regex",      "pattern": "\\bAJUSTE\\s+CONTRIB\\b",
+      "examples": ["Ajuste contrib em lote 2026-01-30 NTN-B Ago/2050 Com coupon"],
+      "notes": "PREFIX OVERRIDE — CONFIRMED by user. Custodian-side contribution adjustment. The 'Com coupon' / 'NTN-B' tokens are bond metadata (the security being adjusted), not the operation type. The operation is the adjustment itself." },
+
+    { "id": "fee_dash_prefix",             "type": "otherFee",                       "match": "regex",      "pattern": "^FEE\\s*-",
+      "examples": ["Fee - Wire Transaction"],
+      "notes": "PREFIX OVERRIDE. 'Fee - X' is a fee, even if X mentions Wire/TED/etc." },
+
+    { "id": "fee_reversal",                "type": "otherFee",                       "match": "regex",      "pattern": "ESTORNO\\s+DE\\s+TAXA",
+      "examples": ["LIQ BOLSA (ESTORNO DE TAXA SOBRE POSICAO 1026)"],
+      "notes": "Must come before generic 'TAXA' so reversal isn't classified as the original fee." },
+
+    { "id": "rendimento_fii",              "type": "dividend",                       "match": "regex",      "pattern": "RENDIMENTOS?.*\\bFII\\b",
+      "examples": ["RENDIMENTOS - À VISTA s/ FII XYZ11", "RENDIMENTOS s/ FII VBI PRI CI - PVBI11"],
+      "notes": "FII cash dividend. Broadened in 0.2.x: any 'RENDIMENTOS ... FII ...' is dividend EXCEPT when the CETIP coupon variant matches first (rendimento_fii_cetip)." },
+
+    { "id": "rendimento_fii_cetip",        "type": "coupon",                         "match": "regex",      "pattern": "RENDIMENTO.*FII.*CETIP",
+      "examples": ["RENDIMENTO - XPLG11 FII - CETIP"],
+      "notes": "CETIP-settled FII payment is treated as coupon per source data convention." },
+
+    { "id": "taxa_remuneracao_btc",        "type": "gainsExpenses",                  "match": "regex",      "pattern": "TAXA\\s+REMUNERACAO|REMUNERACAO.*BTC",
+      "examples": ["TAXA REMUNERAÇÃO - BTC BOVA11"],
+      "notes": "BTC (lending) remuneration income. 88 rows in baseline. Must fire before fee_generic_pt." },
+
+    { "id": "taxa_intermediacao_doador",   "type": "gainsExpenses",                  "match": "regex",      "pattern": "TAXA\\s+(DE\\s+)?INTERMEDIACAO\\s+DOADOR",
+      "examples": ["TAXA DE INTERMEDIAÇÃO DOADOR JHSF3 2025122300906414040001-2"],
+      "notes": "BTC (lending) intermediation fee on the lender side. Wins over fee_generic_pt." },
+
+    { "id": "dividendo_acao_us",           "type": "dividend",                       "match": "regex",      "pattern": "DIVIDENDOS?\\s*-?\\s*ACAO?\\s*-\\s*US:|DIVIDENDOS?.*\\bUS:[A-Z]",
+      "examples": ["Dividendo - acao - US:SPY - SPDR S&P 500 TRUST", "Dividendo - acao - US:BUG - GLOBAL X CYBERSECURITY ETF"],
+      "notes": "Aligned with dividend_en (Q4 confirmation): dividends on US tickers are still dividends. Rule kept as a documented carve-out so future-readers understand the US-asset case is intentional." },
+
+    { "id": "matured_bond",                "type": "maturity",                       "match": "regex",      "pattern": "MATURED\\s+BOND|REDEMPTION\\s+OF\\s+MATURED",
+      "examples": ["Redemption|UNITED STATES TREASURY NOTE\nREDEMPTION OF MATURED BOND\nRATE:..."],
+      "notes": "CONFIRMED by user (Q11). US-bond maturity event delivered via 'Redemption' tag. Wins over buy_sell_en's 'REDEMPTION'." },
+
+    { "id": "taxa_custodia",               "type": "otherFee",                       "match": "regex",      "pattern": "\\bTAXA\\s+CUSTODIA\\b",
+      "examples": ["Taxa Custodia|LIQ BOLSA (TAXA SOBRE VALOR EM CUSTODIA TAXA SOBRE POSICAO 1026)|nan|nan", "Taxa Custodia - LIQ BOLSA (TAXA SOBRE VALOR EM CUSTÓDIA TAXA SOBRE POSIÇÃO 1026)"],
+      "notes": "CONFIRMED by user (Q8). Custody fee, even when wrapped in LIQ BOLSA. Must fire BEFORE ajuste_bolsa_taxa." },
+
+    { "id": "ajuste_bolsa_taxa",           "type": "gainsExpenses",                  "match": "regex",      "pattern": "LIQ\\s+BOLSA.*TAXA\\s+SOBRE.*POSICAO",
+      "examples": ["LIQ BOLSA (TAXA SOBRE POSICAO 1026)"],
+      "notes": "B3 position-based fee (lending). Distinct from corretagem and from estorno (above) and from taxa_custodia (custody)." },
+
+    { "id": "pagamento_mensal_juros_bda",  "type": "gainsExpenses",                  "match": "regex",      "pattern": "PAGAMENTO\\s+MENSAL\\s+DE\\s+JUROS|INTEREST\\s+EARNED\\s+ON\\s+BANK\\s+DEPOSIT",
+      "examples": ["Depósito Pagamento mensal de juros BDA para reinvestimento Interest Earned on Bank Deposit Intended for Reinvestment USD"],
+      "notes": "BDA (Bank Deposit Account) interest. 16 rows. Must fire before deposito_saque." },
+
+    { "id": "irrf",                        "type": "taxes",                          "match": "regex",      "pattern": "\\bIRRF\\b",
+      "examples": ["IRRF S/ JCP", "IRRF S/ DIVIDENDOS", "IRRF SOBRE RESGATE"],
+      "notes": "Imposto de Renda Retido na Fonte. Wins over JCP/dividend rules below — IRRF on a dividend is still a tax." },
+
+    { "id": "irpj",                        "type": "taxes",                          "match": "regex",      "pattern": "\\bIRPJ\\b",
+      "examples": ["IRPJ APURADO"],
+      "notes": "Imposto de Renda Pessoa Jurídica." },
+
+    { "id": "iof",                         "type": "taxes",                          "match": "regex",      "pattern": "\\bIOF\\b",
+      "examples": ["IOF S/ RESGATE", "IOF DIARIO"],
+      "notes": "Imposto sobre Operações Financeiras." },
+
+    { "id": "ir_generic",                  "type": "taxes",                          "match": "regex",      "pattern": "\\b(IMPOSTO\\s+DE\\s+RENDA|IMPOSTO\\s+RENDA)\\b",
+      "examples": ["IMPOSTO DE RENDA RETIDO"],
+      "notes": "Catch-all for 'imposto de renda' that is not IRRF/IRPJ." },
+
+    { "id": "tax_pis_cofins",              "type": "taxes",                          "match": "regex",      "pattern": "\\b(PIS|COFINS|CSLL|ISS|ITCMD)\\b",
+      "examples": ["COFINS S/ RECEITA"],
+      "notes": "Other federal/state taxes." },
+
+    { "id": "interest_on_equity_pt",       "type": "interestOnEquity",               "match": "regex",      "pattern": "JUROS\\s+(S/|SOBRE)\\s+CAPITAL",
+      "examples": ["JUROS S/ CAPITAL PROPRIO", "JUROS SOBRE CAPITAL PROPRIO"],
+      "notes": "JCP. Must come AFTER irrf so 'IRRF S/ JCP' is taxes, not JCP." },
+
+    { "id": "interest_on_equity_abbr",     "type": "interestOnEquity",               "match": "regex",      "pattern": "\\bJCP\\b",
+      "examples": ["JCP PETR4"],
+      "notes": "Abbreviation form. Same precedence note as above." },
+
+    { "id": "interest_on_equity_en",       "type": "interestOnEquity",               "match": "regex",      "pattern": "INTEREST\\s+ON\\s+EQUITY",
+      "examples": ["Interest on Equity|VALE3"],
+      "notes": "English form for international/custodian feeds." },
+
+    { "id": "recebimento_juros_titulo",    "type": "coupon",                         "match": "regex",      "pattern": "RECEBIMENTO\\s+DE\\s+JUROS",
+      "examples": ["RECEBIMENTO DE JUROS - NTNF - Vcto: 01/01/2027"],
+      "notes": "Coupon payment on Brazilian fixed income (NTN-F, NTN-B, etc.)." },
+
+    { "id": "pgto_juros_titulo",           "type": "coupon",                         "match": "regex",      "pattern": "\\bPGTO\\s+JUROS\\b|PAGAMENTO\\s+DE\\s+JUROS",
+      "examples": ["Pgto Juros 24D3691425 | CRI TRUE SECURITIZADORA S.A. - SET/2029", "PAGAMENTO DE JUROS NTN-B"],
+      "notes": "Interest payment on Brazilian fixed income (CRI/CRA/debêntures/NTN). 'Pgto' is the abbreviated form of 'Pagamento'. Same outcome as recebimento_juros_titulo, kept as a distinct rule for traceability." },
+
+    { "id": "interest_income_us",          "type": "coupon",                         "match": "regex",      "pattern": "\\bINTEREST\\s+(INCOME|PAYMENT)\\b",
+      "examples": ["Interest Income|MORGAN STANLEY BANK N.A.", "Other Debits|INTEREST PAYMENT|nan|nan"],
+      "notes": "US/international feed — interest received on cash or bonds, treated as coupon." },
+
+    { "id": "cupom",                       "type": "coupon",                         "match": "regex",      "pattern": "\\bCUPOM\\b",
+      "examples": ["CUPOM JUROS NTN-B"],
+      "notes": "Brazilian coupon payment." },
+
+    { "id": "coupon_en",                   "type": "coupon",                         "match": "regex",      "pattern": "\\bCOUPON\\b",
+      "examples": ["Coupon|US-TREASURY|"],
+      "notes": "English form. Comes after ajuste_contrib_lote so 'Ajuste contrib ... Com coupon' is not classified as coupon." },
+
+    { "id": "rendimento_lci_lca",          "type": "coupon",                         "match": "regex",      "pattern": "RENDIMENTO.*\\b(LCI|LCA|LCD|CDB)\\b",
+      "examples": ["RENDIMENTO LCI BTG"],
+      "notes": "Periodic yield on bank-issued fixed income (when not a maturity)." },
+
+    { "id": "dividendo_pt",                "type": "dividend",                       "match": "regex",      "pattern": "\\bDIVIDENDOS?\\b",
+      "examples": ["DIVIDENDO PETR4", "DIVIDENDOS PAGOS"],
+      "notes": "PT form: DIVIDENDO / DIVIDENDOS. Distinct from English 'Dividend' which → coupon." },
+
+    { "id": "dividend_en",                 "type": "dividend",                       "match": "regex",      "pattern": "\\bDIVIDEND\\b",
+      "examples": ["Dividend STATE STREET SPDR S&P 500 ETF @ 1.993368 PER SHARE SPY", "Dividend|STATE STREET SPDR S&P 500 ETF|SPY|78462F103"],
+      "notes": "CONFIRMED by user: dividends are dividends regardless of language or asset domicile. Will intentionally disagree with the source file's 'coupon' labelling for ~51 rows." },
+
+    { "id": "vencimento",                  "type": "maturity",                       "match": "regex",      "pattern": "\\bVENCIMENTO\\b",
+      "examples": ["VENCIMENTO CDB", "VENCIMENTO LFT"],
+      "notes": "Most fixed-income maturity events." },
+
+    { "id": "maturity_en",                 "type": "maturity",                       "match": "regex",      "pattern": "\\bMATURITY\\b",
+      "examples": ["Maturity|US-TREASURY|"],
+      "notes": "English/US feed equivalent." },
+
+    { "id": "amortizacao",                 "type": "amortization",                   "match": "regex",      "pattern": "AMORTIZACAO",
+      "examples": ["AMORTIZAÇÃO NTN-B"],
+      "notes": "Principal repayment between issuance and maturity." },
+
+    { "id": "amortization_en",             "type": "amortization",                   "match": "regex",      "pattern": "\\bAMORTIZATION\\b|PRINCIPAL\\s+(PAYMENT|REPAYMENT|ADVANCE)",
+      "examples": ["Amortization|US-MBS|", "Other Credits|PRINCIPAL ADVANCE|nan|nan"],
+      "notes": "English/US feed equivalent. Includes 'principal advance' style descriptions." },
+
+    { "id": "brokerage_pt",                "type": "brokerageFee",                   "match": "regex",      "pattern": "TAXA\\s+DE\\s+CORRETAGEM|\\bCORRETAGEM\\b",
+      "examples": ["TAXA DE CORRETAGEM B3"],
+      "notes": "Brokerage commission. Wins over generic taxa rule. Comes AFTER custos_despesas_prefix because that override re-routes Corretagem inside P&L bookings to gainsExpenses." },
+
+    { "id": "brokerage_en",                "type": "brokerageFee",                   "match": "regex",      "pattern": "BROKERAGE\\s+FEE|COMMISSION|\\bBOND\\s+FEE\\b",
+      "examples": ["Brokerage Fee|MORGAN-STANLEY|", "Bond Fee: Trade ID 153867808"],
+      "notes": "English. Bond Fee is a per-trade brokerage charge on bond execution. CONFIRMED by user (Q10) — keep as brokerageFee, not generic otherFee." },
+
+    { "id": "management_pt",               "type": "managementFee",                  "match": "regex",      "pattern": "TAXA\\s+(DE\\s+)?ADMINISTRACAO|TAXA\\s+ADMINISTRATIVA|\\bTAXA\\s+ADM\\b|TAXA\\s+DE\\s+GESTAO|RECOLH\\.?\\s*TAXA\\s+DE\\s+ADM",
+      "examples": ["TAXA DE ADMINISTRAÇÃO FUNDO XPTO", "Taxa Administracao - RECOLH. TAXA DE ADM", "Custos Despesas_1 - - - Taxa Adm -", "Taxa de Gestão Bruta"],
+      "notes": "Fund/portfolio management fee. CONFIRMED by user (Q7): 'Taxa de Gestão' is a management fee semantically, even though the source file labels these 12 rows as otherFee — we override. 'DE' is optional and 'ADM' abbreviation is supported." },
+
+    { "id": "management_en",               "type": "managementFee",                  "match": "regex",      "pattern": "MANAGEMENT\\s+FEE|ADMIN(ISTRATION)?\\s+FEE",
+      "examples": ["Management Fee|JP-MORGAN|"],
+      "notes": "English." },
+
+    { "id": "rebate",                      "type": "rebate",                         "match": "regex",      "pattern": "\\bREBATE\\b|RESTITUICAO\\s+DE\\s+TAXA",
+      "examples": ["REBATE BTC", "RESTITUIÇÃO DE TAXA"],
+      "notes": "Fee/charge returned to the client. Comes AFTER ganho_rendimento_prefix because that override re-routes 'Ganho Rendimento - Rebate' bookings to gainsExpenses." },
+
+    { "id": "ajuste_posicao",              "type": "securityContributionAdjustment", "match": "regex",      "pattern": "AJUSTE\\s+DE\\s+(POSICAO|QUANTIDADE|ATIVO)",
+      "examples": ["AJUSTE DE POSIÇÃO PETR4"],
+      "notes": "Custodian-side correction to security holdings." },
+
+    { "id": "ajuste_caixa",                "type": "withdrawalDepositAdjustment",    "match": "regex",      "pattern": "AJUSTE\\s+DE\\s+(SALDO|CAIXA)",
+      "examples": ["AJUSTE DE SALDO"],
+      "notes": "Custodian-side correction to cash balance." },
+
+    { "id": "transfer_security_pt",        "type": "securityTransfer",               "match": "regex",      "pattern": "TRANSFER(ENCIA)?\\s+DE\\s+ATIVOS|TRANSF\\.?\\s+ATIVO",
+      "examples": ["TRANSFERÊNCIA DE ATIVOS ENTRE CARTEIRAS"],
+      "notes": "Asset (not cash) transfer between accounts/wallets." },
+
+    { "id": "transfer_security_en",        "type": "securityTransfer",               "match": "regex",      "pattern": "SECURITY\\s+TRANSFER|ASSET\\s+TRANSFER|TRANSFER\\s+OUT\\s+OF\\s+ACCT|DELIVER\\s+WIRE",
+      "examples": ["Security Transfer|MORGAN-STANLEY|", "Transfer out of Acct|EUROPEAN MONETARY UNIT SAVINGSDEPOSIT", "Deliver Wire PER YOUR REQUEST FED FUNDS USD"],
+      "notes": "English. Broadened in 0.2.x to include Morgan Stanley/JPMorgan-style outbound asset transfers ('Transfer out of Acct', 'Deliver Wire'). Must fire BEFORE ted_doc_pix so the WIRE token doesn't win." },
+
+    { "id": "buy_pt",                      "type": "buySell",                        "match": "regex",      "pattern": "\\bCOMPRA\\b",
+      "examples": ["COMPRA PETR4 (B3)"],
+      "notes": "Equity/FI buy order." },
+
+    { "id": "sell_pt",                     "type": "buySell",                        "match": "regex",      "pattern": "\\bVENDA\\b",
+      "examples": ["VENDA VALE3"],
+      "notes": "Equity/FI sell order. NOTE: tax_ir_prefix wins for 'IR - Venda...' rows." },
+
+    { "id": "fund_subscription_pt",        "type": "buySell",                        "match": "regex",      "pattern": "AQUISICAO\\s+DE\\s+COTAS|SUBSCRICAO\\s+DE\\s+COTAS|APLICACAO\\s+EM\\s+COTAS",
+      "examples": ["AQUISIÇÃO DE COTAS XPTO FIA"],
+      "notes": "Fund unit subscription." },
+
+    { "id": "fund_redemption_pt",          "type": "buySell",                        "match": "regex",      "pattern": "RESGATE\\s+DE\\s+COTAS",
+      "examples": ["RESGATE DE COTAS XPTO FIA"],
+      "notes": "Fund unit redemption (NOT a cash sweep — see resgate_cdb below, also buySell)." },
+
+    { "id": "aplicacao_fundos",            "type": "buySell",                        "match": "regex",      "pattern": "APLICACAO\\s+(EM\\s+)?FUNDOS|APLICACAO\\s+SELIC|APLICACAO\\s+EM\\s+(NTNB|NTN-B|LTN|LFT)",
+      "examples": ["TED TER BCO 33 AGE 2271 CTA 13017209 1 - TED APLICAÇÃO FUNDOS Trend Investback F", "APLICAÇÃO SELIC EM NTNB", "APLICAÇÃO SELIC EM LTN"],
+      "notes": "Fund or fixed-income subscription described via TED/SELIC. Must fire BEFORE ted_doc_pix so the TED/PIX prefix doesn't win." },
+
+    { "id": "emissao_titulo",              "type": "buySell",                        "match": "regex",      "pattern": "\\bEMISSAO\\s*-",
+      "examples": ["EMISSAO - CDB BANCO BTG PACTUAL S.A. - Venc: 2028-01-03 XX1006454052"],
+      "notes": "CDB / fixed-income issuance booked as a buy on the investor side." },
+
+    { "id": "transferencia_do_fundo",      "type": "buySell",                        "match": "regex",      "pattern": "TRANSFERENCIA\\s+DO\\s+FUNDO",
+      "examples": ["TRANSFERENCIA DO FUNDO CS EVOLUTION DI PRIVATE FC FIF RF REF RL"],
+      "notes": "Inter-fund transfer counted as a buy/sell of fund units. Distinct from transfer_security_pt (asset transfer between custodians) and transferencia_caixa (cash transfer)." },
+
+    { "id": "resgate_cdb",                 "type": "buySell",                        "match": "regex",      "pattern": "RESGATE\\s+(CDB|LCI|LCA|LCD|LFT|LTN|NTN)",
+      "examples": ["RESGATE CDB12643P73 | CDB BANCO XP S.A. - JAN/2028", "RESGATE ADELIC NTNB"],
+      "notes": "Fixed-income redemption. CONVENTION CONFIRMED by user: always buySell, even though some upstream banks deliver these as cash withdrawals. The classifier normalises to buySell." },
+
+    { "id": "buy_sell_en",                 "type": "buySell",                        "match": "regex",      "pattern": "\\b(BUY|SELL|BOUGHT|SOLD|PURCHASE|SUBSCRIPTION|REDEMPTION)\\b",
+      "examples": ["Buy|US-EQUITY|VOO", "Sold|UNITED STATES TREASURY BILL"],
+      "notes": "English equivalents from international custodians. SOLD/BOUGHT added in 0.2.0. Comes after matured_bond which carves out matured-bond redemption → maturity." },
+
+    { "id": "ted_doc_pix",                 "type": "withdrawalDeposit",              "match": "regex",      "pattern": "\\b(TED|DOC|PIX|WIRE|ZELLE)\\b",
+      "examples": ["TED RECEBIDA", "PIX ENVIADO", "Zelle Payment|TO LA BOFA"],
+      "notes": "Inter-bank transfers. NOTE: aplicacao_fundos and fee_dash_prefix carve out fund applications and 'Fee - Wire' fee bookings." },
+
+    { "id": "envio_transferencia",         "type": "withdrawalDeposit",              "match": "regex",      "pattern": "ENVIO\\s+TRANSFERENCIA|ENTREGA\\s+TRANSFERENCIA",
+      "examples": ["ENVIO TRANSFERÊNCIA - Marcio R Zarzur", "ENVIO TRANSFERÊNCIA - Bernardete Franco Zarzur", "Entrega Transferência eletrônica BANCO DE CREDITO E INVERSIONES"],
+      "notes": "Itaú/BCI-style outbound transfer." },
+
+    { "id": "internal_transfer_us",        "type": "withdrawalDeposit",              "match": "regex",      "pattern": "INTERNAL\\s+TRANSFER\\s+TO|\\bMISC\\.?\\s*(DISBURSEMENT|RECEIPT)\\b|TRANSFER\\s+OF\\s+FUNDS",
+      "examples": ["INTERNAL TRANSFER TO MARCOS JOAQUIM GONCALVES ALVES", "Misc. Disbursement TRANSFER OF FUNDS FROM EXXXX4000 TO 7XXXX6799 0USDPRAA7", "Misc. Receipt EUR RECEIVED FROM 1/JPMORGAN CHASE BANK"],
+      "notes": "Morgan Stanley / JPMorgan-style cash transfers and miscellaneous cash bookings." },
+
+    { "id": "resgate_adelic",              "type": "buySell",                        "match": "regex",      "pattern": "RESGATE\\s+ADELIC",
+      "examples": ["RESGATE ADELIC NTNB", "RESGATE ADELIC LTN"],
+      "notes": "Auto-redemption of SELIC float into a Tesouro Direto position. Mirrored by aplicacao_fundos for the other side." },
+
+    { "id": "sale_trade_id_us",            "type": "buySell",                        "match": "regex",      "pattern": "\\bSALE:\\s+TRADE\\s+ID\\b",
+      "examples": ["Sale: Trade ID 150793190 - B 03/19/26 - US912797PV33"],
+      "notes": "US-bond sale ticket from international custodians." },
+
+    { "id": "debit_card",                  "type": "withdrawalDeposit",              "match": "regex",      "pattern": "\\bDEBIT\\s+CARD\\b",
+      "examples": ["Debit Card|HOTEL DE SAO JOSE DO\nVISEU PT", "Debit Card|FOREIGN TRANSACTION FEE"],
+      "notes": "CONFIRMED by user (Q9). 'Debit Card' is the operation itself — cash leaving the wallet. The inner content describes the destination (merchant, fee, etc.) but does not change the classification. Must fire BEFORE fee_generic_en." },
+
+    { "id": "liq_cambio",                  "type": "otherFee",                       "match": "regex",      "pattern": "\\bLIQ\\s+CAMBIO\\b",
+      "examples": ["LIQ CAMBIO - BANCO BTG PACTUAL S A"],
+      "notes": "FX settlement booked as a fee on the cash leg." },
+
+    { "id": "transferencia_caixa",         "type": "withdrawalDeposit",              "match": "regex",      "pattern": "TRANSFER(ENCIA)?\\s+(BANCARIA|ENTRE\\s+CONTAS|RECEBIDA|ENVIADA)",
+      "examples": ["TRANSFERÊNCIA BANCÁRIA"],
+      "notes": "Generic cash transfer (must NOT match 'TRANSFERENCIA DE ATIVOS' — handled by transfer_security_pt above)." },
+
+    { "id": "deposito_saque",              "type": "withdrawalDeposit",              "match": "regex",      "pattern": "\\b(DEPOSITO|SAQUE|SAQUES)\\b",
+      "examples": ["DEPÓSITO EM CONTA", "SAQUE CAIXA", "Saques Sem compras nem vendas 02-Jan-2026"],
+      "notes": "PT cash in/out. Comes after pagamento_mensal_juros_bda which carves out BDA interest." },
+
+    { "id": "debito_cc_cip",               "type": "withdrawalDeposit",              "match": "regex",      "pattern": "DEBITO\\s+EM\\s+C/C",
+      "examples": ["DÉBITO EM C/C VIA CIP - ANA PAULA GUARISI MENDES LEVADA"],
+      "notes": "Itaú/CIP cash debit on current account." },
+
+    { "id": "funds_wired_en",              "type": "withdrawalDeposit",              "match": "regex",      "pattern": "\\bFUNDS\\s+(RECEIVED|TRANSFERRED|SENT)\\b|\\bWIRED\\s+FUNDS\\b",
+      "examples": ["Funds Received|WIRED FUNDS RECEIVED\nBANCO ITAU EUROPA INTL", "Funds Transferred|WIRED FUNDS SENT"],
+      "notes": "Morgan Stanley / JPMorgan-style wired-funds movements. Comes after fee_dash_prefix." },
+
+    { "id": "pending_card_trans",          "type": "withdrawalDeposit",              "match": "regex",      "pattern": "PENDING\\s+CARD\\s+TRANS",
+      "examples": ["Pending Card Trans|2026-01-02 GALP SALVAT DE MAGOS|nan|nan"],
+      "notes": "Pending card transactions on US/international cash accounts." },
+
+    { "id": "withdrawal_deposit_en",       "type": "withdrawalDeposit",              "match": "regex",      "pattern": "\\b(WITHDRAWAL|DEPOSIT|CASH\\s+TRANSFER)\\b",
+      "examples": ["Withdrawal|JP-MORGAN|"],
+      "notes": "English." },
+
+    { "id": "gains_expenses_perdas",       "type": "gainsExpenses",                  "match": "regex",      "pattern": "\\b(PERDAS|PREJUIZO|LUCRO\\s+CONTABIL)\\b",
+      "examples": ["PERDAS REALIZADAS"],
+      "notes": "Realized P&L bookings. NOTE: 'GANHOS' removed in 0.2.0 because it conflicts with 'Ganho Rendimento' prefix." },
+
+    { "id": "fee_generic_pt",              "type": "otherFee",                       "match": "regex",      "pattern": "\\bTAXA\\b|\\bTARIFA\\b",
+      "examples": ["TAXA BANCARIA", "TARIFA MENSAL"],
+      "notes": "Generic fee fallback. Comes AFTER brokerageFee, managementFee, gainsExpenses (LIQ BOLSA, TAXA REMUNERACAO), and ESTORNO so those win." },
+
+    { "id": "fee_generic_en",              "type": "otherFee",                       "match": "regex",      "pattern": "\\b(FEE|CHARGE)\\b",
+      "examples": ["Custody Fee|JP-MORGAN|"],
+      "notes": "Generic English fee fallback. After brokerage/management/etc." }
+  ]
+}

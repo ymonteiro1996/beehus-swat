@@ -1,0 +1,1647 @@
+{% extends "base.html" %}
+{% set active = "precificacao" %}
+{% block title %}Preços na Curva{% endblock %}
+
+{% block head %}
+<style>
+  .sec-badge { display: inline-flex; flex-direction: column; background: #f9fafb; border: 1px solid #e5e7eb;
+               border-radius: 8px; padding: 4px 10px; font-size: 10px; }
+  .sec-badge .label { text-transform: uppercase; letter-spacing: .05em; color: #9ca3af; }
+  .sec-badge .val   { font-weight: 600; color: #374151; margin-top: 1px; }
+  .drop-row         { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #f3f4f6; }
+  .drop-row:hover   { background: #fff7ed; }
+  .drop-row:last-child { border-bottom: none; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center;
+              width: 20px; height: 20px; border-radius: 50%; background: #f97316; color: white;
+              font-size: 10px; font-weight: 700; flex-shrink: 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<header class="bg-white shadow px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+  <h1 class="font-semibold text-gray-700">Preços na Curva</h1>
+  <div class="flex gap-2">
+  <button onclick="resetAll()" title="Reiniciar tudo"
+    class="flex items-center gap-1.5 border border-red-200 rounded-lg px-3 py-1.5 text-xs text-red-400 hover:bg-red-50 hover:text-red-600">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    Reiniciar
+  </button>
+  <button onclick="openFormulasModal()" title="Ver fórmulas"
+    class="flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"/><path stroke-linecap="round" d="M12 16v-4m0-4h.01"/>
+    </svg>
+    Fórmulas
+  </button>
+  <button onclick="openConfigModal()" title="Configurar benchmarks"
+    class="flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/>
+    </svg>
+    Benchmarks
+  </button>
+  </div>
+</header>
+
+<div class="px-6 pt-5 pb-8 space-y-4">
+
+  <!-- ══ STEP 1 — Select Security ════════════════════════════════════════════ -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="lg:col-span-2 bg-white rounded-xl shadow p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="step-num">1</span>
+        <p class="text-xs font-semibold text-gray-700">Selecionar Ativo</p>
+      </div>
+
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="min-w-[160px]">
+          <label class="block text-[10px] text-gray-400 mb-1">Empresa</label>
+          <select id="company-select" onchange="onCompanyChange()"
+            class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+        <div class="min-w-[160px]">
+          <label class="block text-[10px] text-gray-400 mb-1">Carteira</label>
+          <select id="wallet-select"
+            class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+        <div class="min-w-[140px]">
+          <label class="block text-[10px] text-gray-400 mb-1">Data Posição</label>
+          <input id="position-date-input" type="date"
+            class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+        </div>
+        <button onclick="openWalletSecModal()"
+          class="bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-5 py-2 text-xs font-semibold whitespace-nowrap">
+          Ver Ativos
+        </button>
+        <span id="wallet-id-label" class="text-[10px] text-gray-400 font-mono"></span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow p-5">
+      <div class="flex items-center gap-2 mb-3">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
+        </svg>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Listas Salvas</p>
+      </div>
+      <div id="saved-lists-body">
+        <p class="text-xs text-gray-300 italic">Nenhuma lista salva.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ STEP 2 — Security Detail (hidden until selection) ═══════════════════ -->
+  <div id="detail-panel" class="hidden bg-white rounded-xl shadow p-5">
+    <div class="flex items-center gap-2 mb-3">
+      <span class="step-num">2</span>
+      <p class="text-xs font-semibold text-gray-700">Detalhe do Ativo</p>
+    </div>
+
+    <div class="mb-3">
+      <p id="dp-name" class="font-semibold text-gray-800 text-sm"></p>
+      <p id="dp-id"   class="text-[10px] text-gray-400 font-mono mt-0.5"></p>
+    </div>
+    <div id="dp-fields" class="flex flex-wrap gap-2 mb-4"></div>
+
+    <!-- Calc type + params -->
+    <div class="border-t pt-4">
+      <div class="flex flex-wrap items-end gap-3">
+        <div>
+          <label class="block text-[10px] text-gray-400 mb-1">Tipo de Cálculo</label>
+          <select id="dp-calc-type" onchange="onCalcTypeChange()"
+            class="border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[180px]">
+            <option value="pos_fixado">Pós-fixado (%Benchmark)</option>
+            <option value="pre_fixado_curva">Pré-fixado Curva (HTM)</option>
+            <option value="inflacao_curva">Benchmark + (HTM)</option>
+          </select>
+        </div>
+        <div id="dp-benchmark-wrap">
+          <label class="block text-[10px] text-gray-400 mb-1">Benchmark</label>
+          <select id="dp-benchmark"
+            class="border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[140px]">
+            {% for b in benchmarks %}
+            <option value="{{ b.id }}">{{ b.name }}</option>
+            {% endfor %}
+            {% if not benchmarks %}
+            <option value="">— configure benchmarks —</option>
+            {% endif %}
+          </select>
+        </div>
+        <div id="dp-inflacao-bm-wrap" class="hidden">
+          <label class="block text-[10px] text-gray-400 mb-1">Benchmark</label>
+          <select id="dp-inflacao-benchmark"
+            class="border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[140px]">
+            {% for b in benchmarks %}
+            <option value="{{ b.id }}" {% if b.name|upper == 'IPCA' %}selected{% endif %}>{{ b.name }}</option>
+            {% endfor %}
+            {% if not benchmarks %}
+            <option value="">— configure benchmarks —</option>
+            {% endif %}
+          </select>
+        </div>
+        <div id="dp-field-idx-pct">
+          <label class="block text-[10px] text-gray-400 mb-1">% Indexador</label>
+          <input id="dp-idx-pct" type="number" step="any" placeholder="ex: 98"
+            class="border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400 w-28" />
+        </div>
+        <button id="dp-add-btn-inline" onclick="addSecurity()"
+          class="flex items-center gap-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-5 py-2 text-xs font-semibold">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+          </svg>
+          Adicionar
+        </button>
+      </div>
+
+      <!-- HTM: transaction lots -->
+      <div id="dp-transactions-wrap" class="hidden mt-4">
+        <div class="flex items-center gap-3 mb-2">
+          <span class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Lotes de Compra</span>
+          <button onclick="addTxnRow()"
+            class="border rounded-lg px-2.5 py-1 text-[10px] text-orange-600 border-orange-300 hover:bg-orange-50">+ Linha</button>
+          <button onclick="openTxnModal()"
+            class="border rounded-lg px-2.5 py-1 text-[10px] text-gray-600 hover:bg-gray-50">Carregar do BD</button>
+        </div>
+        <div id="dp-txn-table-wrap">
+          <p class="text-[10px] text-gray-300 italic">Adicione ao menos um lote.</p>
+        </div>
+        <button id="dp-add-btn-bottom" onclick="addSecurity()"
+          class="mt-3 flex items-center gap-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-5 py-2 text-xs font-semibold">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+          </svg>
+          Adicionar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ STEP 3 — Selected Securities + Calculate ════════════════════════════ -->
+  <div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="px-5 py-3 border-b flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="step-num">3</span>
+        <p class="text-xs font-semibold text-gray-700">Ativos Selecionados</p>
+        <span id="sec-count" class="text-[10px] text-gray-400"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="downloadTemplate()" title="Baixar planilha modelo para importação em lote"
+          class="flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[10px] text-gray-600 hover:bg-gray-50">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Template
+        </button>
+        <button onclick="openRefDateModal('import')" title="Importar ativos a partir de planilha Excel — usa a data de referência informada para lookup de PU"
+          class="flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[10px] text-gray-600 hover:bg-gray-50">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+          </svg>
+          Importar Excel
+        </button>
+        <input id="upload-input" type="file" accept=".xlsx" class="hidden" />
+        <button onclick="openRefDateModal('refresh')" title="Atualizar a listagem reapurando posPU/PU para uma data de referência informada"
+          class="flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[10px] text-gray-600 hover:bg-gray-50">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Atualizar
+        </button>
+        <button onclick="openSaveModal()"
+          class="flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[10px] text-gray-600 hover:bg-gray-50">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+          </svg>
+          Salvar
+        </button>
+        <button onclick="clearAll()" class="text-[10px] text-red-400 hover:text-red-600 border rounded-lg px-2.5 py-1">Limpar</button>
+        <button onclick="calcular()"
+          class="flex items-center gap-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-5 py-1.5 text-xs font-semibold">
+          Calcular
+        </button>
+      </div>
+    </div>
+    <div class="px-5 py-3 min-h-[60px]">
+      <div id="sec-list"><p class="text-xs text-gray-300 italic">Nenhum ativo adicionado.</p></div>
+      <p id="calc-msg" class="text-[10px] text-gray-400 text-center hidden mt-2"></p>
+    </div>
+  </div>
+
+  <!-- ══ Results ═════════════════════════════════════════════════════════════ -->
+  <div id="results-section" class="hidden bg-white rounded-xl shadow overflow-hidden">
+    <div class="px-5 py-3 border-b flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <p class="text-xs font-semibold text-gray-700">Resultado</p>
+        <span id="results-count" class="text-[10px] font-mono text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-0.5"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="exportarResultados()"
+          class="flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-[10px] text-gray-600 hover:bg-gray-50">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Excel
+        </button>
+        <button onclick="copyResults()"
+          class="flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-[10px] text-gray-600 hover:bg-gray-50">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          Copiar
+        </button>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs border-collapse">
+        <thead class="bg-gray-50 text-gray-500 uppercase text-[10px] sticky top-0">
+          <tr id="results-thead-row"></tr>
+        </thead>
+        <tbody id="results-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Wallet Securities Modal ────────────────────────────────────────────────── -->
+<div id="wallet-sec-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style="max-height:80vh">
+
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div>
+        <h2 class="font-semibold text-gray-800 text-sm">Ativos da Carteira</h2>
+        <p id="wsm-subtitle" class="text-[10px] text-gray-400 mt-0.5"></p>
+      </div>
+      <button onclick="closeWalletSecModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="overflow-y-auto flex-1 px-4 py-4">
+      <div id="wsm-body">
+        <p class="text-xs text-gray-400 italic">Carregando...</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Config Modal ──────────────────────────────────────────────────────────── -->
+<div id="config-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col" style="max-height:85vh">
+
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <h2 class="font-semibold text-gray-800 text-sm">Configurar Benchmarks</h2>
+      <button onclick="closeConfigModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="overflow-y-auto flex-1 px-6 py-5 space-y-5">
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">Benchmarks configurados</p>
+        <div id="cfg-list"><p class="text-xs text-gray-300 italic">Nenhum benchmark.</p></div>
+      </div>
+      <div class="border-t pt-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-3">Adicionar benchmark</p>
+        <div class="relative mb-2">
+          <input id="cfg-search-input" type="text" placeholder="Buscar ativo (nome ou código)..."
+            oninput="onCfgSearchInput()" onblur="hideCfgDropdown()"
+            class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+          <div id="cfg-search-dropdown" class="hidden" style="position:absolute;top:100%;left:0;right:0;z-index:60;background:white;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.1);max-height:200px;overflow-y:auto;"></div>
+        </div>
+        <div id="cfg-selected-info" class="hidden bg-gray-50 border rounded-lg px-3 py-2 text-xs mb-2">
+          <p id="cfg-sel-name" class="font-medium text-gray-800"></p>
+          <p id="cfg-sel-id"   class="text-[10px] text-gray-400 font-mono mt-0.5"></p>
+        </div>
+        <div class="flex gap-2 items-end">
+          <div class="flex-1">
+            <label class="block text-[10px] text-gray-400 mb-1">Nome do benchmark</label>
+            <input id="cfg-bm-name" type="text" placeholder="Ex: CDI, SELIC..."
+              class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+          </div>
+          <button onclick="addBenchmark()"
+            class="shrink-0 bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-4 py-2 text-xs font-semibold">Adicionar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="px-6 py-4 border-t shrink-0 flex justify-end gap-2">
+      <button onclick="closeConfigModal()" class="px-4 py-2 text-xs text-gray-500 border rounded-lg hover:bg-gray-50">Cancelar</button>
+      <button onclick="saveConfig()" class="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white rounded-lg">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Formulas Modal ─────────────────────────────────────────────────────────── -->
+<div id="formulas-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style="max-height:85vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <h2 class="font-semibold text-gray-800 text-sm">Metodologia de Cálculo</h2>
+      <button onclick="closeFormulasModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 py-5 space-y-6 text-xs text-gray-700">
+
+      <!-- Pós-fixado -->
+      <div>
+        <h3 class="font-semibold text-orange-600 text-sm mb-2">1. Pós-fixado (%BM)</h3>
+        <p class="mb-2">Projeta o PU dia a dia com base na rentabilidade de um benchmark (ex: CDI), aplicando um percentual do indexador.</p>
+        <div class="bg-gray-50 rounded-lg p-3 font-mono text-[11px] space-y-1">
+          <p>rent<sub>BM</sub>(t) = PU<sub>BM</sub>(t) / PU<sub>BM</sub>(t-1) - 1</p>
+          <p>PU(t) = PU(t-1) &times; (1 + rent<sub>BM</sub>(t) &times; %indexador / 100)</p>
+        </div>
+        <div class="mt-2 space-y-1 text-[11px] text-gray-500">
+          <p><b>PU inicial:</b> último PU da posição da carteira (processedPosition)</p>
+          <p><b>Data inicial:</b> positionDate da posição mais recente</p>
+          <p><b>Parâmetros:</b> benchmark (ex: CDI) + % indexador (ex: 98%)</p>
+          <p><b>Resultado:</b> um PU por dia útil do calendário do benchmark</p>
+        </div>
+      </div>
+
+      <!-- Pré-fixado Curva -->
+      <div class="border-t pt-5">
+        <h3 class="font-semibold text-orange-600 text-sm mb-2">2. Pré-fixado Curva (HTM)</h3>
+        <p class="mb-2">Projeta o PU usando uma taxa pré-fixada (yield), calculada como média ponderada por quantidade dos lotes de compra.</p>
+        <div class="bg-gray-50 rounded-lg p-3 font-mono text-[11px] space-y-1">
+          <p>yield<sub>pond</sub> = &Sigma;(qtd<sub>i</sub> &times; yield<sub>i</sub>) / &Sigma; qtd<sub>i</sub></p>
+          <p>fator<sub>diário</sub> = (1 + yield<sub>pond</sub> / 100)<sup>1/252</sup></p>
+          <p>PU(t) = PU<sub>posição</sub> &times; fator<sub>diário</sub><sup>n</sup></p>
+        </div>
+        <div class="mt-2 space-y-1 text-[11px] text-gray-500">
+          <p><b>n:</b> dias úteis entre positionDate e a data t (calendário do benchmark)</p>
+          <p><b>252:</b> convenção de dias úteis por ano (mercado brasileiro)</p>
+          <p><b>Lotes:</b> data (controle), quantidade e yield (% a.a.) de cada compra</p>
+          <p><b>PU inicial:</b> PU da posição da carteira</p>
+          <p><b>Resultado:</b> um PU por dia útil, acumulando o fator diário</p>
+        </div>
+      </div>
+
+      <!-- Inflação Curva -->
+      <div class="border-t pt-5">
+        <h3 class="font-semibold text-orange-600 text-sm mb-2">3. Inflação Curva (HTM)</h3>
+        <p class="mb-2">Mesma lógica do pré-fixado, mas incorpora a variação diária de um benchmark de inflação (ex: IPCA) acumulada sobre o PU.</p>
+        <div class="bg-gray-50 rounded-lg p-3 font-mono text-[11px] space-y-1">
+          <p>yield<sub>pond</sub> = &Sigma;(qtd<sub>i</sub> &times; yield<sub>i</sub>) / &Sigma; qtd<sub>i</sub></p>
+          <p>fator<sub>diário</sub> = (1 + yield<sub>pond</sub> / 100)<sup>1/252</sup></p>
+          <p>acum<sub>BM</sub>(t) = &Pi;(1 + rent<sub>BM</sub>(d)) &nbsp; para d de positionDate até t</p>
+          <p>PU(t) = PU<sub>posição</sub> &times; acum<sub>BM</sub>(t) &times; fator<sub>diário</sub><sup>n</sup></p>
+        </div>
+        <div class="mt-2 space-y-1 text-[11px] text-gray-500">
+          <p><b>rent<sub>BM</sub>(d):</b> rentabilidade diária do benchmark de inflação</p>
+          <p><b>acum<sub>BM</sub>:</b> fator acumulado do benchmark desde a positionDate</p>
+          <p><b>Benchmark padrão:</b> IPCA (configurável)</p>
+          <p><b>Resultado:</b> um PU por dia útil = yield acumulado &times; inflação acumulada</p>
+        </div>
+        <div class="mt-3 bg-orange-50 border border-orange-200 rounded-lg p-3 text-[11px] text-orange-700">
+          <p class="font-semibold mb-1">Colunas do resultado:</p>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li><b>Fator Diário:</b> fator<sub>diário</sub> &times; (1 + rent<sub>BM</sub>(t)) — fator combinado do dia</li>
+            <li><b>Yield BM (% a.a.):</b> ((1 + rent<sub>BM</sub>(t))<sup>252</sup> - 1) &times; 100 — rentabilidade anualizada do benchmark</li>
+            <li><b>PU Calculado:</b> PU projetado para o dia</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Common notes -->
+      <div class="border-t pt-5">
+        <h3 class="font-semibold text-gray-600 text-sm mb-2">Notas gerais</h3>
+        <div class="space-y-1 text-[11px] text-gray-500">
+          <p><b>Fonte do PU inicial:</b> processedPosition (posição mais recente da carteira selecionada)</p>
+          <p><b>Calendário:</b> derivado das datas do benchmark configurado</p>
+          <p><b>Transações (lotes):</b> carregadas do BD (buySell / securityTransfer) ou inseridas manualmente</p>
+          <p><b>Convenção:</b> 252 dias úteis/ano para anualização de taxas</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Transactions Modal ─────────────────────────────────────────────────────── -->
+<div id="txn-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col" style="max-height:80vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div>
+        <h2 class="font-semibold text-gray-800 text-sm">Transações do Ativo</h2>
+        <p id="txn-modal-subtitle" class="text-[10px] text-gray-400 mt-0.5"></p>
+      </div>
+      <button onclick="closeTxnModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-4 py-4">
+      <div id="txn-modal-body"><p class="text-xs text-gray-400 italic">Carregando...</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Save List Modal ─────────────────────────────────────────────────────── -->
+<div id="edit-pu-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style="max-height:80vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div>
+        <h2 class="font-semibold text-gray-800 text-sm">Editar Data PU</h2>
+        <p id="edit-pu-list-name" class="text-[10px] text-gray-400 mt-0.5"></p>
+      </div>
+      <button onclick="closeEditPuModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 py-4">
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="text-[10px] uppercase text-gray-400 border-b">
+            <th class="text-left py-1.5 pr-3 font-normal">Ativo</th>
+            <th class="text-left py-1.5 pr-3 font-normal">Carteira</th>
+            <th class="text-right py-1.5 font-normal">Data PU</th>
+          </tr>
+        </thead>
+        <tbody id="edit-pu-tbody"></tbody>
+      </table>
+    </div>
+    <div class="px-6 py-4 border-t shrink-0 flex justify-end gap-2">
+      <button onclick="closeEditPuModal()" class="px-4 py-2 text-xs text-gray-500 border rounded-lg hover:bg-gray-50">Cancelar</button>
+      <button onclick="saveEditedPu()" class="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white rounded-lg">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal compartilhada pelas ações "Importar Excel" e "Atualizar" — coleta a
+     data de referência que o backend usa para `_find_price_as_of` e para o
+     `processedPosition` lookup. O modo (`import` ou `refresh`) é gravado em
+     `_refDateMode` e decide o callback após Continuar. -->
+<div id="refdate-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-20 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style="max-height:80vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <h2 id="refdate-modal-title" class="font-semibold text-gray-800 text-sm">Selecione a data de referência</h2>
+      <button onclick="closeRefDateModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+      <p id="refdate-modal-hint" class="text-[11px] text-gray-500">
+        O sistema usará essa data para buscar o PU em <code>securityPrices</code>
+        (último <code>historyPrice</code> com <code>date ≤</code> referência) e a
+        posição em <code>processedPosition</code> exatamente nessa data.
+      </p>
+      <div>
+        <label class="block text-[10px] text-gray-400 mb-1">Data de referência</label>
+        <input id="refdate-input" type="date"
+          class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+      </div>
+      <p id="refdate-modal-status" class="text-[10px] text-red-600 min-h-[1em]"></p>
+    </div>
+    <div class="px-6 py-4 border-t shrink-0 flex justify-end gap-2">
+      <button onclick="closeRefDateModal()" class="px-4 py-2 text-xs text-gray-500 border rounded-lg hover:bg-gray-50">Cancelar</button>
+      <button id="refdate-modal-go" onclick="confirmRefDateModal()" class="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white rounded-lg">Continuar</button>
+    </div>
+  </div>
+</div>
+
+<div id="save-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-20 pb-10 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style="max-height:80vh">
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <h2 class="font-semibold text-gray-800 text-sm">Salvar Lista</h2>
+      <button onclick="closeSaveModal()" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+      <div>
+        <label class="block text-[10px] text-gray-400 mb-1">Nome da lista</label>
+        <input id="save-name-input" type="text" placeholder="Ex: Carteira ABC, Pré-fixados..."
+          class="w-full border rounded-lg px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+        <p id="save-existing-hint" class="hidden mt-1 text-[10px] text-orange-600">
+          Já existe uma lista com este nome — será substituída ao salvar.
+        </p>
+      </div>
+      <div>
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">Listas existentes</p>
+        <div id="save-existing-list" class="text-[10px] text-gray-500 flex flex-wrap gap-1.5">
+          <span class="italic text-gray-300">Nenhuma.</span>
+        </div>
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t shrink-0 flex justify-end gap-2">
+      <button onclick="closeSaveModal()" class="px-4 py-2 text-xs text-gray-500 border rounded-lg hover:bg-gray-50">Cancelar</button>
+      <button onclick="saveList()" class="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white rounded-lg">Salvar</button>
+    </div>
+  </div>
+</div>
+
+
+{% endblock %}
+
+
+{% block modals %}
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let _selectedSec     = null;
+  let _addedSecurities = [];
+  let _resultsData     = null;
+  let _txnRows         = [];
+
+  const CALC_TYPE_LABELS = {
+    pos_fixado:       "Pós-fixado",
+    pre_fixado_curva: "Pré-fixado Curva",
+    inflacao_curva:   "Benchmark +",
+  };
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function fmtNum(v, d = 8) {
+    return v == null ? "—" : Number(v).toLocaleString("pt-BR", {minimumFractionDigits: d, maximumFractionDigits: d});
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  loadCompanies();
+  loadSavedLists();
+
+  // ── Companies & Wallets ────────────────────────────────────────────────────
+  function loadCompanies() {
+    fetch("/api/precificacao/companies")
+      .then(r => r.json())
+      .then(companies => {
+        const sel = document.getElementById("company-select");
+        sel.innerHTML = '<option value="">— selecione —</option>' +
+          companies.map(c => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join("");
+      });
+  }
+
+  function onCompanyChange() {
+    const cid  = document.getElementById("company-select").value;
+    const wSel = document.getElementById("wallet-select");
+    if (!cid) { wSel.innerHTML = '<option value="">— selecione —</option>'; return; }
+    wSel.innerHTML = '<option value="">Carregando...</option>';
+    fetch(`/api/precificacao/wallets?companyId=${encodeURIComponent(cid)}`)
+      .then(r => r.json())
+      .then(wallets => {
+        wSel.innerHTML = wallets.length
+          ? wallets.map(w => `<option value="${escHtml(w.id)}">${escHtml(w.name)}</option>`).join("")
+          : '<option value="">Nenhuma carteira</option>';
+        fetchLatestDate();
+      });
+  }
+
+  function fetchLatestDate() {
+    const walletId = document.getElementById("wallet-select").value;
+    if (!walletId) { document.getElementById("position-date-input").value = ""; return; }
+    fetch(`/api/precificacao/latest-position-date?walletId=${encodeURIComponent(walletId)}`)
+      .then(r => r.json())
+      .then(({ date }) => {
+        document.getElementById("position-date-input").value = date || "";
+      });
+  }
+
+  // Listen for wallet dropdown change
+  document.getElementById("wallet-select").addEventListener("change", fetchLatestDate);
+
+  // ── Wallet Securities Modal ────────────────────────────────────────────────
+  function openWalletSecModal() {
+    const wSel        = document.getElementById("wallet-select");
+    const walletId    = wSel.value;
+    const posDateVal  = document.getElementById("position-date-input").value;
+    if (!walletId) { alert("Selecione uma carteira."); return; }
+    const walletName = wSel.options[wSel.selectedIndex]?.text || "";
+    document.getElementById("wallet-id-label").textContent = walletId;
+    document.getElementById("wsm-subtitle").textContent = walletName + (posDateVal ? ` · ${posDateVal}` : "");
+    document.getElementById("wsm-body").innerHTML = '<p class="text-xs text-gray-400 italic">Carregando...</p>';
+    document.getElementById("wallet-sec-modal").classList.remove("hidden");
+
+    let url = `/api/precificacao/wallet-securities?walletId=${encodeURIComponent(walletId)}`;
+    if (posDateVal) url += `&positionDate=${encodeURIComponent(posDateVal)}`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => renderWalletSecModal(data, walletId, walletName))
+      .catch(() => {
+        document.getElementById("wsm-body").innerHTML = '<p class="text-xs text-red-400">Erro ao carregar ativos.</p>';
+      });
+  }
+
+  function closeWalletSecModal() {
+    document.getElementById("wallet-sec-modal").classList.add("hidden");
+  }
+
+  function renderWalletSecModal(data, walletId, walletName) {
+    const body = document.getElementById("wsm-body");
+    if (data.error) { body.innerHTML = `<p class="text-xs text-red-400">${escHtml(data.error)}</p>`; return; }
+    const secs = data.securities || [];
+    if (data.positionDate) {
+      document.getElementById("wsm-subtitle").textContent += ` · posição ${data.positionDate}`;
+    }
+    if (!secs.length) {
+      body.innerHTML = '<p class="text-xs text-gray-400 italic">Nenhum ativo nesta carteira.</p>';
+      return;
+    }
+    body.innerHTML = `
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="text-[10px] uppercase text-gray-400 border-b">
+            <th class="text-left py-2 pr-3 font-normal">Ativo</th>
+            <th class="text-left py-2 pr-3 font-normal">Tipo Precif.</th>
+            <th class="text-right py-2 pr-3 font-normal">Quantidade</th>
+            <th class="text-right py-2 pr-3 font-normal">PU</th>
+            <th class="text-right py-2 font-normal">Saldo (R$)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${secs.map(s => `
+            <tr class="border-t border-gray-100 hover:bg-orange-50 cursor-pointer"
+                onclick='selectSecurity(${JSON.stringify({
+                  securityId:    s.securityId,
+                  walletId:      walletId,
+                  walletName:    walletName,
+                  pricingType:   s.pricingType || "",
+                  posQuantity:   s.quantity,
+                  posPU:         s.pu,
+                  positionDate:  data.positionDate || "",
+                }).replace(/'/g, "&#39;")})'>
+              <td class="py-2 pr-3">
+                <p class="font-medium text-gray-800">${escHtml(s.beehusName || s.securityId)}</p>
+                <p class="text-[10px] text-gray-400 font-mono">${escHtml(s.mainId || s.securityId)}</p>
+              </td>
+              <td class="py-2 pr-3 text-gray-500">${escHtml(s.pricingType || "—")}</td>
+              <td class="py-2 pr-3 text-right font-mono text-gray-600">${s.quantity != null ? fmtNum(s.quantity, 2) : "—"}</td>
+              <td class="py-2 pr-3 text-right font-mono text-gray-600">${s.pu != null ? fmtNum(s.pu, 8) : "—"}</td>
+              <td class="py-2 text-right font-mono text-gray-600">
+                ${s.balance != null ? s.balance.toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2}) : "—"}
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }
+
+  // ── Select Security → fetch detail + show panel ────────────────────────────
+  function selectSecurity(posData) {
+    closeWalletSecModal();
+    const { securityId, walletId, walletName, pricingType, posQuantity, posPU, positionDate } = posData;
+
+    let secUrl = `/api/precificacao/security/${encodeURIComponent(securityId)}?walletId=${encodeURIComponent(walletId)}`;
+    if (positionDate) secUrl += `&positionDate=${encodeURIComponent(positionDate)}`;
+    fetch(secUrl)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => {
+        if (data.error) { console.error(data.error); return; }
+        _selectedSec = { ...data, walletId, walletName, positionDate: positionDate || "" };
+        renderDetailPanel(data);
+      })
+      .catch(err => console.error("selectSecurity failed:", err));
+  }
+
+  function _buildFieldBadges(d) {
+    const fields = [
+      ["mainId",         d.mainId],
+      ["Tipo",           d.securityType],
+      ["Sub-tipo",       d.type],
+      ["Moeda",          d.currency],
+      ["Vencimento",     d.maturityDate],
+      ["Emissor",        d.issuer],
+      ["Tipo Precif.",   d.pricingType],
+      ["Indexador",      d.indexer],
+      ["% Indexador",    d.indexerPercentual != null ? d.indexerPercentual : null],
+      ["Taxa",           d.yield != null ? d.yield : null],
+      ["Quantidade",     d.posQuantity != null ? fmtNum(d.posQuantity, 2) : null],
+      ["Último PU",      d.posPU != null ? fmtNum(d.posPU, 8) : (d.lastPU != null ? fmtNum(d.lastPU, 8) : null)],
+      ["Data Posição",   d.positionDate || null],
+    ];
+    return fields
+      .filter(([, v]) => v != null && v !== "")
+      .map(([l, v]) => `<span class="sec-badge"><span class="label">${escHtml(l)}</span><span class="val">${escHtml(String(v))}</span></span>`)
+      .join("");
+  }
+
+  function renderDetailPanel(d) {
+    document.getElementById("dp-name").textContent = d.beehusName || d.id;
+    document.getElementById("dp-id").textContent   = d.id;
+    document.getElementById("dp-fields").innerHTML  = _buildFieldBadges({ ...d, positionDate: _selectedSec?.positionDate });
+
+    document.getElementById("dp-idx-pct").value = d.indexerPercentual != null ? d.indexerPercentual : "";
+    _txnRows = [];
+    document.getElementById("dp-txn-table-wrap").innerHTML =
+      '<p class="text-[10px] text-gray-300 italic">Adicione ao menos um lote.</p>';
+    document.getElementById("detail-panel").classList.remove("hidden");
+    onCalcTypeChange();
+  }
+
+  // ── Calc type toggle ───────────────────────────────────────────────────────
+  function onCalcTypeChange() {
+    const ct = document.getElementById("dp-calc-type").value;
+    const isPos      = ct === "pos_fixado";
+    const isHTM      = ct === "pre_fixado_curva" || ct === "inflacao_curva";
+    const isInflacao = ct === "inflacao_curva";
+
+    document.getElementById("dp-benchmark-wrap").classList.toggle("hidden", !isPos);
+    document.getElementById("dp-field-idx-pct").classList.toggle("hidden", !isPos);
+    document.getElementById("dp-inflacao-bm-wrap").classList.toggle("hidden", !isInflacao);
+    document.getElementById("dp-add-btn-inline").classList.toggle("hidden", isHTM);
+    document.getElementById("dp-transactions-wrap").classList.toggle("hidden", !isHTM);
+    if (isHTM && !_txnRows.length) addTxnRow();
+  }
+
+  // ── Transaction lots (HTM) ─────────────────────────────────────────────────
+  function addTxnRow() {
+    _txnRows.push({ date: "", quantity: null, yield: null });
+    renderTxnTable();
+  }
+
+  function removeTxnRow(i) {
+    _txnRows.splice(i, 1);
+    renderTxnTable();
+  }
+
+  function updateTxnField(i, field, raw) {
+    if (!_txnRows[i]) return;
+    _txnRows[i][field] = (field === "date") ? raw : (raw === "" ? null : Number(raw));
+  }
+
+  function renderTxnTable() {
+    const wrap = document.getElementById("dp-txn-table-wrap");
+    if (!_txnRows.length) {
+      wrap.innerHTML = '<p class="text-[10px] text-gray-300 italic">Adicione ao menos um lote.</p>';
+      return;
+    }
+    const inp = (i, field, val, type, w) =>
+      `<input type="${type}" step="any" value="${escHtml(val ?? '')}"
+        oninput="updateTxnField(${i},'${field}',this.value)"
+        class="border rounded px-2 py-1 text-[10px] ${w} focus:outline-none focus:ring-1 focus:ring-orange-400" />`;
+    wrap.innerHTML = `
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="text-[10px] uppercase text-gray-400 border-b">
+            <th class="text-left py-1.5 pr-2 font-normal">Data</th>
+            <th class="text-right py-1.5 pr-2 font-normal">Quantidade</th>
+            <th class="text-right py-1.5 pr-2 font-normal">Yield (% a.a.)</th>
+            <th class="py-1.5 w-5"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${_txnRows.map((r, i) => `
+            <tr class="border-t border-gray-100">
+              <td class="py-1 pr-2">${inp(i,'date',r.date,'date','w-30')}</td>
+              <td class="py-1 pr-2 text-right">${inp(i,'quantity',r.quantity,'number','w-28 text-right')}</td>
+              <td class="py-1 pr-2 text-right">${inp(i,'yield',r.yield,'number','w-28 text-right')}</td>
+              <td class="py-1 text-center">
+                <button onclick="removeTxnRow(${i})" class="text-red-400 hover:text-red-600 text-[10px]">&#10005;</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }
+
+  // ── Transactions modal (load from DB) ────────────────────────────────────────
+  function openTxnModal() {
+    if (!_selectedSec) return;
+    const { id, walletId, positionDate, beehusName } = _selectedSec;
+    if (!walletId) { alert("Ativo sem carteira — não é possível carregar transações."); return; }
+
+    document.getElementById("txn-modal-subtitle").textContent =
+      `${beehusName || id}${positionDate ? ` · até ${positionDate}` : ""}`;
+    document.getElementById("txn-modal-body").innerHTML =
+      '<p class="text-xs text-gray-400 italic">Carregando...</p>';
+    document.getElementById("txn-modal").classList.remove("hidden");
+
+    const qs = `securityId=${encodeURIComponent(id)}&walletId=${encodeURIComponent(walletId)}&positionDate=${encodeURIComponent(positionDate)}`;
+    fetch(`/api/precificacao/security-transactions?${qs}`)
+      .then(r => r.json())
+      .then(data => renderTxnModal(data.transactions || []))
+      .catch(() => {
+        document.getElementById("txn-modal-body").innerHTML =
+          '<p class="text-xs text-red-400">Erro ao carregar transações.</p>';
+      });
+  }
+
+  function closeTxnModal() { document.getElementById("txn-modal").classList.add("hidden"); }
+
+  function renderTxnModal(txns) {
+    const body = document.getElementById("txn-modal-body");
+    if (!txns.length) {
+      body.innerHTML = '<p class="text-xs text-gray-400 italic">Nenhuma transação encontrada.</p>';
+      return;
+    }
+    body.innerHTML = `
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="text-[10px] uppercase text-gray-400 border-b">
+            <th class="py-2 pr-2 w-5 font-normal"></th>
+            <th class="text-left py-2 pr-3 font-normal">Data Liquidação</th>
+            <th class="text-left py-2 pr-3 font-normal">Tipo</th>
+            <th class="text-right py-2 pr-3 font-normal">Quantidade</th>
+            <th class="text-right py-2 pr-3 font-normal">Preço</th>
+            <th class="text-right py-2 pr-3 font-normal">Financeiro</th>
+            <th class="text-left py-2 font-normal">Descrição</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${txns.map((t, i) => `
+            <tr class="border-t border-gray-100 hover:bg-gray-50">
+              <td class="py-2 pr-2 text-center">
+                <input type="checkbox" data-idx="${i}" class="txn-check w-3.5 h-3.5 rounded border-gray-300 text-orange-500 cursor-pointer" checked />
+              </td>
+              <td class="py-2 pr-3 font-mono text-gray-600">${escHtml(t.liquidationDate)}</td>
+              <td class="py-2 pr-3 text-gray-500">${escHtml(t.beehusTransactionType)}</td>
+              <td class="py-2 pr-3 text-right font-mono text-gray-600">${fmtNum(t.quantity, 2)}</td>
+              <td class="py-2 pr-3 text-right font-mono text-gray-600">${t.price != null ? fmtNum(t.price, 8) : "—"}</td>
+              <td class="py-2 pr-3 text-right font-mono text-gray-600">${t.balance != null ? fmtNum(t.balance, 2) : "—"}</td>
+              <td class="py-2 text-gray-500 text-[10px] max-w-[200px] truncate" title="${escHtml(t.description)}">${escHtml(t.description || "—")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+      <div class="flex justify-end mt-3">
+        <button onclick="importSelectedTxns()" class="bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-5 py-2 text-xs font-semibold">
+          Importar selecionados
+        </button>
+      </div>`;
+    // Store txns for import
+    body._txns = txns;
+  }
+
+  function importSelectedTxns() {
+    const body  = document.getElementById("txn-modal-body");
+    const txns  = body._txns || [];
+    const checks = body.querySelectorAll(".txn-check");
+    // Remove blank rows before importing
+    _txnRows = _txnRows.filter(r => r.date || r.quantity != null || r.yield != null);
+    let imported = 0;
+    checks.forEach(cb => {
+      if (!cb.checked) return;
+      const t = txns[Number(cb.dataset.idx)];
+      if (!t || !t.quantity) return;
+      _txnRows.push({
+        date:     t.liquidationDate || "",
+        quantity: t.quantity,
+        yield:    null,
+      });
+      imported++;
+    });
+    closeTxnModal();
+    if (imported) renderTxnTable();
+  }
+
+  // ── Add security to list ───────────────────────────────────────────────────
+  function addSecurity() {
+    if (!_selectedSec) return;
+    const calcType = document.getElementById("dp-calc-type").value;
+
+    if (_addedSecurities.find(s => s.id === _selectedSec.id && s.calcType === calcType)) {
+      alert("Ativo já está na lista com este tipo de cálculo."); return;
+    }
+
+    const entry = { ..._selectedSec, calcType };
+
+    if (calcType === "pos_fixado") {
+      const bmSel = document.getElementById("dp-benchmark");
+      const bmId  = bmSel.value;
+      if (!bmId) { alert("Selecione um benchmark."); return; }
+      entry.benchmarkId   = bmId;
+      entry.benchmarkName = bmSel.options[bmSel.selectedIndex]?.text || "";
+      const idxRaw = document.getElementById("dp-idx-pct").value.trim();
+      entry.indexerPercentual = idxRaw !== "" ? Number(idxRaw) : null;
+    } else if (calcType === "pre_fixado_curva" || calcType === "inflacao_curva") {
+      const validRows = _txnRows.filter(r => r.quantity != null && r.quantity > 0 && r.yield != null);
+      if (!validRows.length) { alert("Adicione ao menos um lote com quantidade e yield."); return; }
+      entry.transactions = validRows.map(r => ({ ...r }));
+      const totalQty = validRows.reduce((s, r) => s + r.quantity, 0);
+      entry.weightedYield = validRows.reduce((s, r) => s + r.quantity * r.yield, 0) / totalQty;
+      if (calcType === "inflacao_curva") {
+        const bmSel = document.getElementById("dp-inflacao-benchmark");
+        const bmId  = bmSel.value;
+        if (!bmId) { alert("Selecione um benchmark de inflação."); return; }
+        entry.benchmarkId   = bmId;
+        entry.benchmarkName = bmSel.options[bmSel.selectedIndex]?.text || "";
+      }
+    }
+
+    _addedSecurities.push(entry);
+    renderSecList();
+  }
+
+  function clearAll() {
+    _addedSecurities = [];
+    renderSecList();
+    document.getElementById("results-section").classList.add("hidden");
+  }
+
+  function resetAll() {
+    if (!confirm("Reiniciar tudo? Todos os dados serão perdidos.")) return;
+    _selectedSec = null;
+    _addedSecurities = [];
+    _resultsData = null;
+    _txnRows = [];
+    document.getElementById("company-select").value = "";
+    document.getElementById("wallet-select").innerHTML = '<option value="">— selecione —</option>';
+    document.getElementById("position-date-input").value = "";
+    document.getElementById("wallet-id-label").textContent = "";
+    document.getElementById("detail-panel").classList.add("hidden");
+    document.getElementById("results-section").classList.add("hidden");
+    document.getElementById("calc-msg").classList.add("hidden");
+    renderSecList();
+  }
+
+  document.getElementById("sec-list").addEventListener("click", e => {
+    const removeBtn = e.target.closest(".remove-sec-btn");
+    if (removeBtn) { _addedSecurities.splice(Number(removeBtn.dataset.idx), 1); renderSecList(); return; }
+
+    const editBtn = e.target.closest(".edit-sec-btn");
+    if (editBtn) { editSecurity(Number(editBtn.dataset.idx)); }
+  });
+
+  function editSecurity(idx) {
+    const s = _addedSecurities[idx];
+    if (!s) return;
+
+    _addedSecurities.splice(idx, 1);
+    renderSecList();
+
+    _selectedSec = { ...s };
+
+    // Reuse shared rendering
+    document.getElementById("dp-name").textContent  = s.beehusName || s.id;
+    document.getElementById("dp-id").textContent    = s.id;
+    document.getElementById("dp-fields").innerHTML  = _buildFieldBadges(s);
+
+    document.getElementById("dp-calc-type").value = s.calcType || "pos_fixado";
+    document.getElementById("dp-idx-pct").value   = s.indexerPercentual != null ? s.indexerPercentual : "";
+    if (s.benchmarkId) {
+      document.getElementById("dp-benchmark").value          = s.benchmarkId;
+      document.getElementById("dp-inflacao-benchmark").value = s.benchmarkId;
+    }
+
+    _txnRows = (s.transactions || []).map(t => ({ ...t }));
+    if (_txnRows.length) renderTxnTable();
+
+    document.getElementById("detail-panel").classList.remove("hidden");
+    onCalcTypeChange();
+  }
+
+  function renderSecList() {
+    const el = document.getElementById("sec-list");
+    const countEl = document.getElementById("sec-count");
+    if (!_addedSecurities.length) {
+      el.innerHTML = '<p class="text-xs text-gray-300 italic">Nenhum ativo adicionado.</p>';
+      countEl.textContent = "";
+      return;
+    }
+    countEl.textContent = `(${_addedSecurities.length})`;
+    el.innerHTML = `
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="text-[10px] uppercase text-gray-400">
+            <th class="text-left py-1.5 pr-3 font-normal">Ativo</th>
+            <th class="text-left py-1.5 pr-3 font-normal">Carteira</th>
+            <th class="text-left py-1.5 pr-3 font-normal">Tipo Precif.</th>
+            <th class="text-left py-1.5 pr-3 font-normal">Tipo Cálc.</th>
+            <th class="text-left py-1.5 pr-3 font-normal">Parâmetros</th>
+            <th class="text-right py-1.5 pr-3 font-normal">Último PU</th>
+            <th class="text-right py-1.5 pr-3 font-normal">Data PU</th>
+            <th class="py-1.5 w-5"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${_addedSecurities.map((s, i) => {
+            let params = "—";
+            if (s.calcType === "pos_fixado") {
+              const pct = s.indexerPercentual != null ? s.indexerPercentual + "%" : "—";
+              params = `${escHtml(s.benchmarkName || "—")} ${pct}`;
+            } else if (s.calcType === "pre_fixado_curva" || s.calcType === "inflacao_curva") {
+              const n = (s.transactions || []).length;
+              params = `${n} lote${n !== 1 ? "s" : ""} · yield pond. ${s.weightedYield != null ? s.weightedYield.toFixed(4) + "%" : "—"}`;
+              if (s.calcType === "inflacao_curva") params += ` · ${escHtml(s.benchmarkName || "—")}`;
+            }
+            return `
+            <tr class="border-t border-gray-100 hover:bg-gray-50">
+              <td class="py-2 pr-3">
+                <p class="font-medium text-gray-800">${escHtml(s.beehusName)}</p>
+                <p class="text-[10px] text-gray-400 font-mono">${escHtml(s.id)}</p>
+              </td>
+              <td class="py-2 pr-3 text-gray-500 text-[10px]">${escHtml(s.walletName || "—")}</td>
+              <td class="py-2 pr-3 text-gray-500 text-[10px]">${escHtml(s.pricingType || "—")}</td>
+              <td class="py-2 pr-3 text-gray-600">${escHtml(CALC_TYPE_LABELS[s.calcType] || s.calcType)}</td>
+              <td class="py-2 pr-3 text-gray-600">${params}</td>
+              <td class="py-2 pr-3 text-right font-mono text-gray-600">${s.posPU != null ? fmtNum(s.posPU, 8) : (s.lastPU != null ? fmtNum(s.lastPU, 8) : "—")}</td>
+              <td class="py-2 pr-3 text-right text-gray-400">${escHtml(s.positionDate || s.lastPUDate || "—")}</td>
+              <td class="py-2 flex items-center gap-2">
+                <button class="edit-sec-btn text-gray-400 hover:text-orange-600 text-lg px-1.5 py-0.5" data-idx="${i}" title="Editar">&#9998;</button>
+                <button class="remove-sec-btn text-red-400 hover:text-red-600 text-lg px-1.5 py-0.5" data-idx="${i}" title="Remover">&#10005;</button>
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>`;
+  }
+
+  // ── Calculate ──────────────────────────────────────────────────────────────
+  function calcular() {
+    if (!_addedSecurities.length) { alert("Adicione pelo menos um ativo."); return; }
+    const msg = document.getElementById("calc-msg");
+    msg.textContent = "Calculando..."; msg.classList.remove("hidden");
+
+    fetch("/api/precificacao/calcular", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        securities: _addedSecurities.map(s => ({
+          id: s.id, beehusName: s.beehusName, calcType: s.calcType || "pos_fixado",
+          benchmarkId: s.benchmarkId, benchmarkName: s.benchmarkName,
+          indexerPercentual: s.indexerPercentual,
+          transactions: s.transactions || [],
+          walletId: s.walletId || "", walletName: s.walletName || "",
+          pricingType: s.pricingType || "",
+          initialPU: s.initialPU ?? null, initialPUDate: s.initialPUDate || "",
+          posPU: s.posPU ?? null, positionDate: s.positionDate || "",
+        })),
+      }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        msg.classList.add("hidden");
+        if (data.error) { alert(data.error); return; }
+        _resultsData = data;
+        renderResults(data);
+      })
+      .catch(() => { msg.textContent = "Erro ao calcular."; });
+  }
+
+  function renderResults(data) {
+    const { results } = data;
+    document.getElementById("results-thead-row").innerHTML =
+      `<th class="px-3 py-2.5 text-left">Ativo</th>
+       <th class="px-3 py-2.5 text-left">Carteira</th>
+       <th class="px-3 py-2.5 text-left">Tipo Cálc.</th>
+       <th class="px-3 py-2.5 text-right">Data</th>
+       <th class="px-3 py-2.5 text-left">Benchmark</th>
+       <th class="px-3 py-2.5 text-right">Fator Diário</th>
+       <th class="px-3 py-2.5 text-right">Yield BM (% a.a.)</th>
+       <th class="px-3 py-2.5 text-right text-orange-600">PU Calculado</th>`;
+
+    const count = results.filter(r => !r.error).length;
+    document.getElementById("results-count").textContent = `${count} linha${count !== 1 ? "s" : ""}`;
+
+    document.getElementById("results-tbody").innerHTML = results.map(r => {
+      if (r.error) {
+        return `<tr class="border-t border-gray-100"><td class="px-3 py-2.5" colspan="8">
+          <span class="font-medium text-gray-700">${escHtml(r.beehusName)}</span>
+          <span class="ml-2 text-red-500">${escHtml(r.error)}</span></td></tr>`;
+      }
+      return `<tr class="border-t border-gray-100 hover:bg-gray-50">
+        <td class="px-3 py-2.5">
+          <p class="font-medium text-gray-800">${escHtml(r.beehusName)}</p>
+          <p class="text-[10px] text-gray-400 font-mono">${escHtml(r.securityId)}</p>
+        </td>
+        <td class="px-3 py-2.5 text-gray-500 text-[10px]">${escHtml(r.walletName || "—")}</td>
+        <td class="px-3 py-2.5 text-gray-500 text-[10px]">${escHtml(CALC_TYPE_LABELS[r.calcType] || r.calcType || "—")}</td>
+        <td class="px-3 py-2.5 text-right font-mono text-gray-600">${escHtml(r.date || "—")}</td>
+        <td class="px-3 py-2.5 text-gray-600 text-xs">${escHtml(r.benchmarkName || "—")}</td>
+        <td class="px-3 py-2.5 text-right font-mono text-gray-500 text-[10px]">${r.benchmarkFactor != null ? fmtNum(r.benchmarkFactor, 10) : "—"}</td>
+        <td class="px-3 py-2.5 text-right font-mono text-gray-500 text-[10px]">${r.benchmarkYield != null ? r.benchmarkYield.toFixed(4) + "%" : "—"}</td>
+        <td class="px-3 py-2.5 text-right font-mono font-semibold text-orange-600">${r.eventImpact ? `<span class="inline-block mr-1 px-1 rounded bg-red-100 text-red-600 text-[9px] align-middle" title="Cupom/amortização (líquido de IR), por unidade: ${fmtNum(r.eventImpact, 8)}">▼${fmtNum(r.eventImpact, 8)}</span>` : ""}${fmtNum(r.pu, 8)}</td>
+      </tr>`;
+    }).join("");
+
+    document.getElementById("results-section").classList.remove("hidden");
+  }
+
+  function copyResults() {
+    if (!_resultsData) return;
+    const headers = ["Ativo", "ID", "Carteira", "Tipo Cálc.", "Data", "Benchmark", "Fator", "Yield BM (% a.a.)", "PU", "Ajuste Evento"];
+    const fmtBR = v => v == null || v === "" ? "" : String(v).replace(".", ",");
+    const rows = _resultsData.results.filter(r => !r.error).map(r => [
+      r.beehusName, r.securityId, r.walletName || "", CALC_TYPE_LABELS[r.calcType] || "",
+      r.date ?? "", r.benchmarkName ?? "", fmtBR(r.benchmarkFactor), fmtBR(r.benchmarkYield), fmtBR(r.pu),
+      fmtBR(r.eventImpact),
+    ]);
+    const tsv = [headers, ...rows].map(r => r.join("\t")).join("\n");
+    navigator.clipboard.writeText(tsv).then(() => {
+      const btn = document.querySelector("[onclick='copyResults()']");
+      const orig = btn.innerHTML; btn.textContent = "Copiado!";
+      setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    });
+  }
+
+  // ── Bulk Import via Excel ─────────────────────────────────────────────
+  function downloadTemplate() {
+    window.location.href = "/api/precificacao/upload-template";
+  }
+
+  // ── Modal de "Data de referência" — compartilhada por Importar Excel e
+  // Atualizar. `_refDateMode` registra a ação que dispara o Continuar.
+  let _refDateMode = null;       // "import" | "refresh"
+  let _pendingRefDate = "";      // populated by confirmRefDateModal()
+
+  function openRefDateModal(mode) {
+    _refDateMode = mode;
+    const title = document.getElementById("refdate-modal-title");
+    const hint  = document.getElementById("refdate-modal-hint");
+    const status = document.getElementById("refdate-modal-status");
+    const go    = document.getElementById("refdate-modal-go");
+    if (mode === "refresh") {
+      title.textContent = "Atualizar lista — data de referência";
+      hint.innerHTML = (
+        "Reapura <strong>posPU</strong>, <strong>positionDate</strong>, " +
+        "<strong>pricingType</strong>, <strong>lastPU</strong> e " +
+        "<strong>lastPUDate</strong> dos ativos atualmente na lista, usando " +
+        "essa data como referência (<code>processedPosition</code> exato + " +
+        "último <code>historyPrice</code> com <code>date ≤</code> referência). " +
+        "Não mexe em <code>calcType</code>, lotes HTM, benchmark nem transações."
+      );
+      go.textContent = "Atualizar";
+      if (!_addedSecurities.length) {
+        status.textContent = "A lista está vazia — adicione ativos antes de atualizar.";
+        // Não aborta a abertura — o operador pode cancelar.
+      } else {
+        status.textContent = "";
+      }
+    } else {
+      title.textContent = "Importar Excel — data de referência";
+      hint.innerHTML = (
+        "O sistema usará essa data para buscar PU em <code>securityPrices</code> " +
+        "(último <code>historyPrice</code> com <code>date ≤</code> referência) e " +
+        "a posição em <code>processedPosition</code> exatamente nessa data, " +
+        "em vez de pegar o all-time-latest da base."
+      );
+      go.textContent = "Continuar";
+      status.textContent = "";
+    }
+    // Pré-popula com a última data usada (se houver) ou hoje.
+    const input = document.getElementById("refdate-input");
+    if (!input.value) {
+      const t = new Date();
+      const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+      input.value = _pendingRefDate || iso;
+    }
+    document.getElementById("refdate-modal").classList.remove("hidden");
+    try { input.focus(); } catch (e) {}
+  }
+
+  function closeRefDateModal() {
+    document.getElementById("refdate-modal").classList.add("hidden");
+    _refDateMode = null;
+  }
+
+  function confirmRefDateModal() {
+    const input  = document.getElementById("refdate-input");
+    const status = document.getElementById("refdate-modal-status");
+    const ref = (input.value || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ref)) {
+      status.textContent = "Informe uma data válida (YYYY-MM-DD).";
+      return;
+    }
+    _pendingRefDate = ref;
+    const mode = _refDateMode;
+    closeRefDateModal();
+    if (mode === "import") {
+      // Abre o file picker; o `change` handler abaixo pega `_pendingRefDate`.
+      document.getElementById("upload-input").click();
+    } else if (mode === "refresh") {
+      refreshListByDate(ref);
+    }
+  }
+
+  function refreshListByDate(refDate) {
+    if (!_addedSecurities.length) {
+      alert("A lista está vazia — adicione ativos antes de atualizar.");
+      return;
+    }
+    fetch("/api/precificacao/refresh-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        securities: _addedSecurities,
+        referenceDate: refDate,
+      }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { alert(data.error); return; }
+        const updated = data.securities || [];
+        const errors  = data.errors     || [];
+        if (updated.length !== _addedSecurities.length) {
+          // Defensivo — não esperado, mas evita perder linhas sem aviso.
+          console.warn("refresh-list mudou a cardinalidade da lista:",
+                       updated.length, "vs", _addedSecurities.length);
+        }
+        _addedSecurities = updated;
+        renderSecList();
+        document.getElementById("results-section").classList.add("hidden");
+        let msg = `${updated.length} ativo(s) reapurados em ${refDate}.`;
+        if (errors.length) msg += "\n\nLinhas com erro:\n• " + errors.join("\n• ");
+        alert(msg);
+      })
+      .catch(err => alert(`Falha ao atualizar: ${err.message}`));
+  }
+
+  document.getElementById("upload-input").addEventListener("change", e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    // `_pendingRefDate` foi setada pelo confirmRefDateModal antes do click().
+    // Se chamarem o file picker direto (atalho do teclado, etc.), segue sem
+    // ref date e o backend cai no comportamento legado de "all-time latest".
+    if (_pendingRefDate) fd.append("referenceDate", _pendingRefDate);
+    fetch("/api/precificacao/upload", { method: "POST", body: fd })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { alert(data.error); return; }
+        const incoming = data.securities || [];
+        const errors   = data.errors     || [];
+        let inserted = 0, skipped = 0;
+        for (const s of incoming) {
+          // Dedupe by (id, calcType) — mirrors addSecurity()'s rule.
+          if (_addedSecurities.find(x => x.id === s.id && x.calcType === s.calcType)) {
+            skipped++; continue;
+          }
+          _addedSecurities.push(s);
+          inserted++;
+        }
+        renderSecList();
+        document.getElementById("results-section").classList.add("hidden");
+        let msg = `${inserted} ativo${inserted === 1 ? "" : "s"} importado${inserted === 1 ? "" : "s"}`;
+        if (_pendingRefDate) msg += ` (ref ${_pendingRefDate})`;
+        msg += ".";
+        if (skipped) msg += ` ${skipped} já estava${skipped === 1 ? "" : "m"} na lista.`;
+        if (errors.length) msg += "\n\nLinhas ignoradas:\n• " + errors.join("\n• ");
+        alert(msg);
+      })
+      .catch(err => alert(`Falha no upload: ${err.message}`))
+      .finally(() => { e.target.value = ""; });
+  });
+
+  function exportarResultados() {
+    if (!_resultsData) return;
+    fetch("/api/precificacao/exportar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ results: _resultsData.results }),
+    }).then(r => {
+      if (!r.ok) throw new Error("Erro ao gerar Excel");
+      return r.blob();
+    }).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "precificacao.xlsx";
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    }).catch(err => alert(err.message));
+  }
+
+  // ── Saved Lists (multiple named lists) ─────────────────────────────────
+  let _savedLists = [];
+
+  function loadSavedLists() {
+    fetch("/api/precificacao/lists")
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          _savedLists = data
+            .map(l => ({
+              name: String(l?.name || "").trim(),
+              securities: Array.isArray(l?.securities) ? l.securities : [],
+            }))
+            .filter(l => l.name);
+        } else if (data && Array.isArray(data.securities)) {
+          // Defensive: tolerate the legacy single-template envelope.
+          _savedLists = data.securities.length
+            ? [{ name: "Lista padrão", securities: data.securities }]
+            : [];
+        } else {
+          _savedLists = [];
+        }
+        renderSavedLists();
+      });
+  }
+
+  function renderSavedLists() {
+    const body = document.getElementById("saved-lists-body");
+    if (!_savedLists.length) {
+      body.innerHTML = `<p class="text-xs text-gray-300 italic">Nenhuma lista salva.</p>`;
+      return;
+    }
+    body.innerHTML = `<div class="flex flex-col gap-1.5 max-h-40 overflow-y-auto pr-1">
+      ${_savedLists.map((l, i) => {
+        const n = (l.securities || []).length;
+        return `
+          <div class="flex items-center gap-1 border rounded-lg pl-3 pr-1 py-1 bg-orange-50/60">
+            <button class="load-list-btn flex-1 text-left text-xs font-medium text-orange-700 hover:text-orange-900 truncate"
+                    data-idx="${i}" title="Carregar lista">
+              ${escHtml(l.name)} <span class="ml-1 text-[10px] text-gray-500 font-normal">(${n} ativo${n === 1 ? "" : "s"})</span>
+            </button>
+            <button class="edit-pu-btn text-[11px] text-gray-300 hover:text-orange-500 px-1.5"
+                    data-idx="${i}" title="Editar Data PU">&#9998;</button>
+            <button class="delete-list-btn text-[11px] text-gray-300 hover:text-red-500 px-1.5"
+                    data-idx="${i}" title="Excluir lista">&#10005;</button>
+          </div>`;
+      }).join("")}
+    </div>`;
+  }
+
+  document.getElementById("saved-lists-body").addEventListener("click", e => {
+    const loadBtn = e.target.closest(".load-list-btn");
+    if (loadBtn) {
+      const list = _savedLists[Number(loadBtn.dataset.idx)];
+      if (!list) return;
+      _addedSecurities = [...(list.securities || [])];
+      renderSecList();
+      document.getElementById("results-section").classList.add("hidden");
+      return;
+    }
+    const editPuBtn = e.target.closest(".edit-pu-btn");
+    if (editPuBtn) {
+      openEditPuModal(Number(editPuBtn.dataset.idx));
+      return;
+    }
+    const delBtn = e.target.closest(".delete-list-btn");
+    if (delBtn) {
+      const list = _savedLists[Number(delBtn.dataset.idx)];
+      if (!list) return;
+      if (!confirm(`Excluir a lista "${list.name}"? Esta ação não pode ser desfeita.`)) return;
+      fetch(`/api/precificacao/lists?name=${encodeURIComponent(list.name)}`, { method: "DELETE" })
+        .then(r => r.json())
+        .then(data => {
+          if (data && data.error) { alert(data.error); return; }
+          loadSavedLists();
+        });
+    }
+  });
+
+  // ── Save Modal (asks for the list name; clicking an existing list
+  //    fills the input so the operator can overwrite it in one click) ────
+  function openSaveModal() {
+    if (!_addedSecurities.length) { alert("Adicione pelo menos um ativo antes de salvar."); return; }
+    document.getElementById("save-name-input").value = "";
+    document.getElementById("save-existing-hint").classList.add("hidden");
+    renderSaveExistingChips();
+    document.getElementById("save-modal").classList.remove("hidden");
+    setTimeout(() => document.getElementById("save-name-input").focus(), 50);
+  }
+  function closeSaveModal() { document.getElementById("save-modal").classList.add("hidden"); }
+
+  function renderSaveExistingChips() {
+    const ex = document.getElementById("save-existing-list");
+    if (!_savedLists.length) {
+      ex.innerHTML = '<span class="italic text-gray-300">Nenhuma.</span>';
+      return;
+    }
+    const currentName = document.getElementById("save-name-input").value.trim();
+    ex.innerHTML = _savedLists.map(l => {
+      const selected = l.name === currentName;
+      const base = "save-existing-chip inline-block px-2 py-0.5 border rounded-md cursor-pointer transition-colors";
+      const tone = selected
+        ? "bg-orange-100 border-orange-300 text-orange-700"
+        : "bg-gray-50 hover:bg-orange-50 hover:border-orange-200";
+      return `<span class="${base} ${tone}" data-name="${escHtml(l.name)}" title="Clique para substituir esta lista">
+        ${escHtml(l.name)} <span class="text-gray-400">(${(l.securities||[]).length})</span>
+      </span>`;
+    }).join("");
+  }
+
+  document.getElementById("save-existing-list").addEventListener("click", e => {
+    const chip = e.target.closest(".save-existing-chip");
+    if (!chip) return;
+    const input = document.getElementById("save-name-input");
+    input.value = chip.dataset.name;
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+  });
+
+  document.getElementById("save-name-input").addEventListener("input", e => {
+    const v = e.target.value.trim();
+    const exists = v && _savedLists.some(l => l.name === v);
+    document.getElementById("save-existing-hint").classList.toggle("hidden", !exists);
+    renderSaveExistingChips();
+  });
+
+  document.getElementById("save-name-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); saveList(); }
+  });
+
+  function openFormulasModal() { document.getElementById("formulas-modal").classList.remove("hidden"); }
+  function closeFormulasModal() { document.getElementById("formulas-modal").classList.add("hidden"); }
+
+  function saveList() {
+    const name = document.getElementById("save-name-input").value.trim();
+    if (!name) { alert("Informe o nome da lista."); return; }
+    fetch("/api/precificacao/lists", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        securities: _addedSecurities.map(s => ({
+          id: s.id, beehusName: s.beehusName, mainId: s.mainId || "",
+          securityType: s.securityType || "", indexer: s.indexer || "",
+          indexerPercentual: s.indexerPercentual, calcType: s.calcType || "",
+          benchmarkId: s.benchmarkId || "", benchmarkName: s.benchmarkName || "",
+          walletId: s.walletId || "", walletName: s.walletName || "",
+          pricingType: s.pricingType || "", lastPU: s.lastPU, lastPUDate: s.lastPUDate,
+          posPU: s.posPU ?? null, positionDate: s.positionDate || "",
+          transactions: s.transactions || [], weightedYield: s.weightedYield ?? null,
+        })),
+      }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { alert(data.error); return; }
+        closeSaveModal();
+        loadSavedLists();
+      });
+  }
+
+  // ── Edit Data PU Modal ────────────────────────────────────────────────────
+  let _editPuListIdx = null;
+
+  function openEditPuModal(idx) {
+    const list = _savedLists[idx];
+    if (!list) return;
+    _editPuListIdx = idx;
+    document.getElementById("edit-pu-list-name").textContent = list.name;
+    const tbody = document.getElementById("edit-pu-tbody");
+    tbody.innerHTML = (list.securities || []).map((s, i) => {
+      const datePU = s.positionDate || s.lastPUDate || "";
+      return `
+        <tr class="border-t border-gray-100">
+          <td class="py-2 pr-3">
+            <p class="font-medium text-gray-800">${escHtml(s.beehusName || s.id || "—")}</p>
+            <p class="text-[10px] text-gray-400 font-mono">${escHtml(s.mainId || s.id || "")}</p>
+          </td>
+          <td class="py-2 pr-3 text-gray-500 text-[10px]">${escHtml(s.walletName || "—")}</td>
+          <td class="py-2 text-right">
+            <input type="date" data-sec-idx="${i}"
+              class="edit-pu-date border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400"
+              value="${escHtml(datePU)}" />
+          </td>
+        </tr>`;
+    }).join("");
+    document.getElementById("edit-pu-modal").classList.remove("hidden");
+  }
+
+  function closeEditPuModal() {
+    document.getElementById("edit-pu-modal").classList.add("hidden");
+    _editPuListIdx = null;
+  }
+
+  function saveEditedPu() {
+    if (_editPuListIdx === null) return;
+    const list = _savedLists[_editPuListIdx];
+    if (!list) return;
+    const inputs = document.querySelectorAll("#edit-pu-tbody .edit-pu-date");
+    const updated = list.securities.map((s, i) => {
+      const newDate = (inputs[i]?.value || "").trim();
+      return { ...s, positionDate: newDate };
+    });
+    fetch("/api/precificacao/lists", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: list.name, securities: updated }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.error) { alert(data.error); return; }
+        closeEditPuModal();
+        loadSavedLists();
+      })
+      .catch(() => alert("Erro ao salvar."));
+  }
+
+  // ── Config Modal ───────────────────────────────────────────────────────────
+  let _cfgBenchmarks  = [];
+  let _cfgSelected    = null;
+  let _cfgSearchTimer = null;
+
+  function openConfigModal() {
+    _cfgSelected = null;
+    document.getElementById("cfg-search-input").value = "";
+    document.getElementById("cfg-bm-name").value      = "";
+    document.getElementById("cfg-selected-info").classList.add("hidden");
+    fetch("/api/precificacao/config")
+      .then(r => r.json())
+      .then(({ benchmarks }) => {
+        _cfgBenchmarks = benchmarks.map(b => ({ ...b }));
+        renderCfgList();
+        document.getElementById("config-modal").classList.remove("hidden");
+      });
+  }
+  function closeConfigModal() { document.getElementById("config-modal").classList.add("hidden"); }
+
+  function renderCfgList() {
+    const el = document.getElementById("cfg-list");
+    if (!_cfgBenchmarks.length) { el.innerHTML = '<p class="text-xs text-gray-300 italic">Nenhum benchmark.</p>'; return; }
+    el.innerHTML = _cfgBenchmarks.map((b, i) => `
+      <div class="flex items-center justify-between gap-3 border rounded-lg px-3 py-2 bg-gray-50 mb-1.5">
+        <div class="min-w-0">
+          <p class="text-xs font-semibold text-gray-800">${escHtml(b.name)}</p>
+          <p class="text-[10px] font-mono text-gray-400 truncate">${escHtml(b.beehusName || "")} · ${escHtml(b.id)}</p>
+          ${b.lastDate ? `<p class="text-[10px] text-gray-400">Último dado: ${escHtml(b.lastDate)}</p>` : ""}
+        </div>
+        <button onclick="_cfgBenchmarks.splice(${i},1);renderCfgList()" class="shrink-0 text-gray-300 hover:text-red-500 text-xs">&#10005;</button>
+      </div>`).join("");
+  }
+
+  function onCfgSearchInput() {
+    clearTimeout(_cfgSearchTimer);
+    const q = document.getElementById("cfg-search-input").value.trim();
+    if (q.length < 2) { hideCfgDropdown(); return; }
+    _cfgSearchTimer = setTimeout(() => {
+      fetch(`/api/precificacao/search?q=${encodeURIComponent(q)}`)
+        .then(r => r.json())
+        .then(({ results }) => {
+          const dd = document.getElementById("cfg-search-dropdown");
+          if (!results.length) { dd.innerHTML = '<p class="px-4 py-3 text-xs text-gray-400 italic">Nenhum resultado.</p>'; }
+          else { dd.innerHTML = results.map(r => `
+            <div class="drop-row cfg-drop-row" data-id="${escHtml(r.id)}" data-name="${escHtml(r.beehusName)}" data-mainid="${escHtml(r.mainId)}">
+              <p class="font-medium text-gray-800 text-xs">${escHtml(r.beehusName)}</p>
+              <p class="text-[10px] text-gray-400 font-mono mt-0.5">${escHtml(r.mainId)} · ${escHtml(r.securityType)}</p>
+            </div>`).join(""); }
+          dd.classList.remove("hidden");
+        });
+    }, 250);
+  }
+  function hideCfgDropdown() { setTimeout(() => document.getElementById("cfg-search-dropdown").classList.add("hidden"), 150); }
+
+  document.getElementById("cfg-search-dropdown").addEventListener("mousedown", e => {
+    const row = e.target.closest(".cfg-drop-row");
+    if (!row) return;
+    _cfgSelected = { id: row.dataset.id, beehusName: row.dataset.name, mainId: row.dataset.mainid };
+    document.getElementById("cfg-search-input").value = row.dataset.name;
+    document.getElementById("cfg-sel-name").textContent = row.dataset.name;
+    document.getElementById("cfg-sel-id").textContent   = row.dataset.id;
+    document.getElementById("cfg-selected-info").classList.remove("hidden");
+    const ni = document.getElementById("cfg-bm-name"); if (!ni.value) ni.value = row.dataset.name;
+    hideCfgDropdown();
+  });
+
+  function addBenchmark() {
+    if (!_cfgSelected) { alert("Selecione um ativo na busca."); return; }
+    const name = document.getElementById("cfg-bm-name").value.trim();
+    if (!name) { alert("Informe um nome."); return; }
+    if (_cfgBenchmarks.find(b => b.id === _cfgSelected.id)) { alert("Já adicionado."); return; }
+    _cfgBenchmarks.push({ id: _cfgSelected.id, name, beehusName: _cfgSelected.beehusName, mainId: _cfgSelected.mainId });
+    renderCfgList();
+    _cfgSelected = null;
+    document.getElementById("cfg-search-input").value = "";
+    document.getElementById("cfg-bm-name").value = "";
+    document.getElementById("cfg-selected-info").classList.add("hidden");
+  }
+
+  function saveConfig() {
+    fetch("/api/precificacao/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ benchmarks: _cfgBenchmarks.map(b => ({ id: b.id, name: b.name })) }),
+    }).then(() => {
+      const opts = _cfgBenchmarks.length
+        ? _cfgBenchmarks.map(b => `<option value="${escHtml(b.id)}">${escHtml(b.name)}</option>`).join("")
+        : '<option value="">— configure benchmarks —</option>';
+      document.getElementById("dp-benchmark").innerHTML          = opts;
+      document.getElementById("dp-inflacao-benchmark").innerHTML = opts;
+      closeConfigModal();
+    });
+  }
+
+  // ── Keyboard / backdrop close ──────────────────────────────────────────────
+  window.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    if (!document.getElementById("formulas-modal").classList.contains("hidden")) closeFormulasModal();
+    if (!document.getElementById("txn-modal").classList.contains("hidden")) closeTxnModal();
+    if (!document.getElementById("config-modal").classList.contains("hidden")) closeConfigModal();
+    if (!document.getElementById("wallet-sec-modal").classList.contains("hidden")) closeWalletSecModal();
+    if (!document.getElementById("save-modal").classList.contains("hidden")) closeSaveModal();
+    if (!document.getElementById("edit-pu-modal").classList.contains("hidden")) closeEditPuModal();
+    if (!document.getElementById("refdate-modal").classList.contains("hidden")) closeRefDateModal();
+  }, true);
+  // Prevent accidental modal close when dragging text from inside to backdrop
+  let _modalDownTarget = null;
+  function _guardedClose(modalId, closeFn) {
+    document.getElementById(modalId).addEventListener("mousedown", e => { _modalDownTarget = e.target; });
+    document.getElementById(modalId).addEventListener("click", e => {
+      if (e.target === e.currentTarget && _modalDownTarget === e.currentTarget) closeFn();
+      _modalDownTarget = null;
+    });
+  }
+  _guardedClose("formulas-modal",   closeFormulasModal);
+  _guardedClose("txn-modal",        closeTxnModal);
+  _guardedClose("config-modal",     closeConfigModal);
+  _guardedClose("wallet-sec-modal", closeWalletSecModal);
+  _guardedClose("save-modal",       closeSaveModal);
+  _guardedClose("edit-pu-modal",    closeEditPuModal);
+  _guardedClose("refdate-modal",    closeRefDateModal);
+</script>
+{% endblock %}

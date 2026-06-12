@@ -1,0 +1,1172 @@
+{% extends "base.html" %}
+{% set active = "carteira" %}
+{% block title %}Carteira{% endblock %}
+
+{% block head %}
+<style>
+  /* Filter card (same look as Identificar Transações) — small uppercase
+     labels + tight inputs. Scoped via `.ct-` so no other page picks it up. */
+  .ct-label { display: block; font-size: 0.6875rem; color: #6b7280; margin-bottom: 0.25rem; }
+  .ct-input { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.4rem 0.6rem; font-size: 0.75rem; background: white; }
+  /* Date inputs only need to fit YYYY-MM-DD plus the native picker icon —
+     don't let them stretch to fill a grid cell. */
+  .ct-input-date { width: 9.5rem; }
+  .ct-input:focus { outline: none; box-shadow: 0 0 0 2px #93c5fd; border-color: #93c5fd; }
+  .ct-btn   { padding: 0.4rem 0.85rem; font-size: 0.75rem; border-radius: 0.375rem; cursor: pointer; border: 1px solid transparent; }
+  .ct-btn-primary { background: #2563eb; color: white; }
+  .ct-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+  .ct-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ct-btn-muted   { background: #e5e7eb; color: #374151; }
+  .ct-btn-muted:hover { background: #d1d5db; }
+
+  .ct-seg { display: inline-flex; border: 1px solid #d1d5db; border-radius: 0.375rem; overflow: hidden; }
+  .ct-seg button { padding: 0.1rem 0.5rem; font-size: 0.6875rem; line-height: 1; cursor: pointer; background: white; color: #374151; border: 0; }
+  .ct-seg button + button { border-left: 1px solid #d1d5db; }
+  .ct-seg button.active { background: #2563eb; color: white; }
+  .ct-seg button:hover:not(.active) { background: #f3f4f6; }
+
+  /* Groupings + Wallets transfer panes — same dual-select pattern used
+     in /excecoes and elsewhere on the project. */
+  .ct-xfer        { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
+  .ct-xfer-pane   { display: flex; flex-direction: column; min-height: 160px; }
+  .ct-xfer-pane h4 { font-size: 10px; text-transform: uppercase; color: #6b7280; margin: 0 0 4px 2px; display: flex; justify-content: space-between; }
+  .ct-xfer select { flex: 1; min-height: 140px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 11px; padding: 4px; background: white; }
+  .ct-xfer-actions { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+  .ct-xfer-actions button { width: 32px; height: 28px; font-size: 12px; border: 1px solid #d1d5db; border-radius: 4px; background: white; cursor: pointer; }
+  .ct-xfer-actions button:hover { background: #f3f4f6; }
+
+  /* Results table — grouped headers (Date on row 1, Qty/PU/Saldo on row 2). */
+  .ct-tbl              { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .ct-tbl thead th     { background: #eef2ff; color: #4338ca; text-transform: uppercase; font-size: 10px; letter-spacing: 0.02em; font-weight: 600; padding: 6px 8px; text-align: center; border-bottom: 1px solid #c7d2fe; position: sticky; top: 0; z-index: 1; }
+  .ct-tbl thead .ct-tbl-date-group { border-left: 1px solid #c7d2fe; }
+  .ct-tbl tbody td     { padding: 4px 8px; border-bottom: 1px solid #f3f4f6; text-align: right; font-variant-numeric: tabular-nums; }
+  .ct-tbl tbody td.ct-tbl-sec   { text-align: left; }
+  .ct-tbl tbody td.ct-tbl-date-group { border-left: 1px solid #e5e7eb; }
+  .ct-tbl tbody tr:hover td     { background: #f9fafb; }
+  .ct-tbl tbody tr.ct-row-changed td { background: #fef3c7; }
+  .ct-tbl tbody tr.ct-row-changed:hover td { background: #fde68a; }
+  .ct-tbl tbody tr.ct-footer-row td  { background: #f9fafb; font-weight: 600; border-top: 1px solid #e5e7eb; }
+  .ct-tbl tbody tr.ct-footer-row:hover td { background: #f3f4f6; }
+  .ct-tbl tbody tr.ct-footer-row td.ct-tbl-sec { color: #374151; }
+  .ct-id  { font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: #9ca3af; }
+  .ct-wallet-header { display: flex; align-items: baseline; gap: 8px; padding: 10px 6px 6px; }
+  .ct-wallet-header h3 { font-size: 14px; font-weight: 600; color: #1f2937; margin: 0; }
+  .ct-wallet-header .ct-id { font-size: 11px; }
+
+  /* Edit mode — inline numeric inputs and the per-wallet action bar that
+     appears between the wallet header and the table when Editar is on. */
+  .ct-btn-success { background: #16a34a; color: white; }
+  .ct-btn-success:hover:not(:disabled) { background: #15803d; }
+  .ct-btn-danger  { background: #dc2626; color: white; }
+  .ct-btn-danger:hover:not(:disabled) { background: #b91c1c; }
+  .ct-edit-bar  { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px 8px;
+                  background: #fefce8; border-bottom: 1px solid #fde68a; font-size: 11px; color: #854d0e; }
+  .ct-edit-bar .ct-spacer { flex: 1; }
+  .ct-edit-input { width: 100%; min-width: 80px; border: 1px solid #d1d5db; border-radius: 4px;
+                   padding: 2px 6px; font-size: 12px; text-align: right; background: white;
+                   font-variant-numeric: tabular-nums; }
+  .ct-edit-input:focus { outline: none; box-shadow: 0 0 0 2px #93c5fd; border-color: #93c5fd; }
+  .ct-edit-link { color: #2563eb; text-decoration: underline dotted; cursor: pointer; }
+  .ct-edit-link:hover { color: #1d4ed8; }
+  .ct-edit-row td { background: #fffbeb; }
+  .ct-edit-row.ct-new-row td { background: #ecfdf5; }
+  .ct-row-delete { background: #f3f4f6; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 4px;
+                   width: 22px; height: 22px; font-size: 12px; cursor: pointer; line-height: 1; }
+  .ct-row-delete:hover { background: #fee2e2; }
+
+  /* Modal — shared for the security-search + the confirm-apply dialogs. */
+  .ct-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:60;
+                      display:flex; align-items:center; justify-content:center; }
+  .ct-modal { background:white; border-radius:0.5rem; max-width:90vw; max-height:85vh;
+              display:flex; flex-direction:column; overflow:hidden; }
+  .ct-modal-head { padding:12px 16px; border-bottom:1px solid #e5e7eb; font-weight:600;
+                   color:#1f2937; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .ct-modal-body { overflow-y:auto; padding:12px 16px; flex:1; }
+  .ct-modal-foot { padding:10px 16px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:8px; }
+  .ct-modal-close { color:#9ca3af; font-size:18px; line-height:1; background:none; border:none; cursor:pointer; }
+  .ct-modal-close:hover { color:#374151; }
+  .ct-sec-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+  .ct-sec-tbl th { background:#f3f4f6; color:#6b7280; text-transform:uppercase; font-size:10px;
+                   padding:6px 8px; text-align:left; border-bottom:1px solid #e5e7eb; position:sticky; top:0; }
+  .ct-sec-tbl td { padding:5px 8px; border-bottom:1px solid #f3f4f6; }
+  .ct-sec-tbl tr { cursor:pointer; }
+  .ct-sec-tbl tr:hover td { background:#eff6ff; }
+
+  html.dark .ct-label  { color: #9ca3af; }
+  html.dark .ct-input  { background: #1f2937; border-color: #4b5563; color: #d1d5db; }
+  html.dark .ct-btn-muted { background: #374151; color: #d1d5db; }
+  html.dark .ct-btn-muted:hover { background: #4b5563; }
+  html.dark .ct-seg button { background: #1f2937; color: #d1d5db; border-color: #4b5563; }
+  html.dark .ct-seg button.active { background: #2563eb; color: white; }
+  html.dark .ct-xfer select { background: #1f2937; border-color: #4b5563; color: #d1d5db; }
+  html.dark .ct-xfer-actions button { background: #374151; color: #d1d5db; border-color: #4b5563; }
+  html.dark .ct-tbl thead th { background: #1e3a8a; color: #c7d2fe; }
+  html.dark .ct-tbl tbody tr.ct-row-changed td { background: #78350f; color: #fef3c7; }
+  html.dark .ct-tbl tbody tr.ct-footer-row td  { background: #111827; color: #e5e7eb; }
+  html.dark .ct-edit-bar { background:#3f3f0f; color:#fef3c7; border-color:#854d0e; }
+  html.dark .ct-edit-input { background:#1f2937; border-color:#4b5563; color:#e5e7eb; }
+  html.dark .ct-edit-row td { background:#3f3f0f; }
+  html.dark .ct-edit-row.ct-new-row td { background:#064e3b; }
+  html.dark .ct-modal { background:#1f2937; color:#d1d5db; }
+  html.dark .ct-modal-head, html.dark .ct-modal-foot { border-color:#374151; }
+  html.dark .ct-sec-tbl th { background:#374151; color:#d1d5db; border-color:#4b5563; }
+  html.dark .ct-sec-tbl tr:hover td { background:#374151; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="px-6 py-5 space-y-4">
+
+  <section class="bg-white rounded-xl shadow p-5">
+    <h2 class="text-sm font-semibold text-gray-800 mb-3">Carteira — Posições por data</h2>
+
+    <div class="flex flex-wrap gap-3 items-end">
+      <div class="w-1/2 min-w-[180px]">
+        <label class="ct-label">Empresa <span class="text-red-500">*</span></label>
+        <select id="ct-company" class="ct-input" onchange="Carteira.onCompanyChange()">
+          <option value="">Carregando...</option>
+        </select>
+      </div>
+      <div>
+        <div class="flex items-center justify-between gap-2">
+          <label class="ct-label" id="ct-initialDate-label" style="margin-bottom:0">
+            Data <span class="text-red-500">*</span>
+          </label>
+          <span class="ct-seg">
+            <button type="button" id="ct-mode-single" class="active" onclick="Carteira.onModeChange('single')">única</button>
+            <button type="button" id="ct-mode-range"  onclick="Carteira.onModeChange('range')">faixa</button>
+          </span>
+        </div>
+        <input id="ct-initialDate" type="date" class="ct-input ct-input-date mt-1" />
+      </div>
+      <div id="ct-finalDate-wrap" class="invisible">
+        <label class="ct-label">Data final <span class="text-red-500">*</span></label>
+        <input id="ct-finalDate" type="date" class="ct-input ct-input-date" />
+      </div>
+      <div class="flex-1 min-w-[180px]">
+        <label class="ct-label">Wallet (opcional)</label>
+        <select id="ct-single-wallet" class="ct-input">
+          <option value="">Todas</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 items-center mt-3 pt-3 border-t">
+      <button onclick="Carteira.run()" id="ct-run-btn"
+              class="ct-btn ct-btn-primary">Buscar</button>
+      <button onclick="Carteira.reset()" class="ct-btn ct-btn-muted">Limpar filtros</button>
+      <button id="ct-toggle-advanced" onclick="Carteira.toggleAdvanced()"
+              class="ct-btn ct-btn-muted">+ Groupings &amp; Wallets</button>
+      <label class="text-[11px] text-gray-600 inline-flex items-center gap-1 ml-2 select-none cursor-pointer">
+        <input type="checkbox" id="ct-show-contrib" onchange="Carteira.onShowContribChange()" />
+        Contribuição por security
+      </label>
+      <span id="ct-status" class="text-[11px] text-gray-500 ml-2"></span>
+    </div>
+
+    <div id="ct-warnings" class="space-y-1 mt-2"></div>
+
+    <!-- Advanced filters: collapsed by default, mirrors /excecoes pattern. -->
+    <div id="ct-advanced" class="hidden mt-3 pt-3 border-t space-y-3">
+      <p class="text-[10px] text-gray-400">
+        Sem seleção, busca em todas as wallets da empresa. Selecionar groupings filtra a lista de wallets disponíveis (união).
+      </p>
+      <div>
+        <p class="text-[11px] font-medium text-gray-600 mb-1">Groupings</p>
+        <div class="ct-xfer">
+          <div class="ct-xfer-pane">
+            <h4>Disponíveis <span id="ct-grp-available-count">0</span></h4>
+            <select id="ct-grp-available" multiple ondblclick="Carteira.addGroupingSelected()"></select>
+          </div>
+          <div class="ct-xfer-actions">
+            <button onclick="Carteira.addGroupingSelected()" title="Adicionar destacadas">→</button>
+            <button onclick="Carteira.addGroupingAll()"      title="Adicionar todas">»</button>
+            <button onclick="Carteira.removeGroupingSelected()" title="Remover destacadas">←</button>
+            <button onclick="Carteira.removeGroupingAll()"      title="Limpar">«</button>
+          </div>
+          <div class="ct-xfer-pane">
+            <h4>Selecionados <span id="ct-grp-selected-count">0</span></h4>
+            <select id="ct-grp-selected" multiple ondblclick="Carteira.removeGroupingSelected()"></select>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="text-[11px] font-medium text-gray-600 mb-1">Wallets</p>
+        <div class="ct-xfer">
+          <div class="ct-xfer-pane">
+            <h4>Disponíveis <span id="ct-wal-available-count">0</span></h4>
+            <select id="ct-wal-available" multiple ondblclick="Carteira.addWalletSelected()"></select>
+          </div>
+          <div class="ct-xfer-actions">
+            <button onclick="Carteira.addWalletSelected()" title="Adicionar destacadas">→</button>
+            <button onclick="Carteira.addWalletAll()"      title="Adicionar todas">»</button>
+            <button onclick="Carteira.removeWalletSelected()" title="Remover destacadas">←</button>
+            <button onclick="Carteira.removeWalletAll()"      title="Limpar">«</button>
+          </div>
+          <div class="ct-xfer-pane">
+            <h4>Selecionadas <span id="ct-wal-selected-count">0</span></h4>
+            <select id="ct-wal-selected" multiple ondblclick="Carteira.removeWalletSelected()"></select>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="ct-results" class="space-y-4"></section>
+</div>
+
+<!-- ── Security search modal ─────────────────────────────────────────────── -->
+<div id="ct-sec-modal" class="ct-modal-overlay hidden">
+  <div class="ct-modal" style="width:880px">
+    <div class="ct-modal-head">
+      <div>
+        <p>Selecionar Security</p>
+        <p id="ct-sec-modal-context" class="text-[10px] text-gray-400 font-normal"></p>
+      </div>
+      <button class="ct-modal-close" onclick="Carteira.closeSecModal()">&times;</button>
+    </div>
+    <div style="padding:10px 16px; border-bottom:1px solid #e5e7eb; display:flex; gap:8px; align-items:center;">
+      <input id="ct-sec-modal-q" type="text" class="ct-input"
+             placeholder="Buscar por nome, mainId, ticker, taxId, ISIN, selicCode..."
+             oninput="Carteira._debouncedSecSearch()" />
+      <span id="ct-sec-modal-count" class="text-[10px] text-gray-400"></span>
+    </div>
+    <!-- For the "add new" flow we capture qty/pu in-modal. Hidden when
+         editing an existing row's security (qty/pu come from the table cell). -->
+    <div id="ct-sec-modal-extra" class="hidden" style="padding:10px 16px; border-bottom:1px solid #e5e7eb;
+         display:flex; gap:10px; align-items:end;">
+      <div>
+        <label class="ct-label">Qtd</label>
+        <input id="ct-sec-modal-qty" type="number" step="any" class="ct-input ct-input-date" />
+      </div>
+      <div>
+        <label class="ct-label">PU</label>
+        <input id="ct-sec-modal-pu" type="number" step="any" class="ct-input ct-input-date" />
+      </div>
+      <p class="text-[10px] text-gray-500 ml-2">Saldo = Qtd × PU é calculado após confirmar.</p>
+    </div>
+    <div class="ct-modal-body" id="ct-sec-modal-body">
+      <p class="text-center text-gray-400 py-6 text-xs">Digite algo para buscar.</p>
+    </div>
+    <div class="ct-modal-foot">
+      <button class="ct-btn ct-btn-muted" onclick="Carteira.closeSecModal()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Confirm-apply modal ───────────────────────────────────────────────── -->
+<div id="ct-confirm-modal" class="ct-modal-overlay hidden">
+  <div class="ct-modal" style="width:720px">
+    <div class="ct-modal-head">
+      <p>Revisar e confirmar envio</p>
+      <button class="ct-modal-close" onclick="Carteira.closeConfirmModal()">&times;</button>
+    </div>
+    <div class="ct-modal-body">
+      <p class="text-xs text-gray-600 mb-3">
+        Será enviado um novo <code>unprocessedSecurityPositions</code> para a carteira na
+        data selecionada. Revise os ativos abaixo antes de confirmar.
+      </p>
+      <div id="ct-confirm-summary"></div>
+    </div>
+    <div class="ct-modal-foot">
+      <button class="ct-btn ct-btn-muted" onclick="Carteira.closeConfirmModal()">Cancelar</button>
+      <button id="ct-confirm-btn" class="ct-btn ct-btn-success"
+              onclick="Carteira.submitApply()">Confirmar e enviar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  /* ══════════════════════════════════════════════════════════════════════
+     Carteira — read-only viewer for processedPosition + provisions +
+     cashAccounts, per (wallet, business-day) within a chosen date range.
+     The page renders nothing until "Buscar" is clicked — Carteira.run()
+     POSTs the filter envelope to /api/carteira/data and rebuilds the
+     results section from the response.
+  ══════════════════════════════════════════════════════════════════════ */
+  const Carteira = {
+    _st: {
+      mode: "single",                // "single" | "range"
+      groupings: [],                 // [{id, name, walletIds: [...]}]
+      groupingSelectedIds: new Set(),
+      wallets: [],                   // [{id, name}]
+      walletSelectedIds:   new Set(),
+      lastData: null,                // cached `{wallets, dates}` for re-render
+      // Edit-mode state keyed by walletId. Each entry is a working copy
+      // produced by `_seedEditState(walletData)` — the source response in
+      // `lastData` stays untouched so cancelling reverts cleanly.
+      editing: new Map(),
+      // Security-search modal is shared (add-row + edit-cell); `_secModal`
+      // remembers which flow opened it so the result callback knows
+      // whether to mutate an existing row or append a new one.
+      _secModal: null,
+      _secSearchTimer: null,
+      _submitting: false,
+    },
+
+    // ── small format / escape helpers ─────────────────────────────────
+    _esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g,
+        c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    },
+    _fmtNum(v, frac) {
+      if (v == null) return '<span class="text-gray-300">—</span>';
+      const n = Number(v);
+      if (!isFinite(n)) return '<span class="text-gray-300">—</span>';
+      return n.toLocaleString("pt-BR", {minimumFractionDigits: frac, maximumFractionDigits: frac});
+    },
+    _fmtQty(v)   { return this._fmtNum(v, 6); },
+    _fmtPu(v)    { return this._fmtNum(v, 6); },
+    _fmtMoney(v) { return this._fmtNum(v, 2); },
+    _todayISO() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    },
+
+    // ── Bootstrap ──────────────────────────────────────────────────────
+    async init() {
+      document.getElementById("ct-initialDate").value = this._todayISO();
+      document.getElementById("ct-finalDate").value   = this._todayISO();
+      this.onModeChange("range");
+      await this._loadCompanies();
+    },
+
+    async _loadCompanies() {
+      const sel = document.getElementById("ct-company");
+      try {
+        const r = await fetch("/api/carteira/filters/companies");
+        const items = await r.json();
+        sel.innerHTML = '<option value="">Selecione...</option>' +
+          (Array.isArray(items) ? items : []).map(c =>
+            `<option value="${this._esc(c.id)}">${this._esc(c.name || c.id)}</option>`
+          ).join("");
+      } catch (e) {
+        sel.innerHTML = '<option value="">Erro ao carregar empresas</option>';
+      }
+    },
+
+    onModeChange(mode) {
+      if (mode !== "range") mode = "single";
+      this._st.mode = mode;
+      // `invisible` keeps the grid cell so toggling única/faixa doesn't
+      // shuffle the row layout — same trick used on the /controlpanel filter.
+      document.getElementById("ct-finalDate-wrap").classList.toggle("invisible", mode !== "range");
+      document.getElementById("ct-mode-single").classList.toggle("active", mode === "single");
+      document.getElementById("ct-mode-range").classList.toggle("active", mode === "range");
+      document.getElementById("ct-initialDate-label").textContent =
+        (mode === "range" ? "Data inicial *" : "Data *");
+      // Plain text content won't render the red asterisk styled span;
+      // rewrite as innerHTML so the * stays red.
+      const lbl = document.getElementById("ct-initialDate-label");
+      lbl.innerHTML = (mode === "range" ? "Data inicial" : "Data")
+                    + ' <span class="text-red-500">*</span>';
+    },
+
+    toggleAdvanced() {
+      const adv = document.getElementById("ct-advanced");
+      const btn = document.getElementById("ct-toggle-advanced");
+      const willShow = adv.classList.contains("hidden");
+      adv.classList.toggle("hidden", !willShow);
+      btn.innerHTML = willShow ? "− Groupings &amp; Wallets" : "+ Groupings &amp; Wallets";
+    },
+
+    async onCompanyChange() {
+      const cid = document.getElementById("ct-company").value;
+      this._st.groupingSelectedIds = new Set();
+      this._st.walletSelectedIds   = new Set();
+      const single = document.getElementById("ct-single-wallet");
+      single.innerHTML = '<option value="">Todas</option>';
+      if (!cid) {
+        this._st.groupings = [];
+        this._st.wallets   = [];
+        this._renderPanes(); this._renderWalletPanes();
+        return;
+      }
+      try {
+        const [gResp, wResp] = await Promise.all([
+          fetch(`/api/carteira/filters/groupings?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
+          fetch(`/api/carteira/filters/wallets?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
+        ]);
+        this._st.groupings = Array.isArray(gResp) ? gResp : [];
+        this._st.wallets   = Array.isArray(wResp) ? wResp : [];
+      } catch (e) {
+        this._st.groupings = [];
+        this._st.wallets   = [];
+      }
+      // Mirror the wallet list into the single-wallet dropdown so the
+      // operator can pick a single wallet without opening the advanced pane.
+      single.innerHTML = '<option value="">Todas</option>' +
+        this._st.wallets.map(w =>
+          `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`
+        ).join("");
+      this._renderPanes(); this._renderWalletPanes();
+    },
+
+    // ── Groupings ↔ wallets transfer panes ───────────────────────────
+    _walletFilter() {
+      if (!this._st.groupingSelectedIds.size) return null;
+      const ids = new Set();
+      for (const g of this._st.groupings) {
+        if (this._st.groupingSelectedIds.has(g.id)) {
+          (g.walletIds || []).forEach(w => ids.add(w));
+        }
+      }
+      return ids;
+    },
+    _renderPanes() {
+      const avail = document.getElementById("ct-grp-available");
+      const sel   = document.getElementById("ct-grp-selected");
+      const available = this._st.groupings.filter(g => !this._st.groupingSelectedIds.has(g.id));
+      const selected  = this._st.groupings.filter(g =>  this._st.groupingSelectedIds.has(g.id));
+      avail.innerHTML = available.map(g => `<option value="${this._esc(g.id)}">${this._esc(g.name)}</option>`).join("");
+      sel.innerHTML   = selected .map(g => `<option value="${this._esc(g.id)}">${this._esc(g.name)}</option>`).join("");
+      document.getElementById("ct-grp-available-count").textContent = available.length;
+      document.getElementById("ct-grp-selected-count").textContent  = selected.length;
+      this._renderWalletPanes();
+    },
+    _renderWalletPanes() {
+      const filter = this._walletFilter();
+      const avail  = document.getElementById("ct-wal-available");
+      const sel    = document.getElementById("ct-wal-selected");
+      const available = this._st.wallets.filter(w =>
+        (!filter || filter.has(w.id)) && !this._st.walletSelectedIds.has(w.id)
+      );
+      const selected  = this._st.wallets.filter(w => this._st.walletSelectedIds.has(w.id));
+      avail.innerHTML = available.map(w => `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`).join("");
+      sel.innerHTML   = selected .map(w => `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`).join("");
+      document.getElementById("ct-wal-available-count").textContent = available.length;
+      document.getElementById("ct-wal-selected-count").textContent  = selected.length;
+    },
+    _highlighted(id) {
+      return Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
+    },
+    addGroupingSelected()    { this._highlighted("ct-grp-available").forEach(id => this._st.groupingSelectedIds.add(id)); this._renderPanes(); },
+    addGroupingAll()         { Array.from(document.getElementById("ct-grp-available").options).forEach(o => o.value && this._st.groupingSelectedIds.add(o.value)); this._renderPanes(); },
+    removeGroupingSelected() { this._highlighted("ct-grp-selected").forEach(id => this._st.groupingSelectedIds.delete(id)); this._renderPanes(); },
+    removeGroupingAll()      { this._st.groupingSelectedIds.clear(); this._renderPanes(); },
+    addWalletSelected()      { this._highlighted("ct-wal-available").forEach(id => this._st.walletSelectedIds.add(id)); this._renderWalletPanes(); },
+    addWalletAll()           { Array.from(document.getElementById("ct-wal-available").options).forEach(o => o.value && this._st.walletSelectedIds.add(o.value)); this._renderWalletPanes(); },
+    removeWalletSelected()   { this._highlighted("ct-wal-selected").forEach(id => this._st.walletSelectedIds.delete(id)); this._renderWalletPanes(); },
+    removeWalletAll()        { this._st.walletSelectedIds.clear(); this._renderWalletPanes(); },
+
+    reset() {
+      document.getElementById("ct-company").value = "";
+      document.getElementById("ct-single-wallet").innerHTML = '<option value="">Todas</option>';
+      this._st.groupingSelectedIds = new Set();
+      this._st.walletSelectedIds   = new Set();
+      this._st.groupings = [];
+      this._st.wallets   = [];
+      this._renderPanes(); this._renderWalletPanes();
+      this.onModeChange("range");
+      document.getElementById("ct-initialDate").value = this._todayISO();
+      document.getElementById("ct-finalDate").value   = this._todayISO();
+      const adv = document.getElementById("ct-advanced");
+      const advBtn = document.getElementById("ct-toggle-advanced");
+      if (adv && !adv.classList.contains("hidden")) {
+        adv.classList.add("hidden");
+        if (advBtn) advBtn.innerHTML = "+ Groupings &amp; Wallets";
+      }
+      document.getElementById("ct-results").innerHTML = "";
+      document.getElementById("ct-status").textContent = "";
+      document.getElementById("ct-warnings").innerHTML = "";
+      const cb = document.getElementById("ct-show-contrib");
+      if (cb) cb.checked = false;
+      this._st.lastData = null;
+    },
+
+    _payload() {
+      const ini = document.getElementById("ct-initialDate").value;
+      const fin = this._st.mode === "range"
+        ? document.getElementById("ct-finalDate").value
+        : ini;
+      // Precedence: advanced (groupings OR wallets) overrides the inline
+      // single-wallet selector. With neither set, "Todas as wallets" applies.
+      const advGroupings = Array.from(this._st.groupingSelectedIds);
+      const advWallets   = Array.from(this._st.walletSelectedIds);
+      const singleWal    = document.getElementById("ct-single-wallet").value;
+      const useAdvanced  = advGroupings.length > 0 || advWallets.length > 0;
+      return {
+        companyId:   document.getElementById("ct-company").value,
+        initialDate: ini,
+        finalDate:   fin,
+        groupingIds: useAdvanced ? advGroupings : [],
+        walletIds:   useAdvanced ? advWallets : (singleWal ? [singleWal] : []),
+      };
+    },
+
+    _validate(p) {
+      if (!p.companyId)   { alert("Selecione uma empresa."); return false; }
+      if (!p.initialDate) { alert("Informe a data."); return false; }
+      if (this._st.mode === "range" && !p.finalDate) { alert("Informe a data final."); return false; }
+      if (p.initialDate > p.finalDate) { alert("Data inicial > data final."); return false; }
+      return true;
+    },
+
+    async run() {
+      const payload = this._payload();
+      if (!this._validate(payload)) return;
+
+      // Collapse the advanced groupings/wallets pane on submit — the
+      // operator wants the results to take focus, and the filter selections
+      // are preserved in state so re-opening shows the same picks.
+      const adv = document.getElementById("ct-advanced");
+      const advBtn = document.getElementById("ct-toggle-advanced");
+      if (adv && !adv.classList.contains("hidden")) {
+        adv.classList.add("hidden");
+        if (advBtn) advBtn.innerHTML = "+ Groupings &amp; Wallets";
+      }
+
+      const status = document.getElementById("ct-status");
+      const warns  = document.getElementById("ct-warnings");
+      const out    = document.getElementById("ct-results");
+      const btn    = document.getElementById("ct-run-btn");
+      status.textContent = "Carregando...";
+      warns.innerHTML = "";
+      out.innerHTML   = "";
+      btn.disabled    = true;
+
+      let data;
+      try {
+        const r = await fetch("/api/carteira/data", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+        data = await r.json();
+        if (!r.ok || data.error) {
+          status.textContent = "";
+          warns.innerHTML = `<p class="text-xs text-red-600">${this._esc(data.error || "Falha (HTTP " + r.status + ")")}</p>`;
+          return;
+        }
+      } catch (e) {
+        status.textContent = "";
+        warns.innerHTML = `<p class="text-xs text-red-600">Erro de rede: ${this._esc(e.message || "")}</p>`;
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+
+      const wallets = data.wallets || [];
+      const dates   = data.dates   || [];
+      this._st.lastData = {wallets, dates};
+      status.textContent = `${wallets.length} carteira(s) · ${dates.length} dia(s) útil(eis).`;
+      if (!wallets.length) {
+        out.innerHTML = `<p class="text-xs text-gray-400 text-center py-6">Nenhuma posição encontrada para os filtros informados.</p>`;
+        return;
+      }
+      this._rerender();
+    },
+
+    _rerender() {
+      const data = this._st.lastData;
+      if (!data) return;
+      const out = document.getElementById("ct-results");
+      out.innerHTML = data.wallets.map(w => this._renderWalletBlock(w, data.dates)).join("");
+    },
+
+    onShowContribChange() {
+      // Re-render from the cached response — no need to re-hit the API,
+      // totalContribution is already in the per-cell payload.
+      this._rerender();
+    },
+
+    // ── Per-wallet table ─────────────────────────────────────────────
+    _renderWalletBlock(w, dates) {
+      const editing = this._st.editing.get(w.walletId) || null;
+      // Edit mode locks the view to a single date — the inline form only
+      // makes sense for one (wallet, date) pair, and the apply endpoint
+      // uploads exactly one snapshot per call.
+      if (editing) return this._renderEditBlock(w, editing);
+
+      // Per-security totalContribution is an opt-in column — toggled by
+      // the checkbox in the action row. Each date group is 3 or 4 sub-cols.
+      const showContrib = !!document.getElementById("ct-show-contrib")?.checked;
+      const perDateCols = showContrib ? 4 : 3;
+
+      const dateGroupHeader = dates.map(d =>
+        `<th class="ct-tbl-date-group" colspan="${perDateCols}">${this._esc(d)}</th>`
+      ).join("");
+      const subHeader = dates.map(() =>
+        showContrib
+          ? `<th class="ct-tbl-date-group">Qtd</th><th>PU</th><th>Saldo</th><th>Contrib.</th>`
+          : `<th class="ct-tbl-date-group">Qtd</th><th>PU</th><th>Saldo</th>`
+      ).join("");
+
+      const secRows = w.securities.map(s => {
+        const cells = dates.map(d => {
+          const c = (s.byDate || {})[d] || {};
+          const extra = showContrib
+            ? `<td>${this._fmtMoney(c.totalContribution)}</td>`
+            : "";
+          return `
+            <td class="ct-tbl-date-group">${this._fmtQty(c.quantity)}</td>
+            <td>${this._fmtPu(c.pu)}</td>
+            <td>${this._fmtMoney(c.balance)}</td>
+            ${extra}`;
+        }).join("");
+        const cls = s.quantityChanged ? "ct-row-changed" : "";
+        const uid = (s.unprocessedId || "").trim();
+        const uidCell = uid
+          ? `<span class="ct-id" style="font-size:11px;color:#374151">${this._esc(uid)}</span>`
+          : `<span class="ct-id" style="color:#d1d5db">—</span>`;
+        return `<tr class="${cls}">
+          <td class="ct-tbl-sec">
+            <div class="font-medium text-gray-800">${this._esc(s.securityName)}</div>
+            <div class="ct-id">${this._esc(s.securityId)}</div>
+          </td>
+          <td class="ct-tbl-sec" style="text-align:left">${uidCell}</td>
+          ${cells}
+        </tr>`;
+      }).join("");
+
+      // Footer rows: total contribution / provisions / cash. Each spans
+      // qty+pu+balance (+ contribution when shown) per date.
+      const footerRow = (label, valueFor) => {
+        const cells = dates.map(d => {
+          const v = valueFor(d);
+          return `<td class="ct-tbl-date-group" colspan="${perDateCols}">${this._fmtMoney(v)}</td>`;
+        }).join("");
+        return `<tr class="ct-footer-row">
+          <td class="ct-tbl-sec" colspan="2">${label}</td>
+          ${cells}
+        </tr>`;
+      };
+      // Caixa label is the wallet's `cashAccounts.unprocessedId` (the
+      // value the upstream parser uses as `Ativo` for the cash row).
+      // Falls back to the literal "Caixa" when the wallet has no
+      // cashAccount document on file.
+      const cashLabel = (w.cashUnprocessedId || "").trim() || "Caixa";
+      const footerHtml = [
+        footerRow("Contribuição total", d => (w.totalContributionByDate || {})[d]),
+        footerRow("Provisões",          d => (w.provisionsByDate        || {})[d]),
+        footerRow(this._esc(cashLabel), d => (w.cashByDate              || {})[d]),
+      ].join("");
+
+      // Edit button is only shown when the result set has exactly one
+      // date — editing a range makes no sense (the upload writes to a
+      // single positionDate). We still surface the unprocessedId column
+      // in faixa mode so the operator can see the mapping at a glance.
+      const canEdit = dates.length === 1;
+      const editBtn = canEdit
+        ? `<button class="ct-btn ct-btn-primary" style="margin-left:auto"
+                   onclick="Carteira.enterEditMode('${this._esc(w.walletId)}','${this._esc(dates[0])}')">Editar</button>`
+        : `<span class="text-[10px] text-gray-400" style="margin-left:auto">Edição disponível apenas no modo "única" data.</span>`;
+
+      const colCount = 2 + perDateCols * dates.length;
+      return `
+        <div class="bg-white rounded-xl shadow overflow-hidden">
+          <div class="ct-wallet-header">
+            <h3>${this._esc(w.walletName)}</h3>
+            <span class="ct-id">${this._esc(w.walletId)}</span>
+            ${editBtn}
+          </div>
+          <div style="overflow-x:scroll">
+            <table class="ct-tbl">
+              <thead>
+                <tr>
+                  <th rowspan="2" class="ct-tbl-sec" style="text-align:left">Security</th>
+                  <th rowspan="2" class="ct-tbl-sec" style="text-align:left">unprocessedSecurityId</th>
+                  ${dateGroupHeader}
+                </tr>
+                <tr>${subHeader}</tr>
+              </thead>
+              <tbody>
+                ${secRows || `<tr><td class="ct-tbl-sec" colspan="${colCount}" style="text-align:center;color:#9ca3af;padding:12px 0">Nenhuma security em processedPosition na faixa selecionada.</td></tr>`}
+                ${footerHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>`;
+    },
+
+    // ── Edit-mode rendering ──────────────────────────────────────────
+    _renderEditBlock(w, editing) {
+      // Edit-mode columns: Security | unprocessedId | Qtd | PU | Saldo | ×
+      const rowsHtml = editing.rows.map((row, i) => {
+        const sId = row.securityId || "";
+        const sName = row.securityName || sId || "(sem nome)";
+        const newCls = row.isNew ? "ct-edit-row ct-new-row" : "ct-edit-row";
+        const uidDisplay = (row.unprocessedId || "").trim()
+          ? this._esc(row.unprocessedId)
+          : `<span style="color:#dc2626">faltando</span>`;
+        const balance = this._fmtMoney(this._computeBalance(row));
+        return `<tr class="${newCls}" data-ri="${i}">
+          <td class="ct-tbl-sec" style="text-align:left">
+            <div class="font-medium text-gray-800">
+              <a class="ct-edit-link" onclick="Carteira.openSecModal('edit','${this._esc(w.walletId)}',${i})">${this._esc(sName)}</a>
+            </div>
+            <div class="ct-id">${this._esc(sId)}</div>
+          </td>
+          <td class="ct-tbl-sec" style="text-align:left">
+            <span class="ct-id" style="font-size:11px;color:#374151">${uidDisplay}</span>
+          </td>
+          <td><input type="text" class="ct-edit-input" value="${this._fmtEditNum(row.quantity)}"
+                     oninput="Carteira.onEditField('${this._esc(w.walletId)}',${i},'quantity',this.value)" /></td>
+          <td><input type="text" class="ct-edit-input" value="${this._fmtEditNum(row.pu)}"
+                     oninput="Carteira.onEditField('${this._esc(w.walletId)}',${i},'pu',this.value)" /></td>
+          <td>${balance}</td>
+          <td style="text-align:center">
+            <button class="ct-row-delete" title="Remover linha"
+                    onclick="Carteira.deleteRow('${this._esc(w.walletId)}',${i})">×</button>
+          </td>
+        </tr>`;
+      }).join("");
+
+      // Cash row: Security cell is a fixed "Caixa" label so the operator
+      // can locate the row; the unprocessedSecurityId cell is an editable
+      // text input bound to `editing.cashUnprocessedId`. Empty = fall
+      // back to the wallet's existing cashAccount label on apply.
+      const cashFooter = `<tr class="ct-footer-row">
+        <td class="ct-tbl-sec" style="text-align:left">Caixa</td>
+        <td class="ct-tbl-sec" style="text-align:left">
+          <input type="text" class="ct-edit-input" style="text-align:left"
+                 value="${this._esc(editing.cashUnprocessedId || "")}"
+                 placeholder="Caixa"
+                 oninput="Carteira.onEditCashUid('${this._esc(w.walletId)}',this.value)" />
+        </td>
+        <td colspan="2"><input type="text" class="ct-edit-input" value="${this._fmtEditNum(editing.cash)}"
+                               oninput="Carteira.onEditCash('${this._esc(w.walletId)}',this.value)" /></td>
+        <td>${this._fmtMoney(editing.cash)}</td>
+        <td></td>
+      </tr>`;
+
+      return `
+        <div class="bg-white rounded-xl shadow overflow-hidden">
+          <div class="ct-wallet-header">
+            <h3>${this._esc(w.walletName)}</h3>
+            <span class="ct-id">${this._esc(w.walletId)}</span>
+            <span class="text-[11px] text-amber-700" style="margin-left:8px">Editando · ${this._esc(editing.targetDate)}</span>
+          </div>
+          <div class="ct-edit-bar">
+            <span>Clique nome do ativo para trocar · qtd/pu editáveis · saldo = qtd × pu</span>
+            <span class="ct-spacer"></span>
+            <button class="ct-btn ct-btn-muted" onclick="Carteira.addRow('${this._esc(w.walletId)}')">+ Adicionar security</button>
+            <button class="ct-btn ct-btn-muted" onclick="Carteira.cancelEdit('${this._esc(w.walletId)}')">Cancelar</button>
+            <button class="ct-btn ct-btn-success" onclick="Carteira.openConfirmModal('${this._esc(w.walletId)}')">Revisar e confirmar</button>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="ct-tbl">
+              <thead>
+                <tr>
+                  <th class="ct-tbl-sec" style="text-align:left">Security</th>
+                  <th class="ct-tbl-sec" style="text-align:left">unprocessedSecurityId</th>
+                  <th>Qtd</th>
+                  <th>PU</th>
+                  <th>Saldo</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml || `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px 0" class="ct-tbl-sec">Nenhuma linha. Use "Adicionar security" ou cancele para voltar.</td></tr>`}
+                ${cashFooter}
+              </tbody>
+            </table>
+          </div>
+        </div>`;
+    },
+
+    _fmtEditNum(v) {
+      // Edit inputs use pt-BR-style decimals so the operator's habits
+      // (comma as decimal separator) survive a round-trip. The parser
+      // accepts either form.
+      if (v == null || v === "") return "";
+      const n = Number(v);
+      if (!isFinite(n)) return "";
+      // Strip trailing zeros for readability (8 → "8", 1.5 → "1,5").
+      const fixed = n.toFixed(8).replace(/\.?0+$/, "");
+      return fixed.replace(".", ",");
+    },
+    _parseEditNum(s) {
+      if (s == null || s === "") return null;
+      const v = parseFloat(String(s).replace(/\./g, "").replace(",", "."));
+      return isFinite(v) ? v : null;
+    },
+    _computeBalance(row) {
+      const q = Number(row.quantity);
+      const p = Number(row.pu);
+      if (!isFinite(q) || !isFinite(p)) return null;
+      return q * p;
+    },
+
+    // ── Edit lifecycle ───────────────────────────────────────────────
+    enterEditMode(walletId, targetDate) {
+      const w = (this._st.lastData?.wallets || []).find(x => x.walletId === walletId);
+      if (!w) return;
+      const cash = (w.cashByDate || {})[targetDate];
+      const rows = (w.securities || []).map(s => {
+        const c = (s.byDate || {})[targetDate] || {};
+        const qty = (c.quantity == null) ? 0 : Number(c.quantity);
+        const pu  = (c.pu       == null) ? 0 : Number(c.pu);
+        return {
+          securityId:    s.securityId,
+          securityName:  s.securityName,
+          unprocessedId: s.unprocessedId || "",
+          quantity:      isFinite(qty) ? qty : 0,
+          pu:             isFinite(pu)  ? pu  : 0,
+          isNew:         false,
+        };
+      });
+      this._st.editing.set(walletId, {
+        targetDate,
+        rows,
+        cash: (cash == null ? null : Number(cash)),
+        // Pull companyId out of the parent selector — every wallet on the
+        // page necessarily belongs to it.
+        companyId: document.getElementById("ct-company").value || "",
+        // `cashAccounts.unprocessedId` is rendered in the Caixa row's
+        // unprocessedSecurityId cell. Empty string is meaningful → on
+        // apply, the backend re-resolves it from cashAccounts (falling
+        // back to literal "Caixa" if none).
+        cashUnprocessedId: (w.cashUnprocessedId || ""),
+      });
+      this._rerender();
+    },
+    cancelEdit(walletId) {
+      this._st.editing.delete(walletId);
+      this._rerender();
+    },
+    onEditField(walletId, rowIndex, field, value) {
+      const editing = this._st.editing.get(walletId);
+      if (!editing) return;
+      const row = editing.rows[rowIndex];
+      if (!row) return;
+      const parsed = this._parseEditNum(value);
+      row[field] = parsed == null ? 0 : parsed;
+      // Update only the live Saldo cell — re-rendering the whole block
+      // would steal focus from the input the operator is typing into.
+      const tr = document.querySelector(`tr.ct-edit-row[data-ri="${rowIndex}"]`);
+      if (tr) {
+        const balCell = tr.children[4];
+        if (balCell) balCell.innerHTML = this._fmtMoney(this._computeBalance(row));
+      }
+    },
+    onEditCash(walletId, value) {
+      const editing = this._st.editing.get(walletId);
+      if (!editing) return;
+      const parsed = this._parseEditNum(value);
+      editing.cash = parsed; // null is meaningful → "don't send cash"
+      // Refresh only the cash footer's read-only Saldo mirror.
+      // Cash row column layout: [label][uid input][value input (colspan=2)][mirror][×]
+      // so the mirror is `children[3]`.
+      const block = this._editBlockEl(walletId);
+      if (!block) return;
+      const footRows = block.querySelectorAll("tbody tr.ct-footer-row");
+      const cashRow = footRows[footRows.length - 1];
+      if (cashRow && cashRow.children[3]) {
+        cashRow.children[3].innerHTML = this._fmtMoney(parsed);
+      }
+    },
+    onEditCashUid(walletId, value) {
+      const editing = this._st.editing.get(walletId);
+      if (!editing) return;
+      // Whitespace-only input is treated as "clear" so the apply call
+      // falls back to the wallet's stored cashAccount.unprocessedId.
+      editing.cashUnprocessedId = String(value || "").trim();
+      // No DOM mirror to refresh — the input *is* the source of truth.
+    },
+    deleteRow(walletId, rowIndex) {
+      const editing = this._st.editing.get(walletId);
+      if (!editing) return;
+      const row = editing.rows[rowIndex];
+      if (!row) return;
+      if (!confirm(`Remover a linha "${row.securityName || row.securityId || ""}"?`)) return;
+      editing.rows.splice(rowIndex, 1);
+      this._rerender();
+    },
+    addRow(walletId) {
+      this.openSecModal("add", walletId, null);
+    },
+    _editBlockEl(walletId) {
+      // Walk the rendered blocks to find the one matching this walletId.
+      // We don't carry data-* attributes on the outer card because the
+      // existing non-edit renderer doesn't either; instead the wallet id
+      // chip is unique per block, so anchor on that.
+      const blocks = document.querySelectorAll("#ct-results > .bg-white");
+      for (const b of blocks) {
+        const idEl = b.querySelector(".ct-wallet-header .ct-id");
+        if (idEl && idEl.textContent === walletId) return b;
+      }
+      return null;
+    },
+
+    // ── Security-search modal ────────────────────────────────────────
+    openSecModal(flow, walletId, rowIndex) {
+      this._st._secModal = { flow, walletId, rowIndex };
+      const ctx = document.getElementById("ct-sec-modal-context");
+      const editing = this._st.editing.get(walletId);
+      const wname = (this._st.lastData?.wallets || []).find(x => x.walletId === walletId)?.walletName || walletId;
+      ctx.textContent = `${wname} · ${editing?.targetDate || ""} · ${flow === "add" ? "Adicionar security" : "Trocar security da linha"}`;
+      document.getElementById("ct-sec-modal-q").value = "";
+      document.getElementById("ct-sec-modal-body").innerHTML =
+        `<p class="text-center text-gray-400 py-6 text-xs">Digite algo para buscar.</p>`;
+      document.getElementById("ct-sec-modal-count").textContent = "";
+      const extra = document.getElementById("ct-sec-modal-extra");
+      if (flow === "add") {
+        extra.classList.remove("hidden");
+        document.getElementById("ct-sec-modal-qty").value = "";
+        document.getElementById("ct-sec-modal-pu").value = "";
+      } else {
+        extra.classList.add("hidden");
+      }
+      document.getElementById("ct-sec-modal").classList.remove("hidden");
+      setTimeout(() => document.getElementById("ct-sec-modal-q").focus(), 50);
+    },
+    closeSecModal() {
+      this._st._secModal = null;
+      document.getElementById("ct-sec-modal").classList.add("hidden");
+    },
+    _debouncedSecSearch() {
+      clearTimeout(this._st._secSearchTimer);
+      this._st._secSearchTimer = setTimeout(() => this._secSearch(), 250);
+    },
+    async _secSearch() {
+      const body = document.getElementById("ct-sec-modal-body");
+      const countEl = document.getElementById("ct-sec-modal-count");
+      const q = document.getElementById("ct-sec-modal-q").value.trim();
+      if (!q) {
+        body.innerHTML = `<p class="text-center text-gray-400 py-6 text-xs">Digite algo para buscar.</p>`;
+        countEl.textContent = "";
+        return;
+      }
+      body.innerHTML = `<p class="text-center text-gray-400 py-6 text-xs">Buscando...</p>`;
+      try {
+        const r = await fetch(`/api/carteira/search-securities?q=${encodeURIComponent(q)}&limit=80`);
+        const data = await r.json();
+        const items = data.results || [];
+        countEl.textContent = `${items.length} resultado(s)`;
+        if (!items.length) {
+          body.innerHTML = `<p class="text-center text-gray-400 py-6 text-xs">Nenhum resultado.</p>`;
+          return;
+        }
+        // Carry securityId/name via data-* attributes so quotes / apostrophes
+        // in beehusName don't break the inline handler — see `pickSecurity`.
+        body.innerHTML = `<table class="ct-sec-tbl">
+          <thead><tr>
+            <th>Nome</th><th>mainId</th><th>Ticker</th><th>Tipo</th><th>Vencimento</th>
+          </tr></thead>
+          <tbody>
+            ${items.map(s => `<tr data-sid="${this._esc(s.securityId)}"
+                                  data-sname="${this._esc(s.beehusName || s.mainId || s.securityId)}"
+                                  onclick="Carteira.pickSecurity(this.dataset.sid, this.dataset.sname)">
+              <td>${this._esc(s.beehusName || "")}</td>
+              <td><span class="ct-id">${this._esc(s.mainId || "")}</span></td>
+              <td>${this._esc(s.ticker || "")}</td>
+              <td>${this._esc(s.securityType || "")}</td>
+              <td>${this._esc((s.maturityDate || "").slice(0,10))}</td>
+            </tr>`).join("")}
+          </tbody></table>`;
+      } catch (e) {
+        body.innerHTML = `<p class="text-center text-red-600 py-6 text-xs">Erro: ${this._esc(e.message || e)}</p>`;
+      }
+    },
+    async pickSecurity(securityId, beehusName) {
+      const ctx = this._st._secModal;
+      if (!ctx) return;
+      const editing = this._st.editing.get(ctx.walletId);
+      if (!editing) { this.closeSecModal(); return; }
+      const companyId = editing.companyId;
+
+      // Auto-resolve `unprocessedId` via securityMappings (with beehusName
+      // fallback). Failure shouldn't block the operator — surface a
+      // warning instead.
+      let mapping = { unprocessedId: "", beehusName: beehusName, source: "" };
+      try {
+        const r = await fetch(
+          `/api/carteira/lookup-mapping?companyId=${encodeURIComponent(companyId)}&securityId=${encodeURIComponent(securityId)}`);
+        if (r.ok) {
+          mapping = await r.json();
+        }
+      } catch (_) { /* swallow — beehusName fallback follows */ }
+      const resolvedUid = (mapping.unprocessedId || beehusName || "").trim();
+      if (!resolvedUid) {
+        alert("Não foi possível resolver um unprocessedId nem um beehusName para essa security.");
+        return;
+      }
+
+      if (ctx.flow === "add") {
+        const qty = this._parseEditNum(document.getElementById("ct-sec-modal-qty").value);
+        const pu  = this._parseEditNum(document.getElementById("ct-sec-modal-pu").value);
+        if (qty == null) { alert("Informe a quantidade."); return; }
+        if (pu  == null) { alert("Informe o PU."); return; }
+        // Prevent duplicate unprocessedId in the same wallet — the upstream
+        // upload would silently collapse them.
+        if (editing.rows.some(r => (r.unprocessedId || "") === resolvedUid)) {
+          alert("Essa security já está na lista.");
+          return;
+        }
+        editing.rows.push({
+          securityId,
+          securityName: beehusName,
+          unprocessedId: resolvedUid,
+          quantity: qty,
+          pu,
+          isNew: true,
+        });
+      } else {
+        const row = editing.rows[ctx.rowIndex];
+        if (!row) { this.closeSecModal(); return; }
+        if (editing.rows.some((r, i) =>
+            i !== ctx.rowIndex && (r.unprocessedId || "") === resolvedUid)) {
+          alert("Essa security já está em outra linha desta carteira.");
+          return;
+        }
+        row.securityId    = securityId;
+        row.securityName  = beehusName;
+        row.unprocessedId = resolvedUid;
+      }
+      this.closeSecModal();
+      this._rerender();
+    },
+
+    // ── Confirm + apply ──────────────────────────────────────────────
+    openConfirmModal(walletId) {
+      const editing = this._st.editing.get(walletId);
+      if (!editing) return;
+      // Validation: every row needs an unprocessedId (lookup-mapping
+      // shouldn't return empty, but a manual delete + re-add could in
+      // theory leave one blank; better to catch here than upstream).
+      const blank = editing.rows.filter(r => !(r.unprocessedId || "").trim());
+      if (blank.length) {
+        alert(`Há ${blank.length} linha(s) sem unprocessedId. Selecione uma security válida ou remova a linha antes de confirmar.`);
+        return;
+      }
+      const dupes = new Set();
+      const seen = new Set();
+      for (const r of editing.rows) {
+        const u = (r.unprocessedId || "").trim();
+        if (seen.has(u)) dupes.add(u);
+        seen.add(u);
+      }
+      if (dupes.size) {
+        alert(`Ativos duplicados: ${[...dupes].join(", ")}`);
+        return;
+      }
+      this._st._confirmWallet = walletId;
+      const wData = (this._st.lastData?.wallets || []).find(x => x.walletId === walletId);
+      const wname = wData?.walletName || walletId;
+      const totalBal = editing.rows.reduce(
+        (a, r) => a + (this._computeBalance(r) || 0), 0);
+
+      // Compare the working `cashUnprocessedId` against the snapshot in
+      // `lastData` so the preview can highlight the change (or warn that
+      // it won't be sent when no cash value is set).
+      const origCashUid = (wData?.cashUnprocessedId || "").trim();
+      const newCashUid  = (editing.cashUnprocessedId || "").trim();
+      const cashUidChanged = origCashUid !== newCashUid;
+      const cashUidEffective = newCashUid || "Caixa";
+
+      const cashSummary = editing.cash == null
+        ? (cashUidChanged
+            ? `<span style="color:#b91c1c">(não enviar — alteração do Ativo perdida)</span>`
+            : "(não enviar)")
+        : `${this._fmtMoney(editing.cash)} <span class="ct-id" style="font-size:11px;color:#374151">(Ativo: ${this._esc(cashUidEffective)}${cashUidChanged ? ' <span style="color:#16a34a">alterado</span>' : ''})</span>`;
+      const headline = `<p class="text-xs text-gray-700 mb-3">
+        <strong>${editing.rows.length}</strong> security(ies) ·
+        Saldo total: <strong>${this._fmtMoney(totalBal)}</strong> ·
+        Caixa: <strong>${cashSummary}</strong>
+      </p>
+      <p class="text-[11px] text-gray-500 mb-3">
+        Carteira <strong>${this._esc(wname)}</strong> · Data alvo <strong>${this._esc(editing.targetDate)}</strong>
+      </p>`;
+      const rows = editing.rows.map(r => `<tr>
+        <td>${this._esc(r.securityName || r.securityId)}</td>
+        <td><span class="ct-id">${this._esc(r.unprocessedId)}</span></td>
+        <td style="text-align:right">${this._fmtQty(r.quantity)}</td>
+        <td style="text-align:right">${this._fmtPu(r.pu)}</td>
+        <td style="text-align:right">${this._fmtMoney(this._computeBalance(r))}</td>
+      </tr>`).join("");
+
+      // Dedicated Caixa row in the preview, so the operator can see the
+      // exact (Ativo, valor) pair that will be uploaded — and the change
+      // is visible even when only the unprocessedId was edited.
+      let cashRow = "";
+      if (editing.cash != null) {
+        const uidCell = cashUidChanged
+          ? `<span class="ct-id" style="color:#16a34a;font-weight:600">${this._esc(cashUidEffective)}</span>
+             <span style="font-size:10px;color:#6b7280">(antes: ${this._esc(origCashUid || "Caixa")})</span>`
+          : `<span class="ct-id">${this._esc(cashUidEffective)}</span>`;
+        cashRow = `<tr style="background:#f9fafb;font-weight:500">
+          <td>Caixa</td>
+          <td>${uidCell}</td>
+          <td style="text-align:right;color:#9ca3af">—</td>
+          <td style="text-align:right;color:#9ca3af">—</td>
+          <td style="text-align:right">${this._fmtMoney(editing.cash)}</td>
+        </tr>`;
+      } else if (cashUidChanged) {
+        // No cash value → backend skips the caixa line entirely, so the
+        // unprocessedId change is lost upstream. Surface that loudly here
+        // instead of letting the operator confirm a no-op.
+        cashRow = `<tr style="background:#fef3c7">
+          <td colspan="5" style="font-size:11px;color:#854d0e;padding:8px">
+            ⚠ Alteração do Ativo da Caixa
+            (<span class="ct-id">${this._esc(origCashUid || "Caixa")}</span>
+             → <span class="ct-id">${this._esc(cashUidEffective)}</span>)
+            <strong>não será enviada</strong> — o campo "valor" da Caixa está vazio.
+            Informe o valor atual da Caixa para enviar a alteração junto.
+          </td>
+        </tr>`;
+      }
+
+      const bodyRows = (rows || "") + cashRow;
+      document.getElementById("ct-confirm-summary").innerHTML = headline + `
+        <table class="ct-sec-tbl">
+          <thead><tr><th>Security</th><th>Ativo</th><th style="text-align:right">Qtd</th><th style="text-align:right">PU</th><th style="text-align:right">Saldo</th></tr></thead>
+          <tbody>${bodyRows || `<tr><td colspan="5" style="text-align:center;color:#9ca3af">Sem securities (apenas caixa será enviado).</td></tr>`}</tbody>
+        </table>`;
+      document.getElementById("ct-confirm-modal").classList.remove("hidden");
+    },
+    closeConfirmModal() {
+      document.getElementById("ct-confirm-modal").classList.add("hidden");
+    },
+    async submitApply() {
+      const walletId = this._st._confirmWallet;
+      if (!walletId) return;
+      const editing = this._st.editing.get(walletId);
+      if (!editing) return;
+      const btn = document.getElementById("ct-confirm-btn");
+      if (this._st._submitting) return;
+      this._st._submitting = true;
+      btn.disabled = true;
+      btn.textContent = "Enviando...";
+      try {
+        const payload = {
+          companyId:  editing.companyId,
+          walletId,
+          targetDate: editing.targetDate,
+          securities: editing.rows.map(r => ({
+            unprocessedId: r.unprocessedId,
+            quantity:      r.quantity,
+            pu:            r.pu,
+          })),
+          cash:              editing.cash,
+          cashUnprocessedId: (editing.cashUnprocessedId || "").trim(),
+        };
+        const r = await fetch("/api/carteira/apply", {
+          method:  "POST",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          alert("Erro no envio: " + (data.error || `HTTP ${r.status}`));
+          return;
+        }
+        alert(`Envio concluído: ${data.rows} security(ies)${data.cashSent ? " + caixa" : ""}.`);
+        this.closeConfirmModal();
+        this._st.editing.delete(walletId);
+        // Refresh from the backend so the wallet block reflects what was
+        // just uploaded (the upstream may have re-keyed unprocessedIds).
+        await this.run();
+      } catch (e) {
+        alert("Erro de rede: " + (e.message || e));
+      } finally {
+        this._st._submitting = false;
+        btn.disabled = false;
+        btn.textContent = "Confirmar e enviar";
+      }
+    },
+  };
+
+  document.addEventListener("DOMContentLoaded", () => Carteira.init());
+</script>
+{% endblock %}

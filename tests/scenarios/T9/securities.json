@@ -1,0 +1,20 @@
+[
+  {
+    "_id": "s9",
+    "beehusName": "Fund I",
+    "securityType": "brazilianFund",
+    "redemptionNavDays": 0,
+    "redemptionSettlementDays": 15,
+    "subscriptionNavDays": 0,
+    "subscriptionSettlementDays": 15
+  },
+  {
+    "_id": "s10",
+    "beehusName": "Fund J",
+    "securityType": "brazilianFund",
+    "redemptionNavDays": 0,
+    "redemptionSettlementDays": 0,
+    "subscriptionNavDays": 0,
+    "subscriptionSettlementDays": 0
+  }
+]
