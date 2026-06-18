@@ -537,14 +537,6 @@
     <div class="fb-group-chips">
       <button class="fb-chip" data-kind="delete"  data-deep="delete-prov"       title="Excluir Provisões"           onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>Excluir Prov</button>
       <button id="chip-daytrade" class="fb-chip" data-kind="process" title="Detectar buy/sell intraday e criar securityContributionAdjustment + patch de posição" onclick="Daytrade.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>Day-trade</button>
-      <!-- Strip de Posições — inline port of /excecoes > Position Stripping.
-           Activates Strip.open(), which swaps the dashboard for #strip-view
-           (sibling of #daytrade-view) and reuses the /api/excecoes/* endpoints. -->
-      <button id="chip-strip" class="fb-chip" data-kind="delete" title="Strip de Posições — Position Stripping (inline)" onclick="Strip.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121M9.121 9.121a3 3 0 10-4.242 4.242 3 3 0 004.242-4.242zM14.121 14.121a3 3 0 104.242 4.242 3 3 0 00-4.242-4.242z"/></svg>Stripping</button>
-      <!-- Repetir Posições — abre /repetir-posicoes inline (mesma técnica que
-           Funcoes.openCarteira). Sem URL params: a página inicializa com
-           campos vazios e sem prévia, deixando o operador montar a consulta. -->
-      <button type="button" id="chip-repetir" class="fb-chip" data-kind="flow"   title="Posição Projetada — replicar a posição mais recente no próximo dia útil" onclick="Repetir.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0114-5M20 14a8 8 0 01-14 5"/></svg>Projetada</button>
     </div>
   </div>
 

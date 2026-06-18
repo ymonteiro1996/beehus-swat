@@ -48,7 +48,7 @@ import re
 import uuid
 from datetime import datetime
 
-from flask import Blueprint, jsonify, render_template, request, send_file
+from flask import Blueprint, jsonify, request, send_file
 from openpyxl import Workbook
 
 from db import (db, get_biz_dates, get_company_filter, company_visible, get_company_names,
@@ -592,18 +592,10 @@ def _coerce_balance(v):
         return 0
 
 
-# ── Page route ────────────────────────────────────────────────────────────────
-
-@bp.route("/correcoes")
-def index():
-    companies = sorted(
-        [{"id": cid, "name": name or cid} for cid, name in get_company_names().items()],
-        key=lambda c: c["name"],
-    )
-    cf = get_company_filter()
-    if cf:
-        companies = [c for c in companies if c["id"] in cf]
-    return render_template("correcoes.html", companies=companies)
+# NOTE: The dedicated /correcoes UI page (route `index` + templates/correcoes.html)
+# was removed. This blueprint now serves only the /api/correcoes/* endpoints and
+# the public helper functions that pages/conciliacao.py and the Painel/Conciliação
+# "Aceitar" flows depend on. The correction store on disk is unchanged.
 
 
 # ── Date pills ────────────────────────────────────────────────────────────────
