@@ -204,8 +204,8 @@ def _visible_company_ids():
 
 def _aggregate_unprocessed(securities):
     """Group raw `securities` rows by `unprocessedId`, summing qty/balance and
-    weight-averaging PU. Mirrors `pages/posicoes._group_unprocessed` so the
-    user sees the same "ativos" the rest of the app sees."""
+    weight-averaging PU, so the user sees the same "ativos" the rest of the
+    app sees."""
     grouped = {}
     for s in securities or []:
         uid = (s.get("unprocessedId") or "").strip()
@@ -230,9 +230,9 @@ def _aggregate_unprocessed(securities):
 def _build_unprocessed_to_security_map(company_id):
     """Return `{unprocessedId: securityId}` for a company.
 
-    Mirrors `pages/posicoes._build_mapping` so the strip rules (keyed by
-    `unprocessedId`) can find the matching `securityId` on transactions —
-    which are stored without the `unprocessedId` field."""
+    Lets the strip rules (keyed by `unprocessedId`) find the matching
+    `securityId` on transactions — which are stored without the
+    `unprocessedId` field."""
     doc = db.securityMappings.find_one({"companyId": company_id}, {"mappings": 1})
     if not doc:
         return {}

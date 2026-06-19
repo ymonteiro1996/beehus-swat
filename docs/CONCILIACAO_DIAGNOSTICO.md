@@ -418,7 +418,7 @@ Comparar `rentabPU` (`PU / formerPU − 1`) de cada security contra seu históri
 
 > **Escopo:** apenas securities suspeitos (que falharam na eliminação do Step 2) são verificados. Securities eliminados não passam por esta validação.
 
-> **Nota:** este cálculo pode ser intenso (muitos securities × muitas datas). Deve ser executado em um **processo separado** (batch/pré-cálculo), não dentro do fluxo de diagnóstico. O resultado (thresholds por security) fica armazenado em `rentability_thresholds.json` e é compartilhado entre a conciliação e a página **Validação Rentabilidades** (`/validacao-rentabilidades`).
+> **Nota:** os thresholds por security ficam em `rentability_thresholds.json`, lido por esta etapa. **A página Validação Rentabilidades — única produtora desse arquivo — foi removida**, então atualmente não há gerador de thresholds: sem o arquivo, esta etapa degrada graciosamente (guard `if thresholds:`) e não sinaliza anomalias de rentabilidade por security. Para reativar, é preciso reintroduzir um produtor (batch/pré-cálculo) que recompute os thresholds 3-sigma.
 
 ---
 

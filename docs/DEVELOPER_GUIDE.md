@@ -44,27 +44,39 @@ Controle de cargas/
 │
 ├── pages/                    # One blueprint file per page/feature area
 │   ├── __init__.py
-│   ├── config.py             # Entity selection + app settings
+│   ├── bayesian.py           # Bayesian scoring/optimization for conciliation
+│   ├── beehus_console.py     # Beehus console + transaction-type tooling
+│   ├── caixa.py              # Cash validation
+│   ├── carteira.py           # Wallet position upload pipeline
 │   ├── conciliacao.py        # NAV conciliation + diagnostic engine
-│   ├── painel.py             # Consolidated control panel (dashboard + all controls)
-│   ├── impostos.py           # Tax view for wallet securities
+│   ├── config.py             # Entity selection + app settings
+│   ├── controlpanel.py       # Control panel (home/landing page)
+│   ├── correcoes.py          # Corrections store API (consumed by conciliacao)
+│   ├── excecoes.py           # Exceptions / position stripping
 │   ├── nav.py                # NAV package tracking
-│   ├── precos.py             # Historical price viewer (multi-security, multi-source)
+│   ├── precificacao.py       # Pricing lists / curva PUs
+│   ├── repetir_posicoes.py   # Repeat/project positions (daily routine)
 │   ├── setup.py              # First-run MongoDB connection registration
-│   ├── stubs.py              # Placeholder routes for future features
-│   └── validacao_rentabilidades.py  # Rentability validation
+│   └── stubs.py              # Placeholder routes for future features
 │
-├── templates/                # Jinja2 HTML templates (one per page)
+├── templates/                # Jinja2 HTML templates (rendered per page)
 │   ├── base.html             # Master layout: sidebar + content block
+│   ├── shell.html            # SPA shell (iframe host + nav); rendered by "/"
+│   ├── beehus_console.html
+│   ├── caixa.html
+│   ├── carteira.html
 │   ├── conciliacao.html
 │   ├── config.html
-│   ├── impostos.html
-│   ├── painel.html
-│   ├── precos.html
+│   ├── controlpanel.html
+│   ├── db_unreachable.html   # Friendly page when MongoDB is unreachable
+│   ├── excecoes.html
+│   ├── precificacao.html
+│   ├── repetir_posicoes.html
 │   ├── settings.html
 │   ├── setup.html
-│   ├── validacao_rentabilidades.html
-│   └── stub.html             # Shared "em construção" placeholder
+│   ├── stripping.html
+│   ├── stub.html             # Shared "em construção" placeholder
+│   └── partials/             # Jinja includes (e.g. _repetir_*.html)
 │
 ├── static/
 │   └── logo.png
