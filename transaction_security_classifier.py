@@ -30,6 +30,7 @@ date such that `navDate + offset ≈ liquidationDate`, where
 `offset = settlementDays − navDays` (subscription/redemption fields on
 the security, depending on the sign of the delta).
 """
+import heapq
 import logging
 import re
 from datetime import date as _date, datetime, timedelta
@@ -678,7 +679,15 @@ class TransactionSecurityClassifier:
         if len(md) >= 4 and md[:4].isdigit():
             needles.add(md[:4])  # maturity year, e.g. "2040"
 
-        scored = []
+        # Score EVERY prefilter-passing candidate and retain the top
+        # L3_MAX_CANDIDATES by SCORE via a bounded min-heap. The previous code
+        # broke out of the loop once L3_MAX_CANDIDATES items had been *collected*
+        # (in cache iteration order) and only sorted afterwards — so a
+        # higher-scoring security positioned later in the cache was never scored
+        # and the true best match could be silently dropped. The heap truncates
+        # by score, not position, while keeping memory/sort cost bounded.
+        heap = []          # min-heap of (score, seq, item); seq breaks score ties
+        seq = 0
         for sec in self._lookup.all():
             if sec["_id"] in exclude_ids:
                 continue
@@ -711,10 +720,15 @@ class TransactionSecurityClassifier:
                 score += bonus
                 reasons = list(reasons) + [br]
             if score > 0:
-                scored.append({"doc": sec, "score": score, "reasons": reasons,
-                               "source": "collection"})
-                if len(scored) >= L3_MAX_CANDIDATES:
-                    break
+                item = {"doc": sec, "score": score, "reasons": reasons,
+                        "source": "collection"}
+                if len(heap) < L3_MAX_CANDIDATES:
+                    heapq.heappush(heap, (score, seq, item))
+                    seq += 1
+                elif score > heap[0][0]:
+                    heapq.heapreplace(heap, (score, seq, item))
+                    seq += 1
+        scored = [it for (_s, _q, it) in heap]
         scored.sort(key=lambda x: -x["score"])
         return scored[:10]
 

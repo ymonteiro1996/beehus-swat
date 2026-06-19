@@ -1072,12 +1072,6 @@ try {
         <input type="checkbox" onchange="_regSelectAll(this.checked)" title="Selecionar todos" /> Todos
       </label>
       <span class="border-l pl-3 text-gray-500">Origem: linhas <b>marcadas</b> no Mapeamento</span>
-      <span class="border-l pl-3 flex items-center gap-2">
-        <button onclick="_regBulkSet('securityType')" class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar securityType em lote</button>
-        <button onclick="_regBulkSet('type')"         class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar type em lote</button>
-        <button onclick="_regBulkSet('currency')"     class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar currency em lote</button>
-        <button onclick="_regBulkSet('country')"      class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar country em lote</button>
-      </span>
       <span id="reg-count" class="ml-auto text-gray-400"></span>
     </div>
     <!-- Abas por tipo de ativo (todos os tipos configurados em
@@ -2324,7 +2318,7 @@ try {
     }
 
     // Fetch securityMappingId for this company
-    fetch(`/api/controlpanel/security-mapping-id?companyId=${_currentCompanyId}`)
+    fetch(`/api/controlpanel/security-mapping-id?companyId=${encodeURIComponent(_currentCompanyId)}`)
       .then(r => r.json()).then(({ securityMappingId }) => {
         if (!securityMappingId) {
           alert("securityMappingId não encontrado para esta empresa.");
@@ -2463,6 +2457,17 @@ try {
   const _PT_MONTHS = { jan:1, fev:2, mar:3, abr:4, mai:5, jun:6, jul:7, ago:8, set:9, out:10, nov:11, dez:12,
                        feb:2, apr:4, may:5, aug:8, sep:9, oct:10, dec:12 };
   const _PT_MONTH_ABBR = ["", "Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  // Mês abreviado em INGLÊS (1-based) — ativos estrangeiros (sovereignBonds, options US)
+  // usam EN (Feb/May/Aug/Sep/Oct/Dec), diferente do PT acima. Ver _buildBeehusName.
+  const _EN_MONTH_ABBR = ["", "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  // Código de mês de contrato futuro (B3/CME): F=Jan … Z=Dez.
+  const _FUT_MONTH = { F:1, G:2, H:3, J:4, K:5, M:6, N:7, Q:8, U:9, V:10, X:11, Z:12 };
+  // Root do ticker de futuros → nome do subjacente (derivado dos nomes de 2026).
+  const _FUT_ROOT_NAME = {
+    WDO: "Mini Dólar", DOL: "de Dólar", DOLF: "de Dólar",
+    WIN: "Mini de Ibovespa", IND: "de Ibovespa", IN: "de Ibovespa",
+    DI1: "de DI", DAP: "de Cupom de IPCA",
+  };
 
   // Tabelas canônicas vindas de data/parser_securities_data.json (gerado de
   // securities_cache.json + curadoria). Ver docs/PARSER_SECURITIES.md §8/§9.
@@ -2803,14 +2808,17 @@ try {
       let m = clean.match(/^CDI\s*\+\s*(\d+(?:\.\d+)?)\s*%/i);
       if (m) return { indexer: "CDI", yield: Number(m[1]), indexerPercentual: 100 };
 
-      // "N.NN% CDI" ou "N.NN% CDI + M.MM%"
-      m = clean.match(/^(\d+(?:\.\d+)?)\s*%\s*CDI/i);
+      // "N.NN% CDI", "N.NN% do CDI" (aceita conector do/da entre o % e "CDI",
+      // formato emissor-first do custódio) e a variante "… + M.MM%".
+      m = clean.match(/^(\d+(?:\.\d+)?)\s*%\s*(?:do\s+|da\s+)?CDI/i);
       if (m) {
         const pct = Number(m[1]);
         const sp = clean.match(/CDI\s*\+\s*(\d+(?:\.\d+)?)\s*%/i);
-        if (sp) return { indexer: "CDI", yield: Number(sp[1]), indexerPercentual: pct };
-        return { indexer: "CDI", yield: 0, indexerPercentual: pct };
+        return { indexer: "CDI", yield: sp ? Number(sp[1]) : 0, indexerPercentual: pct };
       }
+
+      // "CDI" puro (sem percentual nem spread) = 100% CDI.
+      return { indexer: "CDI", yield: 0, indexerPercentual: 100 };
     }
 
     // Pré-fixado: "+N.NN%" ou "N.NN%"
@@ -2882,6 +2890,63 @@ try {
     let beehusName;
     if (assetType === "LF") {
       // LF: nome sem taxa, apenas label Pós/Pré-fixado (MD §4.2).
+      const label = (rate.indexer === "PRE") ? "Pré-fixado" : "Pós-fixado";
+      beehusName = `LF ${emissorShort} ${label} ${datePt}`.replace(/\s+/g, " ").trim();
+    } else {
+      const rateFmt = _formatRateForBeehusName(rate.indexer, rate.yield, rate.indexerPercentual);
+      beehusName = `${assetType} ${emissorShort} ${rateFmt} ${datePt}`.replace(/\s+/g, " ").trim();
+    }
+
+    return {
+      type: assetType.toLowerCase(),
+      emissorRaw,
+      emissorShort,
+      ticker,
+      maturityIso,
+      indexer: rate.indexer,
+      yield: rate.yield,
+      indexerPercentual: rate.indexerPercentual,
+      beehusName,
+    };
+  }
+
+  // ── Parser RF "emissor-first" de 4 partes (formato atual do custódio) ─────
+  // "EMISSOR - TIPO-TICKER - TAXA - DATA_ISO"
+  //   ex.: "BANCO BTG PACTUAL S A - CDB-CDB6268909Q - CDI - 2028-06-12"
+  // Complementa _parseUnprocessedId (que cobre o formato type-first >=5 partes).
+  // Reusa os mesmos helpers, então o beehusName sai exatamente na convenção do
+  // securities_cache.json (ex.: "CDB BTG Pactual 101.25%CDI 14/Ago/2026").
+  function _parseRfEmissorFirst(raw) {
+    const s = String(raw || "").trim().replace(/^"|"$/g, "");
+    if (!s) return null;
+    const parts = s.split(" - ").map(p => p.trim());
+    if (parts.length !== 4) return null;
+
+    const emissorRaw = parts[0];
+    const typeTicker = parts[1];
+    const rateInfo   = parts[2];
+    const maturity   = parts[3];
+
+    // parts[1] = "TIPO-TICKER" (o tipo vem antes do primeiro "-").
+    const dash = typeTicker.indexOf("-");
+    if (dash === -1) return null;
+    const assetType = typeTicker.slice(0, dash).trim().toUpperCase();
+    const ticker    = typeTicker.slice(dash + 1).trim();
+    if (!["CDB", "LCA", "LCI", "LCD", "LF", "CCB", "LC"].includes(assetType)) return null;
+
+    const emissorShort = _getShortEmissor(emissorRaw);
+
+    const rate = _parseRate(rateInfo);
+    if (!rate || rate.yield === null) return null;
+
+    // A data vem em ISO ("yyyy-mm-dd"); normaliza p/ dd/mm/yyyy e reusa helpers.
+    const dd = _isoToDdmmyyyy(maturity);
+    const maturityIso = _ddmmyyyyToIso(dd);
+    if (!maturityIso) return null;
+    const datePt = _dateToPtAbbr(dd);
+
+    let beehusName;
+    if (assetType === "LF") {
       const label = (rate.indexer === "PRE") ? "Pré-fixado" : "Pós-fixado";
       beehusName = `LF ${emissorShort} ${label} ${datePt}`.replace(/\s+/g, " ").trim();
     } else {
@@ -3374,6 +3439,65 @@ try {
     return "";
   }
 
+  // Formato do custodiante p/ OTC/estruturados: "TIPO CÓDIGO - DATA_ISO - …".
+  // Ex.: "COE XP5324FCHJ7 - 2033-10-27 - 0.00052352" →
+  //   type = "COE", ticker = "XP5324FCHJ7", maturityIso = "2033-10-27".
+  // Só casa quando o primeiro segmento tem EXATAMENTE duas palavras
+  // ("TIPO CÓDIGO"): tipo = sigla curta alfabética; código = alfanumérico com
+  // ao menos um dígito. Isso evita confundir nomes ("CLN Electrolux", "COE 1X1
+  // Maptrend"), que caem no fallback antigo. Retorna null quando não encaixa.
+  function _parseOtcLike(raw) {
+    if (!raw) return null;
+    const head = String(raw).split(/\s*-\s*/)[0].trim();
+    const toks = head.split(/\s+/);
+    if (toks.length !== 2) return null;
+    const type = toks[0].toUpperCase();
+    if (!/^[A-Z]{2,5}$/.test(type)) return null;
+    const ticker = toks[1];
+    if (!/^[A-Za-z0-9]{4,}$/.test(ticker) || !/\d/.test(ticker)) return null;
+    return { type, ticker, maturityIso: _extractMaturity(raw), beehusName: `${type} ${ticker}` };
+  }
+
+  // ISO "YYYY-MM-DD" → { y, m, d } numérico (ou null).
+  function _isoToParts(iso) {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? { y: +m[1], m: +m[2], d: +m[3] } : null;
+  }
+
+  // Gera o beehusName canônico (convenção dos ativos cadastrados em 2026) para os
+  // securityTypes em que o nome É DERIVÁVEL dos campos estruturados. Retorna ""
+  // quando não há confiança suficiente — deixando o campo para preenchimento
+  // manual (um nome divergente da convenção é pior que um nome em branco).
+  //   • futures        → "Futuro <subjacente> - <MêsPT>/<ano>" (via root do ticker)
+  //   • sovereignBonds → "US T Bill <DD/MêsEN/AAAA>" (US Treasury)
+  // Tipos cujo nome é comercial/livre (brazilianFund, fund, stockEtf, realAssets,
+  // privateMarket) NÃO são gerados aqui — não há fórmula nos dados de 2026.
+  function _buildBeehusName(securityType, values, asset, uid) {
+    const tk = String((values && values.ticker) || (asset && asset.ticker) || "").toUpperCase();
+
+    if (securityType === "futures") {
+      // Aceita o ticker com ou sem prefixo "FUT" (o extrator do backend devolve
+      // sem prefixo, ex.: "WDOG26"; o ticker canônico tem "FUT", ex.: "FUTWDOG26").
+      const m = tk.match(/^(?:FUT)?(WDO|WIN|DOLF|DOL|IND|DI1|DAP|IN)([FGHJKMNQUVXZ])(\d{2})$/);
+      if (!m) return "";
+      const name = _FUT_ROOT_NAME[m[1]];
+      if (!name) return "";
+      return `Futuro ${name} - ${_PT_MONTH_ABBR[_FUT_MONTH[m[2]]]}/${2000 + Number(m[3])}`;
+    }
+
+    if (securityType === "sovereignBonds") {
+      const d = _isoToParts((values && values.maturityDate) || _extractMaturity(uid));
+      if (!d) return "";
+      const hay = `${uid || ""} ${tk} ${(asset && asset.isin) || ""}`.toUpperCase();
+      // Convenção 2026 dominante: US Treasury Bill. Só nomeia quando há sinal claro
+      // de que é um título do Tesouro americano (evita rotular outro soberano).
+      if (!/USTBILL|USGT|TREASURY|US912797|912797/.test(hay)) return "";
+      return `US T Bill ${String(d.d).padStart(2, "0")}/${_EN_MONTH_ABBR[d.m]}/${d.y}`;
+    }
+
+    return "";
+  }
+
   // Build a registration working-row from a mapping row. Shape:
   //   { uid, include,
   //     asset:  {unprocessedId, securityType, isin, ticker, type, taxId},  // top (info) line, read-only
@@ -3389,7 +3513,7 @@ try {
     const detected = r.type || "";  // classifier securityType (bond/brazilianFund/…)
 
     // Cadeia de parsers MD-conformantes: CDB/LCA/LCI (§15) → CRI/CRA/DEB (§16).
-    const p = _parseUnprocessedId(uid) || _parseCriCraDeb(uid);
+    const p = _parseUnprocessedId(uid) || _parseRfEmissorFirst(uid) || _parseCriCraDeb(uid);
 
     const asset = {
       unprocessedId: uid,
@@ -3425,11 +3549,13 @@ try {
       // Fallback: heurísticas antigas para linhas que não casam com nenhum spec.
       const maturity = _extractMaturity(uid);
       const ix       = _extractIndexerPct(uid);
-      beehusName = cand.beehusName || "";
+      // Estruturados/OTC no formato "TIPO CÓDIGO - DATA - …" (ex.: COE) — usado
+      // só como último recurso (candidato e heurísticas antigas têm prioridade).
+      const ot       = _parseOtcLike(uid);
       values = {
-        type: _inferType(detected, uid),
-        ticker: cand.mainId || "",
-        maturityDate: maturity,
+        type: _inferType(detected, uid) || (ot && ot.type) || "",
+        ticker: cand.mainId || (ot && ot.ticker) || "",
+        maturityDate: maturity || (ot && ot.maturityIso) || "",
         indexer: ix.indexer,
         indexerPercentual: ix.pct,
         yield: null,
@@ -3440,7 +3566,22 @@ try {
         redemptionNAVDays: 0,
         redemptionSettlementDays: 0,
       };
+      // Nome canônico derivável (futures, sovereignBonds) quando não há candidato
+      // nem nome de parser OTC. Retorna "" p/ tipos sem fórmula (preenchimento manual).
+      beehusName = cand.beehusName || (ot && ot.beehusName)
+                || _buildBeehusName(securityType, values, asset, uid) || "";
     }
+
+    // Auto-preenche, a partir do dado extraído pelo custodiante, campos que
+    // alguns tipos expõem mas que o fluxo padrão não populava:
+    //   • taxId (CNPJ) → brazilianFund;
+    //   • ticker        → stockEtf (quando não veio do candidato/mainId);
+    //   • isIn (ISIN)   → fund / sovereignBonds.
+    // Inócuo para tipos cujo config não tem o campo (o valor nunca é renderizado
+    // nem enviado).
+    if (asset.taxId  && values.taxId === undefined) values.taxId  = asset.taxId;
+    if (asset.ticker && !values.ticker)             values.ticker = asset.ticker;
+    if (asset.isin   && values.isIn  === undefined) values.isIn   = asset.isin;
 
     const row = { uid, include: true, asset, securityType, beehusName, values };
     _regEnsureDefaults(row);
@@ -3466,7 +3607,7 @@ try {
 
   // rebuild=true reconstrói _regRows a partir das linhas marcadas no Mapeamento;
   // rebuild=false apenas re-renderiza os cards preservando os _regRows atuais
-  // (usado após trocar o tipo ou aplicar valor em lote, sem perder edições).
+  // (usado após trocar o tipo de um card, sem perder edições).
   // Tipos para as abas: todos os tipos configurados (ordem do JSON) MAIS
   // qualquer tipo presente nos ativos que não esteja configurado (anexado ao
   // fim) — assim o tipo de um card sempre tem uma aba e nunca some da tela.
@@ -3604,18 +3745,20 @@ try {
 
     return `
     <div class="border border-gray-200 rounded-lg mb-2 bg-white">
-      <!-- Linha 1: informações do ativo (leitura) + seletor de tipo -->
+      <!-- Linha 1: seletor de tipo + nome do ativo (inteiro) + infos (leitura).
+           O dropdown vem ANTES do nome e o nome usa flex-1/min-w-0 + break-words
+           para aparecer por completo (quebra de linha em vez de truncar). -->
       <div class="flex items-center gap-3 px-3 py-1.5 border-b border-gray-100 bg-gray-50">
         <input type="checkbox" class="reg-include" ${r.include ? "checked" : ""}
           onchange="_regRows[${i}].include=this.checked;_regUpdateCount()" />
-        <span class="font-mono text-[10px] text-gray-500 truncate max-w-[280px] cursor-help"
-          onmouseenter="_regShowTip(event, ${i})" onmousemove="_regMoveTip(event)" onmouseleave="_regHideTip()"
-        >${_escHtml(a.unprocessedId)}</span>
-        <label class="flex items-center gap-1 whitespace-nowrap">
+        <label class="flex items-center gap-1 whitespace-nowrap shrink-0">
           <span class="text-[9px] uppercase tracking-wide text-blue-500 font-semibold">tipo</span>
           <select class="${base} font-semibold bg-white" onchange="_regSetType(${i}, this.value)">${typeOpts}</select>
         </label>
-        <span class="flex items-center gap-3 text-[10px] ml-auto flex-wrap justify-end">
+        <span class="font-mono text-[10px] text-gray-500 flex-1 min-w-0 break-words cursor-help"
+          onmouseenter="_regShowTip(event, ${i})" onmousemove="_regMoveTip(event)" onmouseleave="_regHideTip()"
+        >${_escHtml(a.unprocessedId)}</span>
+        <span class="flex items-center gap-3 text-[10px] shrink-0 flex-wrap justify-end">
           ${info("type", a.type)}
           ${info("ISIN", a.isin)}
           ${info("ticker", a.ticker)}
@@ -3660,22 +3803,6 @@ try {
   function _regUpdateCount() {
     const n = _regRows.filter(r => r.include).length;
     document.getElementById("reg-count").textContent = `${n} de ${_regRows.length} selecionado${n !== 1 ? "s" : ""}`;
-  }
-
-  // Aplica um valor a todas as linhas marcadas. `securityType` troca o tipo de
-  // ativo (e materializa os defaults do novo tipo); os demais campos escrevem em
-  // `values[field]` (afetam só as linhas cujo tipo expõe aquele campo).
-  function _regBulkSet(field) {
-    const v = prompt(`Aplicar valor de "${field}" a todas as linhas marcadas:`);
-    if (v === null) return;
-    _regRows.forEach(r => {
-      if (!r.include) return;
-      if (field === "securityType") { r.securityType = v; _regEnsureDefaults(r); }
-      else { r.values[field] = v; }
-    });
-    // Mudança de tipo em lote move os cards para a aba do novo tipo.
-    if (field === "securityType" && v) _regActiveTab = v;
-    _renderRegistrationTable(false);
   }
 
   function _generateRegistrationJSON() {
@@ -4089,7 +4216,7 @@ try {
     document.getElementById("modal-tbody").innerHTML      = "";
     document.getElementById("modal").style.display        = "flex";
 
-    fetch(`/api/controlpanel/detail?companyId=${companyId}&date=${_currentDate}&type=${type}`)
+    fetch(`/api/controlpanel/detail?companyId=${encodeURIComponent(companyId)}&date=${encodeURIComponent(_currentDate)}&type=${encodeURIComponent(type)}`)
       .then(r => r.json()).then(({ issues }) => {
         _modalIssues = issues;
         if (!issues.length) {
@@ -4355,14 +4482,18 @@ try {
         const cls = e.status >= 200 && e.status < 300 ? 'badge-ok' : 'badge-err';
         const ts  = e.ts.toLocaleTimeString('pt-BR');
         const body = typeof e.body === 'string' ? e.body : JSON.stringify(e.body, null, 2);
+        // Escape every interpolated value: method/path/body arrive via
+        // cross-frame postMessage (see the 'message' handler) and must be
+        // treated as untrusted — otherwise markup in them executes as HTML
+        // (DOM XSS) the moment this modal opens.
         return `
           <div class="log-entry">
             <div class="flex items-center justify-between text-xs">
-              <span><span class="px-2 py-0.5 rounded ${cls}">${e.status}</span>
-                    <strong class="ml-2">${e.method}</strong> ${e.path}</span>
-              <span class="text-gray-400">${ts} · ${e.durationMs}ms</span>
+              <span><span class="px-2 py-0.5 rounded ${cls}">${_escHtml(e.status)}</span>
+                    <strong class="ml-2">${_escHtml(e.method)}</strong> ${_escHtml(e.path)}</span>
+              <span class="text-gray-400">${ts} · ${_escHtml(e.durationMs)}ms</span>
             </div>
-            <pre class="mt-1 text-gray-600">${body}</pre>
+            <pre class="mt-1 text-gray-600">${_escHtml(body)}</pre>
           </div>`;
       }).join('');
     },
@@ -4461,10 +4592,12 @@ try {
   Token.refresh();
 
   // Receive bridged API log entries from Beehus iframes (templates/beehus_console.html
-  // postMessages every ApiLog.add through to its parent). Origin check is
-  // skipped because Beehus runs at the same origin via Flask, but we still
-  // shape-check the payload to ignore stray messages from other sources.
+  // postMessages every ApiLog.add through to its parent). Beehus runs at the
+  // same origin via Flask, so we reject any message whose origin isn't ours —
+  // a foreign frame must not be able to inject log/command payloads (the body
+  // is rendered into the Log modal). We still shape-check the payload too.
   window.addEventListener('message', (e) => {
+    if (e.origin && e.origin !== window.location.origin) return;
     const m = e.data;
     if (!m || typeof m !== 'object') return;
     // Bridged API log entries from Beehus iframes (beehus_console.html).

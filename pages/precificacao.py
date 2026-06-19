@@ -9,7 +9,7 @@ from bson.errors import InvalidId
 from flask import Blueprint, Response, jsonify, render_template, request
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from db import db, get_company_filter, get_wallet_names
+from db import db, get_company_filter, get_wallet_names, company_visible
 
 bp = Blueprint("precificacao", __name__)
 
@@ -224,10 +224,30 @@ def get_companies():
     return jsonify(companies)
 
 
+def _wallet_visible(wallet_id):
+    """True if the wallet's company is within the operator's visibility scope.
+    Mirrors the authorization conciliacao.py enforces on its company-scoped
+    endpoints. No company_filter set = see everything; an unresolvable wallet
+    under an active filter is denied (we can't prove it's in scope)."""
+    cf = get_company_filter()
+    if not cf:
+        return True
+    try:
+        w = db.wallets.find_one({"_id": ObjectId(wallet_id)}, {"companyId": 1})
+    except (InvalidId, TypeError):
+        return False
+    return bool(w) and company_visible(str(w.get("companyId") or ""))
+
+
 @bp.route("/api/precificacao/wallets")
 def get_wallets():
     company_id = request.args.get("companyId", "").strip()
     if not company_id:
+        return jsonify([])
+    # Visibility scope: don't list wallets of a company outside the operator's
+    # filter (mirrors get_companies, which intersects against get_company_filter).
+    cf = get_company_filter()
+    if cf and company_id not in cf:
         return jsonify([])
     wallets = list(db.wallets.find(
         {"companyId": company_id},
@@ -245,6 +265,8 @@ def get_latest_position_date():
     wallet_id = request.args.get("walletId", "").strip()
     if not wallet_id:
         return jsonify({"date": None})
+    if not _wallet_visible(wallet_id):
+        return jsonify({"error": "carteira fora do escopo de visibilidade"}), 403
     _, pos_date = _get_most_recent_position(wallet_id)
     return jsonify({"date": pos_date})
 
@@ -257,6 +279,8 @@ def get_wallet_securities():
     pos_date_arg  = request.args.get("positionDate", "").strip()
     if not wallet_id:
         return jsonify({"error": "walletId obrigatório"}), 400
+    if not _wallet_visible(wallet_id):
+        return jsonify({"error": "carteira fora do escopo de visibilidade"}), 403
 
     pos_doc, position_date = _get_most_recent_position(wallet_id, pos_date_arg or None)
     if not pos_doc:
@@ -333,6 +357,8 @@ def get_security(sec_id):
     # Position data from processedPosition
     wallet_id    = request.args.get("walletId", "").strip()
     pos_date_arg = request.args.get("positionDate", "").strip()
+    if wallet_id and not _wallet_visible(wallet_id):
+        return jsonify({"error": "carteira fora do escopo de visibilidade"}), 403
     pos_pricing_type = ""
     pos_quantity     = None
     pos_pu           = None
@@ -411,6 +437,8 @@ def get_security_transactions():
     position_date = request.args.get("positionDate", "").strip()
     if not sec_id or not wallet_id:
         return jsonify({"transactions": []})
+    if not _wallet_visible(wallet_id):
+        return jsonify({"error": "carteira fora do escopo de visibilidade"}), 403
 
     # Match securityId as both ObjectId and string
     sid_q = [{"securityId": sec_id}]

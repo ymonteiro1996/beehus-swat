@@ -98,7 +98,10 @@ def require_registration():
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-@app.route("/api/update")
+# POST (not GET): this runs `git pull`, a state change, so it must flow through
+# the Sec-Fetch-Site CSRF gate in auth.py (which only checks non-GET methods).
+# A GET here would also be triggerable by prefetchers/link scanners.
+@app.route("/api/update", methods=["POST"])
 def api_update():
     try:
         result = subprocess.run(
@@ -107,12 +110,16 @@ def api_update():
         )
         already_latest = "Already up to date" in result.stdout or "Já está atualizado" in result.stdout
         if result.returncode != 0:
-            return jsonify({"status": "error", "message": result.stderr or "Falha no git pull"})
+            # Log details server-side; don't return raw git stderr to the client
+            # (it can leak the absolute repo path, remote URL, credential hints).
+            app.logger.error("git pull failed (rc=%s): %s", result.returncode, result.stderr)
+            return jsonify({"status": "error", "message": "Falha ao atualizar — veja os logs do servidor."})
         if already_latest:
             return jsonify({"status": "up_to_date", "message": "Já está na versão mais recente."})
         return jsonify({"status": "updated", "message": "Código atualizado!"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+    except Exception:
+        app.logger.exception("git pull error")
+        return jsonify({"status": "error", "message": "Falha ao atualizar — veja os logs do servidor."})
 
 
 if __name__ == "__main__":

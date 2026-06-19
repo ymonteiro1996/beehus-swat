@@ -1127,9 +1127,16 @@ def _build_plan(blob, target_date, fx_overrides=None):
     # the source itself — a rule's `removeFromWalletId` can be the source
     # wallet, in which case we also need to display its post-strip view).
     candidates = list(dict.fromkeys(out_ws + [src_w]))
+    # Baselines MUST be read from the same date as the moved source values
+    # (`src_date`), not the strict `target_date`. On a fallback day
+    # (src_date != target_date) the target_date has no unprocessedSecurityPosition
+    # doc, so reading baselines at target_date leaves positions[src_w] empty and a
+    # normal "remove from source" rule would subtract the moved quantities from a
+    # zero baseline — uploading negative/corrupted source rows. Aligning every
+    # baseline to src_date keeps it consistent with the data the plan is built from.
     positions = {}
     for w in candidates:
-        existing = _fetch_source_position(w, target_date) or []
+        existing = _fetch_source_position(w, src_date) or []
         positions[w] = {s["unprocessedId"]: dict(s) for s in existing}
 
     # `ops[walletId][uid]` tracks how a uid in a given wallet was touched by
@@ -1906,6 +1913,13 @@ def download_excel(exception_id):
             as_attachment=True,
             download_name=f"fatiar_{exception_id}_{target_date}.xlsx",
         )
+
+    # managed_portfolio is a read-only/analysis kind with no sourceWalletId/rules,
+    # so the position_strip _build_plan below would KeyError on blob["sourceWalletId"]
+    # → unhandled 500. preview/apply dispatch it to dedicated handlers; excel has no
+    # equivalent, so return a clean error instead.
+    if kind == _KIND_MANAGED_PORTFOLIO:
+        return jsonify({"error": "excel não disponível para carteira gerencial"}), 422
 
     plan = _build_plan(blob, target_date)
     if "error" in plan:

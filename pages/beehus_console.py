@@ -715,6 +715,11 @@ def transactions_create():
     missing = [k for k in required if data.get(k) in (None, "")]
     if missing:
         return jsonify({"error": f"missing fields: {', '.join(missing)}"}), 400
+    # Tenant gate — mirror provisions_create / execution_prices_create so an
+    # operator restricted to a subset of companies cannot create a transaction
+    # against a company outside their visibility scope.
+    if not company_visible(data["companyId"]):
+        return jsonify({"error": "company is not visible to this user"}), 403
     try:
         result = create_transaction(
             company_id=data["companyId"],
@@ -734,8 +739,35 @@ def transactions_create():
     return jsonify(result), 201
 
 
+def _txn_company_visible(txn_id):
+    """True if the transaction's owning company is visible to the operator.
+
+    Transactions don't carry companyId directly, so resolve it via the wallet —
+    same approach as the identify route's batch authorization. When the txn (or
+    its wallet/company) can't be resolved from the local cache we return True and
+    defer to the upstream Beehus boundary, rather than block a legitimate edit to
+    a row that simply isn't cached locally yet."""
+    try:
+        oid = ObjectId(txn_id)
+    except (InvalidId, TypeError):
+        return True
+    doc = db.transactions.find_one({"_id": oid}, {"walletId": 1})
+    wid = doc and doc.get("walletId")
+    if not wid:
+        return True
+    w = resolve_wallet(str(wid), {"companyId": 1})
+    if not w:
+        return True
+    return company_visible(str(w.get("companyId") or ""))
+
+
 @bp.route("/api/beehus/transactions/<txn_id>", methods=["DELETE"])
 def transactions_delete(txn_id):
+    # Tenant gate — see _txn_company_visible. Mirrors the identify route so an
+    # operator can't delete a transaction belonging to a company outside their
+    # visibility scope.
+    if not _txn_company_visible(txn_id):
+        return jsonify({"error": "transaction is not visible to this user"}), 403
     try:
         result = delete_transaction(txn_id)
     except BeehusAPIError as e:
@@ -825,6 +857,12 @@ def transactions_patch(txn_id):
     patch = {k: v for k, v in data.items() if k in _TXN_PATCHABLE}
     if not patch:
         return jsonify({"error": "no patchable fields in body"}), 400
+
+    # Tenant gate (also guards the local Mongo mirror below) — see
+    # _txn_company_visible. Without it an operator could PATCH a transaction
+    # outside their company scope, including the cache write.
+    if not _txn_company_visible(txn_id):
+        return jsonify({"error": "transaction is not visible to this user"}), 403
 
     try:
         result = update_transaction(txn_id, patch)
@@ -2309,6 +2347,15 @@ def _compute_execution_extras(txn_docs_by_id, suggestions_by_id):
     return out
 
 
+# Serialises the security classifier's per-batch request cache. That cache
+# lives on a process-wide singleton (_get_security_classifier), so two identify
+# batches running on concurrent WSGI threads would swap/share each other's
+# _pool mid-loop and corrupt the candidate sets. Holding this lock around the
+# reset + suggestion loop keeps each batch's pool isolated. (Single-user,
+# loopback deployment means contention is effectively nil in practice.)
+_identify_sec_lock = threading.Lock()
+
+
 @bp.route("/api/beehus/identify-transactions/identify", methods=["POST"])
 def identify_txn_identify():
     """Suggest a `beehusTransactionType` and (when needed) a `securityId`
@@ -2383,32 +2430,35 @@ def identify_txn_identify():
 
     # Reset per-batch cache on the security classifier so processedPosition
     # data is fresh for this request (within the request, results are cached
-    # per wallet to avoid re-querying for every transaction).
+    # per wallet to avoid re-querying for every transaction). The reset + the
+    # predict loop run under _identify_sec_lock so a concurrent identify batch
+    # can't swap the shared singleton's _pool out from under this one.
     sec_clf = _get_security_classifier()
-    if sec_clf is not None:
-        sec_clf.reset_request_cache()
+    with _identify_sec_lock:
+        if sec_clf is not None:
+            sec_clf.reset_request_cache()
 
-    suggestions = []
-    for tid in txn_ids:
-        s = _suggest_for_transaction(txn_by_id.get(tid), types_need_security)
-        suggestions.append({
-            "transactionId":         tid,
-            "beehusTransactionType": s["beehusTransactionType"],
-            "securityId":            s["securityId"],
-            "needsSecurity":         s["needsSecurity"],
-            "confidence":            s["confidence"],
-            "source":                s["source"],
-            "needsReview":           s["needsReview"],
-            # Security-id suggestion fields (only populated when needsSecurity):
-            "securityName":          s["securityName"],
-            "securityMainId":        s["securityMainId"],
-            "securityConfidence":    s["securityConfidence"],
-            "securitySource":        s["securitySource"],
-            "securityAmbiguous":     s["securityAmbiguous"],
-            "securityAlternatives":  s["securityAlternatives"],
-            "securityScore":         s["securityScore"],
-            "securityTiebreak":      s["securityTiebreak"],
-        })
+        suggestions = []
+        for tid in txn_ids:
+            s = _suggest_for_transaction(txn_by_id.get(tid), types_need_security)
+            suggestions.append({
+                "transactionId":         tid,
+                "beehusTransactionType": s["beehusTransactionType"],
+                "securityId":            s["securityId"],
+                "needsSecurity":         s["needsSecurity"],
+                "confidence":            s["confidence"],
+                "source":                s["source"],
+                "needsReview":           s["needsReview"],
+                # Security-id suggestion fields (only populated when needsSecurity):
+                "securityName":          s["securityName"],
+                "securityMainId":        s["securityMainId"],
+                "securityConfidence":    s["securityConfidence"],
+                "securitySource":        s["securitySource"],
+                "securityAmbiguous":     s["securityAmbiguous"],
+                "securityAlternatives":  s["securityAlternatives"],
+                "securityScore":         s["securityScore"],
+                "securityTiebreak":      s["securityTiebreak"],
+            })
 
     # Enrich with executionPrice / IRRF (and supporting PU / amountDifference /
     # gate fields) so the grid can render the two derived columns and the

@@ -215,7 +215,16 @@ def _extract_step3_flags(diag, gap_cash, confidences, cfg):
                 estimated_qty = dq_issues[0].get("estimatedCorrectQty")
                 flags.append({
                     "flag":         "DATA_QUALITY_ERROR",
-                    "impact":       signed_impact,  # same impact — explains same gap
+                    # 0 scoring impact: this flag EXPLAINS the same discrepancy the
+                    # original flag above already accounts for — it is NOT an
+                    # additional, independent gap. score_combinations sums
+                    # f["impact"] over the full power set with no exclusivity
+                    # check (and the MC path uses f["impact"] for tier-1 flags),
+                    # so a non-zero value here let any combo containing BOTH
+                    # flags double-count one discrepancy (2× signed_impact).
+                    # absImpact stays non-zero so the flag remains in `actionable`
+                    # and visible/selectable as a tier-1 data-quality annotation.
+                    "impact":       0,
                     "absImpact":    abs(signed_impact),
                     "securityId":   sid,
                     "securityName": sname,

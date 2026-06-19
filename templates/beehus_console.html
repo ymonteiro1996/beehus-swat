@@ -3962,7 +3962,7 @@ const View = {
       try {
         window.parent.postMessage(
           {type: 'viewChange', view: name === 'menu' ? '' : name},
-          '*',
+          window.location.origin,
         );
       } catch (e) { /* iframe-less or cross-origin — ignore */ }
     }
@@ -4057,7 +4057,7 @@ const ApiLog = {
           method, path, status,
           body: (typeof body === 'string') ? body : JSON.parse(JSON.stringify(body ?? null)),
           durationMs,
-        }, '*');
+        }, window.location.origin);
       } catch (_e) { /* swallow */ }
     }
   },
@@ -5423,6 +5423,13 @@ const IdentifyTxn = {
   _truncated: false,
   _skippedRows: [],
 
+  // Ids the operator has explicitly UNCHECKED. Rows default to checked, so the
+  // deselection set (not the selection) is the persisted state. It survives a
+  // re-render (filter/sort/edit) so manual deselections aren't silently wiped,
+  // and is cleared on every fresh search(). updateSelected() keeps it in sync
+  // with the DOM; _render() re-applies it.
+  _deselected: new Set(),
+
   // Client-side description filter (case-insensitive substring). Applied
   // alongside the confidence filter inside `_visibleTxns()`. Empty string
   // means "no filter".
@@ -5729,6 +5736,8 @@ const IdentifyTxn = {
     } else {
       this._suggestions = {};
       this._execEdits = {};
+      // Fresh search = fresh selection: every row starts checked again.
+      this._deselected = new Set();
     }
     this._truncated = !!r.body?.truncated;
     if (!preserveSug) {
@@ -6956,7 +6965,7 @@ const IdentifyTxn = {
       const rowClass = (sug.needsReview ? ' class="conf-review-row"' : '');
       return `
       <tr data-id="${t.id}" style="cursor:pointer"${rowClass} onclick="IdentifyTxn.onRowClick(event)">
-        <td><input type="checkbox" class="i-row" data-id="${t.id}" checked
+        <td><input type="checkbox" class="i-row" data-id="${t.id}" ${this._deselected.has(t.id) ? '' : 'checked'}
                    onchange="IdentifyTxn.updateSelected()"></td>
         <td>${this._escape(t.liquidationDate)}</td>
         <td>${this._escape(t.walletName)}</td>
@@ -6979,7 +6988,11 @@ const IdentifyTxn = {
         <td>${this._escape(t.description)}</td>
       </tr>`;
     }).join('');
-    document.getElementById('i-select-all').checked = true;
+    // Master checkbox reflects whether ALL visible rows are checked (not an
+    // unconditional true that would visually claim a full selection the
+    // operator may have partially cleared).
+    document.getElementById('i-select-all').checked =
+      visible.length > 0 && visible.every(t => !this._deselected.has(t.id));
     this.updateSelected();
   },
 
@@ -7222,6 +7235,13 @@ const IdentifyTxn = {
   },
 
   updateSelected() {
+    // Reconcile the persistent deselection set from the current DOM (visible
+    // rows only — filtered-out rows keep their prior state) so a subsequent
+    // re-render preserves exactly what the operator has (de)selected.
+    document.querySelectorAll('#i-rows .i-row').forEach(cb => {
+      if (cb.checked) this._deselected.delete(cb.dataset.id);
+      else            this._deselected.add(cb.dataset.id);
+    });
     const n = document.querySelectorAll('.i-row:checked').length;
     document.getElementById('i-identify-count').textContent = n;
     document.getElementById('i-apply-count').textContent    = n;

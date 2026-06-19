@@ -33,7 +33,12 @@ _NUM_DATES = 10
 # Guards lazy init of _clf and _matcher under multi-threaded WSGI: without
 # this, concurrent first-loads each retrain a fresh sklearn model and
 # refresh_cache/rebuild reassignments race with in-flight match requests.
-_init_lock = threading.Lock()
+# MUST be reentrant (RLock): _get_matcher() holds this lock while building the
+# SecurityMatcher, which calls _get_classifier() — and that re-acquires the
+# same lock. A plain Lock here self-deadlocks the FIRST /api/controlpanel/match
+# whenever _clf isn't already cached (e.g. data/unprocessed_security_types.json
+# absent, so _get_classifier never caches), hanging the request forever.
+_init_lock = threading.RLock()
 # Serialises read-modify-write on classifier_overrides.json. Dropdown JS
 # fires fire-and-forget POSTs per row change, so several land on different
 # WSGI threads and clobber each other's saved overrides.

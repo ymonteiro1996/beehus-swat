@@ -28,16 +28,145 @@
         { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "default": 0, "width": 64, "title": "redemptionSettlementDays" }
       ]
     },
-    "brazilianFund":           { "label": "Fundo Brasileiro",          "fields": [] },
-    "fund":                    { "label": "Fundo",                     "fields": [] },
-    "stockEtf":                { "label": "Ação / ETF",                "fields": [] },
-    "options":                 { "label": "Opções",                    "fields": [] },
-    "futures":                 { "label": "Futuros",                   "fields": [] },
-    "otc":                     { "label": "OTC",                       "fields": [] },
-    "privateMarket":           { "label": "Mercado Privado",           "fields": [] },
+    "brazilianFund": {
+      "label": "Fundo Brasileiro",
+      "fields": [
+        { "key": "taxId",                      "label": "taxId",      "input": "text",   "include": "ifPresent", "width": 150, "title": "taxId — CNPJ do fundo (preenchido automaticamente quando o custodiante informa)" },
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do fundo na Beehus; preencher só ao vincular/atualizar um fundo existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado ao fundo" }
+      ]
+    },
+    "fund": {
+      "label": "Fundo",
+      "fields": [
+        { "key": "type",                       "label": "type",       "input": "text",   "include": "ifPresent", "width": 90 },
+        { "key": "isIn",                       "label": "isIn",       "input": "text",   "include": "ifPresent", "width": 140, "title": "isIn — ISIN" },
+        { "key": "manager",                    "label": "manager",    "input": "text",   "include": "ifPresent", "width": 150, "title": "manager — gestor" },
+        { "key": "klass",                      "label": "klass",      "input": "text",   "include": "ifPresent", "width": 110, "title": "klass — classe do fundo" },
+        { "key": "country",                    "label": "country",    "input": "text",   "include": "always",    "default": "BR", "width": 56 },
+        { "key": "series",                     "label": "series",     "input": "text",   "include": "ifPresent", "width": 90, "title": "series — série" },
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
+    "stockEtf": {
+      "label": "Ação / ETF",
+      "fields": [
+        { "key": "exchange",                   "label": "exchange",   "input": "text",   "include": "ifPresent", "width": 120, "title": "exchange — bolsa de negociação (ex.: B3, NASDAQ)" },
+        { "key": "ticker",                     "label": "ticker",     "input": "text",   "include": "ifPresent", "width": 120, "title": "ticker — código de negociação do ativo (ex.: PETR4, BOVA11)" },
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
+    "options": {
+      "label": "Opções",
+      "fields": [
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "ticker",                     "label": "ticker",     "input": "text",   "include": "ifPresent", "width": 120, "title": "ticker — código de negociação" },
+        { "key": "type",                       "label": "type",       "input": "text",   "include": "ifPresent", "width": 90, "title": "type — ex.: call/put" },
+        { "key": "style",                      "label": "style",      "input": "text",   "include": "ifPresent", "width": 100, "title": "style — europeu/americano" },
+        { "key": "exchange",                   "label": "exchange",   "input": "text",   "include": "ifPresent", "width": 120, "title": "exchange — bolsa de negociação" },
+        { "key": "strike",                     "label": "strike",     "input": "number", "include": "ifPresent", "width": 90 },
+        { "key": "underlying",                 "label": "underlying", "input": "text",   "include": "ifPresent", "width": 140, "title": "underlying — ativo subjacente" },
+        { "key": "maturityDate",               "label": "maturity",   "input": "date",   "include": "ifPresent", "width": 140, "title": "maturityDate — vencimento" },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
+    "futures": {
+      "label": "Futuros",
+      "fields": [
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "ticker",                     "label": "ticker",     "input": "text",   "include": "ifPresent", "width": 120, "title": "ticker — código de negociação" },
+        { "key": "exchange",                   "label": "exchange",   "input": "text",   "include": "ifPresent", "width": 120, "title": "exchange — bolsa de negociação" },
+        { "key": "underlying",                 "label": "underlying", "input": "text",   "include": "ifPresent", "width": 140, "title": "underlying — ativo subjacente" },
+        { "key": "maturityDate",               "label": "maturity",   "input": "date",   "include": "ifPresent", "width": 140, "title": "maturityDate — vencimento" },
+        { "key": "contractSize",               "label": "contractSize","input": "number","include": "ifPresent", "width": 110, "title": "contractSize — tamanho do contrato" },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
+    "otc": {
+      "label": "OTC",
+      "fields": [
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "ticker",                     "label": "ticker",     "input": "text",   "include": "ifPresent", "width": 120, "title": "ticker — código de negociação" },
+        { "key": "type",                       "label": "type",       "input": "text",   "include": "ifPresent", "width": 90 },
+        { "key": "notes",                      "label": "notes",      "input": "text",   "include": "ifPresent", "width": 200 },
+        { "key": "manager",                    "label": "manager",    "input": "text",   "include": "ifPresent", "width": 150, "title": "manager — gestor" },
+        { "key": "style",                      "label": "style",      "input": "text",   "include": "ifPresent", "width": 100, "title": "style — ex.: europeu/americano" },
+        { "key": "strike",                     "label": "strike",     "input": "number", "include": "ifPresent", "width": 90 },
+        { "key": "maturityDate",               "label": "maturity",   "input": "date",   "include": "ifPresent", "width": 140, "title": "maturityDate — vencimento" },
+        { "key": "initialDate",                "label": "initial",    "input": "date",   "include": "ifPresent", "width": 140, "title": "initialDate — data inicial" },
+        { "key": "underlying",                 "label": "underlying", "input": "text",   "include": "ifPresent", "width": 140, "title": "underlying — ativo subjacente" },
+        { "key": "country",                    "label": "country",    "input": "text",   "include": "always",    "default": "BR", "width": 56 },
+        { "key": "series",                     "label": "series",     "input": "text",   "include": "ifPresent", "width": 90, "title": "series — série" },
+        { "key": "issuer",                     "label": "issuer",     "input": "text",   "include": "ifPresent", "width": 150, "title": "issuer — emissor" },
+        { "key": "indexer",                    "label": "indexer",    "input": "text",   "include": "ifPresent", "transform": "upperIndexer", "width": 80 },
+        { "key": "indexerPercentual",          "label": "idxPct",     "input": "number", "include": "ifPresent", "width": 70, "title": "indexerPercentual" },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
+    "privateMarket": {
+      "label": "Mercado Privado",
+      "fields": [
+        { "key": "ticker",                     "label": "ticker",     "input": "text",   "include": "ifPresent", "width": 120, "title": "ticker — código de negociação" },
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "notes",                      "label": "notes",      "input": "text",   "include": "ifPresent", "width": 200 },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
     "realAssets":              { "label": "Ativos Reais",              "fields": [] },
     "brazilianGovernmentBond": { "label": "Título Público (BR)",       "fields": [] },
-    "sovereignBonds":          { "label": "Título Soberano",           "fields": [] },
+    "sovereignBonds": {
+      "label": "Título Soberano",
+      "fields": [
+        { "key": "type",                       "label": "type",       "input": "text",   "include": "ifPresent", "width": 90 },
+        { "key": "isIn",                       "label": "isIn",       "input": "text",   "include": "ifPresent", "width": 140, "title": "isIn — ISIN" },
+        { "key": "cusip",                      "label": "cusip",      "input": "text",   "include": "ifPresent", "width": 120, "title": "cusip — CUSIP" },
+        { "key": "maturityDate",               "label": "maturity",   "input": "date",   "include": "ifPresent", "width": 140, "title": "maturityDate — vencimento" },
+        { "key": "currency",                   "label": "currency",   "input": "text",   "include": "always",    "default": "BRL", "width": 64 },
+        { "key": "subscriptionNAVDays",        "label": "subND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionNAVDays — cotização da aplicação (D+N)" },
+        { "key": "subscriptionSettlementDays", "label": "subSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "subscriptionSettlementDays — liquidação da aplicação (D+N)" },
+        { "key": "redemptionNAVDays",          "label": "redND",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionNAVDays — cotização do resgate (D+N)" },
+        { "key": "redemptionSettlementDays",   "label": "redSD",      "input": "number", "include": "always",    "default": 0, "width": 64, "title": "redemptionSettlementDays — liquidação do resgate (D+N)" },
+        { "key": "id",                         "label": "id",         "input": "text",   "include": "ifPresent", "width": 200, "title": "id — ObjectId do ativo na Beehus; preencher só ao vincular/atualizar um existente" },
+        { "key": "feederName",                 "label": "feederName", "input": "text",   "include": "ifPresent", "width": 200, "title": "feederName — nome do feeder vinculado" }
+      ]
+    },
     "brazilianRepo":           { "label": "Compromissada (BR)",        "fields": [] },
     "poc":                     { "label": "POC",                       "fields": [] }
   }

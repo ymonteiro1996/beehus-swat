@@ -387,7 +387,9 @@ def main():
 
     for wid, w in wallets.items():
         for t in txns.get(wid, []):
-            liq_date = t.get("liquidationDate", "")
+            # Coerce: liquidationDate may be an ISO string or a BSON Date
+            # (datetime); str() makes .startswith safe for both.
+            liq_date = str(t.get("liquidationDate", "") or "")
             if not liq_date.startswith("2025-12"):
                 continue
             balance = t.get("balance", 0)

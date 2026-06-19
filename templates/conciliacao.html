@@ -2972,13 +2972,16 @@
   }
 
   function _acceptBayesianBestFix() {
-    // Disable button immediately to prevent double-clicks
-    const btn = document.getElementById("bayesian-accept-btn");
-    if (btn) { btn.disabled = true; btn.textContent = "Processando..."; }
-
+    // Validate BEFORE disabling the button — otherwise an early return below
+    // leaves it stuck on "Processando..." forever (the only restore lives in
+    // the _sendItemsToCorrecoes callback, which these returns never reach).
     if (!_bayesianData) return;
     const best = _bayesianData.optimization?.bestFix;
     if (!best || !best.flagDetails) return;
+
+    // Disable button immediately to prevent double-clicks.
+    const btn = document.getElementById("bayesian-accept-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Processando..."; }
 
     const diagData = _diagData;
     const s3 = diagData?.step3?.securities || [];

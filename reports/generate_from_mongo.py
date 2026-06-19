@@ -642,7 +642,10 @@ def sheet_transactions(wb, wallets, txns):
     for wid, w in wallets.items():
         for t in txns.get(wid, []):
             # Filter to reference month only
-            liq_date = t.get("liquidationDate", "")
+            # Coerce: liquidationDate may be an ISO string or a BSON Date
+            # (datetime); str() makes .startswith safe for both. A datetime
+            # stringifies as "2025-12-15 00:00:00", which still matches.
+            liq_date = str(t.get("liquidationDate", "") or "")
             if not liq_date.startswith("2025-12"):
                 continue
             balance = t.get("balance", 0)

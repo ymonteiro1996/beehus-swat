@@ -368,6 +368,12 @@ def get_data():
         return jsonify({"error": str(e)}), 400
     if initial > final:
         return jsonify({"error": "initialDate > finalDate"}), 400
+    # Cap the span: without it a pathological range (e.g. 0001-01-01..9999-12-31)
+    # materializes millions of business-day strings into the $in queries below.
+    # Dates are already shape-validated by _safe_date, so fromisoformat is safe.
+    from datetime import date as _date
+    if (_date.fromisoformat(final) - _date.fromisoformat(initial)).days > 366:
+        return jsonify({"error": "intervalo de datas excede 366 dias"}), 400
 
     dates = _biz_dates_range(initial, final)
     if not dates:

@@ -126,7 +126,7 @@
       btn.disabled = true;
       icon.classList.add('spinning');
       label.textContent = 'Atualizando...';
-      fetch('/api/update')
+      fetch('/api/update', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
           icon.classList.remove('spinning');

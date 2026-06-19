@@ -126,6 +126,22 @@ def _parse_date(text, prefer_mdy=False):
     return None
 
 
+def _day_specified_in(text):
+    """True when `text` names a specific DAY (not just month+year).
+
+    `_parse_date` returns "YYYY-MM-01" for the MMM/YYYY shortcut (e.g.
+    "SET/2029"), indistinguishable from a genuine day-01. This flag lets
+    `_score_candidate` treat a maturity agreement as an EXACT day/month/year
+    coincidence (+50) only when the day was actually named, and otherwise gate
+    on year+month only. Mirrors transaction_security_classifier."""
+    t = str(text or "")
+    return bool(
+        re.search(r"\d{4}-\d{2}-\d{2}", t)
+        or re.search(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", t)
+        or re.search(r"\b\d{1,2}/[A-Za-z]{3}/\d{4}\b", t)
+    )
+
+
 def _extract_all_dates(text, prefer_mdy=False):
     """Return list of all dates found in text. `prefer_mdy` mirrors
     `_parse_date`: for an ambiguous numeric date (both parts ≤ 12) it picks
@@ -557,7 +573,15 @@ _EXTRACTORS = {
 def extract_features(uid, security_type):
     """Extract structured features from an unprocessedId given its securityType."""
     extractor = _EXTRACTORS.get(security_type, _extract_generic)
-    return extractor(uid)
+    features = extractor(uid)
+    # The per-type extractors set `maturity_date` but never `maturity_day_specified`,
+    # so the exact-day bonus (+50) in _score_candidate was dead for this flow and
+    # day-precise bond/gov/sovereign matches were systematically under-scored at
+    # +25. Set it centrally from the source text (mirrors the transaction flow);
+    # an extractor that already set the flag is left untouched.
+    if features.get("maturity_date") and "maturity_day_specified" not in features:
+        features["maturity_day_specified"] = _day_specified_in(uid)
+    return features
 
 
 # ── Query builders per securityType ────────────────────────────────────────────
