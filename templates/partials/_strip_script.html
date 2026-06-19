@@ -2355,25 +2355,20 @@ if (typeof Funcoes === 'undefined') {
       if (cDatalist) cDatalist.innerHTML = "";
 
       if (!cid) return;
-      // Fetch wallets + groupings + benchmarks in parallel.  benchmarks
-      // is managed_portfolio-only but fetching here keeps the wiring
-      // simple: dropdowns are pre-populated even before the operator
-      // flips the kind radio.
+      // Fetch wallets + groupings (+ cross-company wallets) in parallel.
       Promise.all([
         fetch(`/api/excecoes/wallets?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
         fetch(`/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
-        fetch(`/api/excecoes/managed-portfolio/benchmarks?companyId=${encodeURIComponent(cid)}`).then(r => r.json()).catch(() => ({benchmarks: []})),
         // Lista cross-company para os pickers de outputs/target. Sem
         // `companyId` na query — backend devolve wallets de todas as
         // empresas visíveis (`company_filter`).
         fetch(`/api/excecoes/wallets?crossCompany=1`).then(r => r.json()).catch(() => ({wallets: []})),
       ])
-        .then(([walletsRes, groupingsRes, benchmarksRes, crossRes]) => {
+        .then(([walletsRes, groupingsRes, crossRes]) => {
           const wallets = (walletsRes && walletsRes.wallets) || [];
           this._setup.walletsForCompany = wallets;
           this._setup.walletsCrossCompany = (crossRes && crossRes.wallets) || [];
           this._setup.classGroupings = Array.isArray(groupingsRes) ? groupingsRes : (groupingsRes.body || []);
-          this._setup.managedBenchmarks = (benchmarksRes && benchmarksRes.benchmarks) || [];
           const sel = document.getElementById("sp-setup-source");
           sel.innerHTML = '<option value="">Selecione...</option>'
             + this._setup.walletsForCompany.map(w =>
@@ -2387,9 +2382,6 @@ if (typeof Funcoes === 'undefined') {
               || this._setup.kind === "managed_portfolio") {
             this._renderClassPicker();
           }
-          // Always refresh the benchmark dropdown — it's hidden unless
-          // managed_portfolio is the active kind, but the data is cheap.
-          this._renderManagedBenchmarkDropdown();
         })
         .catch(() => {
           document.getElementById("sp-setup-source").innerHTML = '<option value="">Erro ao carregar</option>';
@@ -3940,23 +3932,15 @@ if (typeof Funcoes === 'undefined') {
           return Promise.all([
             fetch(`/api/excecoes/wallets?companyId=${encodeURIComponent(e.companyId)}`).then(r => r.json()),
             fetch(`/api/beehus/filters/groupings?companyId=${encodeURIComponent(e.companyId)}`).then(r => r.json()),
-            // Benchmarks: missing from this Promise.all was the reason
-            // the dropdown stayed empty when an existing
-            // managed_portfolio exception was reopened for editing —
-            // `_renderManagedBenchmarkDropdown` below reads from
-            // `this._setup.managedBenchmarks`, which only the create
-            // flow's onSetupCompanyChange used to populate.
-            fetch(`/api/excecoes/managed-portfolio/benchmarks?companyId=${encodeURIComponent(e.companyId)}`).then(r => r.json()).catch(() => ({benchmarks: []})),
             // Cross-company list — alimenta os pickers de outputs/target,
             // que aceitam carteiras de qualquer empresa visível.
             fetch(`/api/excecoes/wallets?crossCompany=1`).then(r => r.json()).catch(() => ({wallets: []})),
           ])
-            .then(([walletsRes, groupingsRes, benchmarksRes, crossRes]) => {
+            .then(([walletsRes, groupingsRes, crossRes]) => {
               const wallets = (walletsRes && walletsRes.wallets) || [];
               this._setup.walletsForCompany = wallets;
               this._setup.walletsCrossCompany = (crossRes && crossRes.wallets) || [];
               this._setup.classGroupings = Array.isArray(groupingsRes) ? groupingsRes : (groupingsRes.body || []);
-              this._setup.managedBenchmarks = (benchmarksRes && benchmarksRes.benchmarks) || [];
               const sel = document.getElementById("sp-setup-source");
               sel.innerHTML = '<option value="">Selecione...</option>'
                 + wallets.map(w => `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`).join("");
