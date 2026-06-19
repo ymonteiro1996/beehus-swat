@@ -330,26 +330,51 @@
         </label>
       </div>
 
-      <div class="field-grid-3">
-        <div>
-          <label class="label">Empresa <span class="text-red-500">*</span></label>
-          <select id="fx-company" class="input" onchange="Fluxo.onCompanyChange()">
-            <option value="">Carregando...</option>
-          </select>
+      <!-- Company picker (dual-pane, same pattern as wallets/groupings) -->
+      <div class="mb-3">
+        <label class="label">Empresas <span class="text-red-500">*</span></label>
+        <div class="wallets-transfer mt-1">
+          <div class="wallets-pane">
+            <div class="wallets-pane-header">
+              <span class="font-medium text-gray-700">Disponíveis</span>
+              <span class="text-gray-500"><span id="fx-comp-available-count">0</span></span>
+            </div>
+            <select id="fx-comp-available" class="wallets-list" style="height:8rem" multiple
+                    ondblclick="Fluxo.addCompanySelected()"></select>
+          </div>
+          <div class="wallets-actions">
+            <button type="button" class="btn btn-muted" title="Adicionar destacadas"
+                    onclick="Fluxo.addCompanySelected()">→</button>
+            <button type="button" class="btn btn-muted" title="Adicionar todas"
+                    onclick="Fluxo.addCompanyAll()">»</button>
+            <button type="button" class="btn btn-muted" title="Remover destacadas"
+                    onclick="Fluxo.removeCompanySelected()">←</button>
+            <button type="button" class="btn btn-muted" title="Limpar selecionadas"
+                    onclick="Fluxo.removeCompanyAll()">«</button>
+          </div>
+          <div class="wallets-pane">
+            <div class="wallets-pane-header">
+              <span class="font-medium text-gray-700">Selecionadas</span>
+              <span class="text-gray-500"><span id="fx-comp-selected-count">0</span></span>
+            </div>
+            <select id="fx-comp-selected" class="wallets-list" style="height:8rem" multiple
+                    ondblclick="Fluxo.removeCompanySelected()"></select>
+          </div>
         </div>
+        <div id="fx-date-hint" class="text-[10px] text-gray-500 mt-1"></div>
+      </div>
+
+      <!-- Date inputs -->
+      <div class="field-grid-2">
         <div>
           <label class="label" id="fx-initialDate-label">Data da posição <span class="text-red-500">*</span></label>
           <input id="fx-initialDate" type="date" class="input" onchange="Fluxo.onRangeChange()" />
-          <div id="fx-date-hint" class="text-[10px] text-gray-500 mt-1"></div>
         </div>
         <div id="fx-finalDate-wrap" class="hidden">
           <label class="label">Data final <span class="text-red-500">*</span></label>
           <input id="fx-finalDate" type="date" class="input" onchange="Fluxo.onRangeChange()" />
         </div>
       </div>
-      <!-- Back-compat alias: the legacy single-date input id used by Fluxo's
-           own _renderResults / latest-position-date fill. Hidden mirror of
-           #fx-initialDate kept in sync by Fluxo.onRangeChange(). -->
       <input id="fx-positionDate" type="hidden" />
     </section>
 
@@ -8737,11 +8762,12 @@ const UnpublishNav = {
    block as "aguardando especificação" so the UI scaffold is testable.
 ═════════════════════════════════════════════════════════════════════════════ */
 const Fluxo = {
-  _inited:    false,
-  _running:   false,
-  _lastDateCompanyId: null,
-  _allCompanies:      [],
-  _selectedStepKeys:  new Set(),
+  _inited:             false,
+  _running:            false,
+  _lastDateCompanyId:  null,
+  _allCompanies:       [],
+  _selectedCompanyIds: new Set(),
+  _selectedStepKeys:   new Set(),
 
   // Issue types reported in the "Processar Posições" apontamento. Order
   // here is the order they're rendered to the operator — kept aligned with
@@ -8841,18 +8867,12 @@ const Fluxo = {
     this._renderStepCheckboxes();
     try {
       const r = await api('GET', '/api/beehus/filters/companies');
-      const el = document.getElementById('fx-company');
-      if (!el) return;
-      this._allCompanies = r.body || [];
-      const allLabel = `— Todas as empresas (${this._allCompanies.length}) —`;
-      el.innerHTML = '<option value="">(selecione)</option>' +
-        `<option value="__ALL__">${this._esc(allLabel)}</option>` +
-        this._allCompanies.map(c => `<option value="${c.id}">${this._esc(c.name)}</option>`).join('');
+      this._allCompanies = (r.body || []).sort((a, b) =>
+        (a.name || '').localeCompare(b.name || '', 'pt-BR'));
     } catch (e) {
-      const el = document.getElementById('fx-company');
-      if (el) el.innerHTML = '<option value="">(falha ao carregar empresas)</option>';
       this._allCompanies = [];
     }
+    this._renderCompanyPanes();
     this._renderGroupingPanes();
     this._renderWalletPanes();
     this._renderDatePanes();
@@ -8888,32 +8908,68 @@ const Fluxo = {
   // the dual-pane pickers. Operators almost always land on the last
   // published day; saving the manual lookup matters more than the rare case
   // where they want a different date (they can still edit the input).
-  async onCompanyChange() {
-    this._groupings = [];
-    this._wallets = [];
-    this._groupingSelectedIds = new Set();
-    this._selectedIds = new Set();
-    const grpS = document.getElementById('fx-grp-excel-status'); if (grpS) grpS.textContent = '';
-    const walS = document.getElementById('fx-wal-excel-status'); if (walS) walS.textContent = '';
-
-    const cid     = document.getElementById('fx-company').value;
+  // ── Company dual-pane picker ─────────────────────────────────────────────
+  _renderCompanyPanes() {
+    const avail = document.getElementById('fx-comp-available');
+    const sel   = document.getElementById('fx-comp-selected');
+    if (!avail || !sel) return;
+    const all       = this._allCompanies || [];
+    const available = all.filter(c => !this._selectedCompanyIds.has(c.id));
+    const selected  = all.filter(c =>  this._selectedCompanyIds.has(c.id));
+    const esc = s => this._esc(s);
+    avail.innerHTML = available.map(c => `<option value="${c.id}">${esc(c.name || c.id)}</option>`).join('');
+    sel.innerHTML   = selected .map(c => `<option value="${c.id}">${esc(c.name || c.id)}</option>`).join('');
+    document.getElementById('fx-comp-available-count').textContent = available.length;
+    document.getElementById('fx-comp-selected-count').textContent  = selected.length;
+    this._onCompanySelectionChange();
+  },
+  _highlightedComp(suffix) {
+    const el = document.getElementById(`fx-comp-${suffix}`);
+    return el ? Array.from(el.selectedOptions).map(o => o.value) : [];
+  },
+  addCompanySelected() {
+    this._highlightedComp('available').forEach(id => this._selectedCompanyIds.add(id));
+    this._renderCompanyPanes();
+  },
+  addCompanyAll() {
+    (this._allCompanies || []).forEach(c => this._selectedCompanyIds.add(c.id));
+    this._renderCompanyPanes();
+  },
+  removeCompanySelected() {
+    this._highlightedComp('selected').forEach(id => this._selectedCompanyIds.delete(id));
+    this._renderCompanyPanes();
+  },
+  removeCompanyAll() {
+    this._selectedCompanyIds.clear();
+    this._renderCompanyPanes();
+  },
+  async _onCompanySelectionChange() {
     const hint    = document.getElementById('fx-date-hint');
     const grpCard = document.getElementById('fx-groupings-card');
     const walCard = document.getElementById('fx-wallets-card');
-    const isAll   = cid === '__ALL__';
+    const isBatch = this._selectedCompanyIds.size > 1;
+    const isEmpty = this._selectedCompanyIds.size === 0;
 
-    // "All companies" hides groupings/wallets — they are per-company.
-    if (grpCard) grpCard.classList.toggle('hidden', isAll);
-    if (walCard) walCard.classList.toggle('hidden', isAll);
+    // Hide groupings/wallets for batch or empty — they are per-company.
+    if (grpCard) grpCard.classList.toggle('hidden', isBatch);
+    if (walCard) walCard.classList.toggle('hidden', isBatch);
 
-    if (!cid || isAll) {
-      hint.textContent = '';
+    if (isBatch || isEmpty) {
+      if (hint) hint.textContent = '';
       this._lastDateCompanyId = null;
+      this._groupings = [];
+      this._wallets   = [];
+      this._groupingSelectedIds = new Set();
+      this._selectedIds = new Set();
+      const grpS = document.getElementById('fx-grp-excel-status'); if (grpS) grpS.textContent = '';
+      const walS = document.getElementById('fx-wal-excel-status'); if (walS) walS.textContent = '';
       this._renderGroupingPanes();
       this._renderWalletPanes();
       return;
     }
 
+    // Single company — load groupings/wallets and auto-fill latest date.
+    const cid = Array.from(this._selectedCompanyIds)[0];
     try {
       const [g, w] = await Promise.all([
         api('GET', `/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`),
@@ -8930,24 +8986,24 @@ const Fluxo = {
 
     if (cid === this._lastDateCompanyId) return;
     this._lastDateCompanyId = cid;
-    hint.textContent = 'Buscando última posição publicada…';
+    if (hint) hint.textContent = 'Buscando última posição publicada…';
     const r = await api(
       'GET',
       `/api/beehus/flow/latest-position-date?companyId=${encodeURIComponent(cid)}`,
     );
     if (this._lastDateCompanyId !== cid) return;
     if (!r.ok) {
-      hint.textContent = 'Falha ao consultar última posição publicada — preencha manualmente.';
+      if (hint) hint.textContent = 'Falha ao consultar — preencha manualmente.';
       return;
     }
     const pd = r.body?.positionDate || null;
     if (!pd) {
-      hint.textContent = 'Empresa sem publishedPositionSecurities — preencha manualmente.';
+      if (hint) hint.textContent = 'Sem publicação — preencha manualmente.';
       return;
     }
     document.getElementById('fx-initialDate').value = pd;
     document.getElementById('fx-positionDate').value = pd;
-    hint.textContent = `Última posição publicada: ${pd}`;
+    if (hint) hint.textContent = `Última posição publicada: ${pd}`;
     this.onRangeChange();
   },
 
@@ -9218,9 +9274,7 @@ const Fluxo = {
   },
 
   _targetCompanyIds() {
-    const v = document.getElementById('fx-company').value;
-    if (v === '__ALL__') return this._allCompanies.map(c => c.id);
-    return v ? [v] : [];
+    return Array.from(this._selectedCompanyIds);
   },
 
   _renderStepCheckboxes() {
@@ -9379,10 +9433,10 @@ const Fluxo = {
 
   confirm() {
     if (this._running) { alert('Já existe um fluxo em execução.'); return; }
-    const cid = document.getElementById('fx-company').value;
+    const targetCids = this._targetCompanyIds();
+    if (targetCids.length === 0) { alert('Selecione pelo menos uma empresa.'); return; }
     const ini = document.getElementById('fx-initialDate').value;
     const fin = document.getElementById('fx-finalDate').value;
-    if (!cid) { alert('Selecione uma empresa.'); return; }
     if (!ini) { alert('Informe a data da posição.'); return; }
     if (this._selectedStepKeys.size === 0) { alert('Selecione pelo menos uma etapa.'); return; }
 
@@ -9400,10 +9454,13 @@ const Fluxo = {
       return;
     }
 
-    const isAll       = cid === '__ALL__';
-    const companyName = isAll
-      ? `Todas as empresas (${this._allCompanies.length})`
-      : (document.getElementById('fx-company').selectedOptions[0]?.textContent || cid);
+    const isBatch     = targetCids.length > 1;
+    const companyName = isBatch
+      ? `${targetCids.length} empresa(s)`
+      : (() => {
+          const opt = document.querySelector(`#fx-comp-selected option`);
+          return opt ? opt.textContent : targetCids[0];
+        })();
     document.getElementById('fx-confirm-company').textContent = companyName;
     document.getElementById('fx-confirm-range').textContent   = (this._mode === 'single')
       ? ini
@@ -9411,7 +9468,7 @@ const Fluxo = {
           ? `${days[0]} … ${days[days.length - 1]} (lista explícita)`
           : `${ini} → ${fin}`);
     document.getElementById('fx-confirm-days').textContent    = `${days.length}`;
-    document.getElementById('fx-confirm-wallets').textContent = isAll ? 'todas as wallets' : this._confirmWalletsLabel();
+    document.getElementById('fx-confirm-wallets').textContent = isBatch ? 'n/a (lote)' : this._confirmWalletsLabel();
     const stepsEl = document.getElementById('fx-confirm-steps');
     if (stepsEl) {
       const n = this._selectedStepKeys.size;
@@ -9539,11 +9596,11 @@ const Fluxo = {
 
   reset() {
     if (this._running) return;
-    document.getElementById('fx-company').value = '';
+    this._selectedCompanyIds = new Set();
     document.getElementById('fx-initialDate').value = '';
     document.getElementById('fx-finalDate').value = '';
     const legacy = document.getElementById('fx-positionDate'); if (legacy) legacy.value = '';
-    document.getElementById('fx-date-hint').textContent = '';
+    const hint = document.getElementById('fx-date-hint'); if (hint) hint.textContent = '';
     document.getElementById('fx-status').textContent = '';
     this._lastDateCompanyId = null;
 
@@ -9571,10 +9628,7 @@ const Fluxo = {
 
     this._selectedStepKeys = new Set(this.STEPS.map(s => s.key));
     this._renderStepCheckboxes();
-    const grpCard = document.getElementById('fx-groupings-card');
-    const walCard = document.getElementById('fx-wallets-card');
-    if (grpCard) grpCard.classList.remove('hidden');
-    if (walCard) walCard.classList.remove('hidden');
+    this._renderCompanyPanes();
     this._renderGroupingPanes();
     this._renderWalletPanes();
     this._renderDatePanes();
