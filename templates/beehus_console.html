@@ -118,6 +118,7 @@
   .fx-card[data-state=done]    { border-left-color: #059669; }
   .fx-card[data-state=error]   { border-left-color: #dc2626; }
   .fx-card[data-state=warn]    { border-left-color: #d97706; }
+  .fx-card[data-state=skipped] { border-left-color: #d1d5db; opacity: 0.55; }
   .fx-card-head { display: flex; align-items: center; gap: 0.5rem; }
   .fx-num { display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem;
             border-radius: 999px; background: #f3f4f6; color: #4b5563; font-size: 0.6875rem; font-weight: 700; }
@@ -352,8 +353,20 @@
       <input id="fx-positionDate" type="hidden" />
     </section>
 
-    <!-- Card 2: groupings (opcional) — dual-pane transfer mirroring Processar -->
+    <!-- Step selection card -->
     <section class="section-card mb-3">
+      <div class="flex items-center justify-between mb-2">
+        <div class="section-title">Etapas</div>
+        <div class="flex gap-2">
+          <button type="button" class="btn btn-muted text-[11px]" onclick="Fluxo.selectAllSteps()">Todas</button>
+          <button type="button" class="btn btn-muted text-[11px]" onclick="Fluxo.deselectAllSteps()">Nenhuma</button>
+        </div>
+      </div>
+      <div id="fx-step-checkboxes" class="grid grid-cols-3 gap-x-6 gap-y-1.5 text-[12px] text-gray-700"></div>
+    </section>
+
+    <!-- Card 2: groupings (opcional) — dual-pane transfer mirroring Processar -->
+    <section id="fx-groupings-card" class="section-card mb-3">
       <div class="flex items-start justify-between flex-wrap gap-2">
         <div>
           <div class="section-title">Groupings (opcional)</div>
@@ -470,7 +483,7 @@
     </section>
 
     <!-- Card 4: wallets -->
-    <section class="section-card mb-3">
+    <section id="fx-wallets-card" class="section-card mb-3">
       <div class="flex items-start justify-between flex-wrap gap-2">
         <div>
           <div class="section-title">Wallets</div>
@@ -2091,7 +2104,7 @@
       <div class="px-5 py-4">
         <h3 class="font-semibold text-sm text-gray-700 mb-2">Confirmar Fluxo</h3>
         <p class="text-xs text-gray-600 mb-2">
-          O sistema vai executar as 9 etapas em sequência para cada dia útil
+          O sistema vai executar as etapas selecionadas em sequência para cada empresa e dia útil
           e exibir os apontamentos por etapa no painel abaixo. Pode demorar —
           não feche a aba enquanto rodar.
         </p>
@@ -2099,7 +2112,8 @@
           Empresa: <strong id="fx-confirm-company">—</strong><br/>
           Faixa: <strong id="fx-confirm-range">—</strong><br/>
           Dias úteis: <strong id="fx-confirm-days">—</strong><br/>
-          Wallets: <strong id="fx-confirm-wallets">—</strong>
+          Wallets: <strong id="fx-confirm-wallets">—</strong><br/>
+          Etapas: <strong id="fx-confirm-steps">—</strong>
         </p>
         <div class="mt-5 flex justify-end gap-2">
           <button onclick="Fluxo.cancelConfirm()" class="btn btn-muted">Cancelar</button>
@@ -8725,7 +8739,9 @@ const UnpublishNav = {
 const Fluxo = {
   _inited:    false,
   _running:   false,
-  _lastDateCompanyId: null, // dedupe redundant /latest-position-date calls
+  _lastDateCompanyId: null,
+  _allCompanies:      [],
+  _selectedStepKeys:  new Set(),
 
   // Issue types reported in the "Processar Posições" apontamento. Order
   // here is the order they're rendered to the operator — kept aligned with
@@ -8820,20 +8836,22 @@ const Fluxo = {
   _candidateDates: [],
 
   async init() {
-    // Render the 9 empty result cards FIRST so the operator sees the
-    // structure immediately — independent of whether the companies fetch
-    // succeeds. A blank result panel while waiting for companies looked
-    // broken even though it was just an idle network round-trip.
     this._renderResults('pending');
+    this._selectedStepKeys = new Set(this.STEPS.map(s => s.key));
+    this._renderStepCheckboxes();
     try {
       const r = await api('GET', '/api/beehus/filters/companies');
       const el = document.getElementById('fx-company');
       if (!el) return;
+      this._allCompanies = r.body || [];
+      const allLabel = `— Todas as empresas (${this._allCompanies.length}) —`;
       el.innerHTML = '<option value="">(selecione)</option>' +
-        (r.body || []).map(c => `<option value="${c.id}">${this._esc(c.name)}</option>`).join('');
+        `<option value="__ALL__">${this._esc(allLabel)}</option>` +
+        this._allCompanies.map(c => `<option value="${c.id}">${this._esc(c.name)}</option>`).join('');
     } catch (e) {
       const el = document.getElementById('fx-company');
       if (el) el.innerHTML = '<option value="">(falha ao carregar empresas)</option>';
+      this._allCompanies = [];
     }
     this._renderGroupingPanes();
     this._renderWalletPanes();
@@ -8871,8 +8889,6 @@ const Fluxo = {
   // published day; saving the manual lookup matters more than the rare case
   // where they want a different date (they can still edit the input).
   async onCompanyChange() {
-    // Reset picker state on every company change — the previous company's
-    // groupings/wallets are stale and any selected ids reference them.
     this._groupings = [];
     this._wallets = [];
     this._groupingSelectedIds = new Set();
@@ -8880,9 +8896,17 @@ const Fluxo = {
     const grpS = document.getElementById('fx-grp-excel-status'); if (grpS) grpS.textContent = '';
     const walS = document.getElementById('fx-wal-excel-status'); if (walS) walS.textContent = '';
 
-    const cid  = document.getElementById('fx-company').value;
-    const hint = document.getElementById('fx-date-hint');
-    if (!cid) {
+    const cid     = document.getElementById('fx-company').value;
+    const hint    = document.getElementById('fx-date-hint');
+    const grpCard = document.getElementById('fx-groupings-card');
+    const walCard = document.getElementById('fx-wallets-card');
+    const isAll   = cid === '__ALL__';
+
+    // "All companies" hides groupings/wallets — they are per-company.
+    if (grpCard) grpCard.classList.toggle('hidden', isAll);
+    if (walCard) walCard.classList.toggle('hidden', isAll);
+
+    if (!cid || isAll) {
       hint.textContent = '';
       this._lastDateCompanyId = null;
       this._renderGroupingPanes();
@@ -8890,7 +8914,6 @@ const Fluxo = {
       return;
     }
 
-    // Fetch groupings + wallets in parallel for the dual-pane pickers.
     try {
       const [g, w] = await Promise.all([
         api('GET', `/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`),
@@ -8905,8 +8928,6 @@ const Fluxo = {
     this._renderGroupingPanes();
     this._renderWalletPanes();
 
-    // Latest position date — dedupe so toggling between mode radios doesn't
-    // refetch.
     if (cid === this._lastDateCompanyId) return;
     this._lastDateCompanyId = cid;
     hint.textContent = 'Buscando última posição publicada…';
@@ -8914,7 +8935,7 @@ const Fluxo = {
       'GET',
       `/api/beehus/flow/latest-position-date?companyId=${encodeURIComponent(cid)}`,
     );
-    if (this._lastDateCompanyId !== cid) return; // a newer change replaced us
+    if (this._lastDateCompanyId !== cid) return;
     if (!r.ok) {
       hint.textContent = 'Falha ao consultar última posição publicada — preencha manualmente.';
       return;
@@ -8925,7 +8946,7 @@ const Fluxo = {
       return;
     }
     document.getElementById('fx-initialDate').value = pd;
-    document.getElementById('fx-positionDate').value = pd; // legacy mirror
+    document.getElementById('fx-positionDate').value = pd;
     hint.textContent = `Última posição publicada: ${pd}`;
     this.onRangeChange();
   },
@@ -9196,6 +9217,36 @@ const Fluxo = {
     }
   },
 
+  _targetCompanyIds() {
+    const v = document.getElementById('fx-company').value;
+    if (v === '__ALL__') return this._allCompanies.map(c => c.id);
+    return v ? [v] : [];
+  },
+
+  _renderStepCheckboxes() {
+    const root = document.getElementById('fx-step-checkboxes');
+    if (!root) return;
+    root.innerHTML = this.STEPS.map(s => `
+      <label class="flex items-center gap-1.5 cursor-pointer select-none">
+        <input type="checkbox" value="${s.key}"
+               ${this._selectedStepKeys.has(s.key) ? 'checked' : ''}
+               onchange="Fluxo.toggleStep('${s.key}', this.checked)" />
+        ${this._esc(s.label)}
+      </label>`).join('');
+  },
+  toggleStep(key, checked) {
+    if (checked) this._selectedStepKeys.add(key);
+    else         this._selectedStepKeys.delete(key);
+  },
+  selectAllSteps() {
+    this.STEPS.forEach(s => this._selectedStepKeys.add(s.key));
+    this._renderStepCheckboxes();
+  },
+  deselectAllSteps() {
+    this._selectedStepKeys.clear();
+    this._renderStepCheckboxes();
+  },
+
   _resolveDays() {
     if (this._mode === 'single') {
       const ini = document.getElementById('fx-initialDate').value;
@@ -9299,7 +9350,7 @@ const Fluxo = {
     // when the pill map doesn't have an entry for that state.
     const pill  = payload.pill ?? ((({
       pending: 'aguardando', running: 'executando',
-      done: 'ok', warn: 'apontamentos', error: 'falhou',
+      done: 'ok', warn: 'apontamentos', error: 'falhou', skipped: 'ignorada',
     })[state]) || state);
 
     card.dataset.state = state;
@@ -9333,6 +9384,7 @@ const Fluxo = {
     const fin = document.getElementById('fx-finalDate').value;
     if (!cid) { alert('Selecione uma empresa.'); return; }
     if (!ini) { alert('Informe a data da posição.'); return; }
+    if (this._selectedStepKeys.size === 0) { alert('Selecione pelo menos uma etapa.'); return; }
 
     const explicit = this._useDateList && this._selectedDates.size > 0;
     if (this._mode === 'range' && !explicit) {
@@ -9348,7 +9400,10 @@ const Fluxo = {
       return;
     }
 
-    const companyName = document.getElementById('fx-company').selectedOptions[0]?.textContent || cid;
+    const isAll       = cid === '__ALL__';
+    const companyName = isAll
+      ? `Todas as empresas (${this._allCompanies.length})`
+      : (document.getElementById('fx-company').selectedOptions[0]?.textContent || cid);
     document.getElementById('fx-confirm-company').textContent = companyName;
     document.getElementById('fx-confirm-range').textContent   = (this._mode === 'single')
       ? ini
@@ -9356,7 +9411,12 @@ const Fluxo = {
           ? `${days[0]} … ${days[days.length - 1]} (lista explícita)`
           : `${ini} → ${fin}`);
     document.getElementById('fx-confirm-days').textContent    = `${days.length}`;
-    document.getElementById('fx-confirm-wallets').textContent = this._confirmWalletsLabel();
+    document.getElementById('fx-confirm-wallets').textContent = isAll ? 'todas as wallets' : this._confirmWalletsLabel();
+    const stepsEl = document.getElementById('fx-confirm-steps');
+    if (stepsEl) {
+      const n = this._selectedStepKeys.size;
+      stepsEl.textContent = n === this.STEPS.length ? `todas (${n})` : `${n} de ${this.STEPS.length}`;
+    }
     document.getElementById('fx-confirm-modal').classList.add('show');
   },
   cancelConfirm() { document.getElementById('fx-confirm-modal').classList.remove('show'); },
@@ -9381,15 +9441,18 @@ const Fluxo = {
     document.getElementById('fx-reset-btn').disabled = true;
     const status = document.getElementById('fx-status');
 
-    const cid         = document.getElementById('fx-company').value;
+    const targetCids  = this._targetCompanyIds();
     const days        = this._resolveDays();
     const walletIds   = this._effectiveSelectedWallets();
     const groupingIds = Array.from(this._groupingSelectedIds || []);
+    const activeSteps = this.STEPS.filter(s => this._selectedStepKeys.has(s.key));
+    const isAll       = targetCids.length > 1;
+    const isRange     = this._mode === 'range';
+    const dayHdr      = document.getElementById('fx-results-current-day');
+    const daysEl      = document.getElementById('fx-days');
 
-    const isRange = this._mode === 'range';
-    const dayHdr  = document.getElementById('fx-results-current-day');
-    const daysEl  = document.getElementById('fx-days');
-    if (isRange) {
+    // Day-strip only makes sense for single-company range runs.
+    if (isRange && !isAll) {
       this._renderDayRows(days);
     } else if (daysEl) {
       daysEl.classList.add('hidden');
@@ -9397,66 +9460,78 @@ const Fluxo = {
     }
     if (dayHdr) { dayHdr.classList.add('hidden'); dayHdr.textContent = ''; }
 
-    let totalErrors = 0, totalWarns = 0, completedDays = 0;
-    status.textContent = isRange
-      ? `Executando fluxo — ${days.length} dia(s)…`
-      : 'Executando fluxo…';
+    let totalErrors = 0, totalWarns = 0, completedOps = 0;
+    const totalOps = targetCids.length * days.length;
 
-    for (const day of days) {
-      if (isRange) {
-        this._scrollDayIntoView(day);
-        this._setDayStep(day, 'running', `${day} · executando…`);
-      }
-      if (dayHdr && isRange) {
-        dayHdr.classList.remove('hidden');
-        dayHdr.textContent = `Mostrando última iteração: ${day}`;
-      }
-      this._renderResults('pending');
-
-      const ctx  = { companyId: cid, positionDate: day, walletIds, groupingIds };
-      const dT0  = performance.now();
-      let dErr   = 0, dWarn = 0;
-      for (const step of this.STEPS) {
-        this._setCardState(step.key, {state: 'running', note: 'Executando…'});
-        let payload;
-        try {
-          payload = typeof step.run === 'function'
-            ? await step.run(ctx)
-            : {state: 'done', pill: 'aguardando spec',
-               note: 'Lógica desta etapa ainda não especificada.'};
-        } catch (e) {
-          payload = {state: 'error', pill: 'falhou',
-                     note: `Erro inesperado: ${e.message || e}`};
+    for (const cid of targetCids) {
+      for (const day of days) {
+        if (isAll) {
+          const cidName = (this._allCompanies.find(c => c.id === cid) || {}).name || cid;
+          status.textContent = `[${completedOps + 1}/${totalOps}] ${cidName} · ${day}…`;
+        } else if (isRange) {
+          this._scrollDayIntoView(day);
+          this._setDayStep(day, 'running', `${day} · executando…`);
         }
-        payload = payload || {state: 'done', note: ''};
-        if (payload.state === 'error') dErr++;
-        else if (payload.state === 'warn') dWarn++;
-        this._setCardState(step.key, payload);
-      }
-      totalErrors  += dErr;
-      totalWarns   += dWarn;
-      completedDays++;
+        if (dayHdr && isRange && !isAll) {
+          dayHdr.classList.remove('hidden');
+          dayHdr.textContent = `Mostrando última iteração: ${day}`;
+        }
 
-      if (isRange) {
-        const dayMs    = Math.round(performance.now() - dT0);
-        const dayState = dErr ? 'error' : 'done';
-        const parts    = [];
-        if (dErr)  parts.push(`${dErr} erro(s)`);
-        if (dWarn) parts.push(`${dWarn} apontamento(s)`);
-        const msg = parts.length
-          ? `${day} · ${parts.join(', ')} (${(dayMs / 1000).toFixed(1)}s)`
-          : `${day} · ok (${(dayMs / 1000).toFixed(1)}s)`;
-        this._setDayStep(day, dayState, msg);
-        this._setDayElapsed(day, dayMs);
+        // Reset result cards; immediately mark skipped steps.
+        this._renderResults('pending');
+        for (const step of this.STEPS) {
+          if (!this._selectedStepKeys.has(step.key)) {
+            this._setCardState(step.key, {state: 'skipped', pill: 'ignorada', note: 'Etapa não selecionada.'});
+          }
+        }
+
+        const ctx = { companyId: cid, positionDate: day, walletIds, groupingIds };
+        const dT0 = performance.now();
+        let dErr = 0, dWarn = 0;
+
+        for (const step of activeSteps) {
+          this._setCardState(step.key, {state: 'running', note: 'Executando…'});
+          let payload;
+          try {
+            payload = typeof step.run === 'function'
+              ? await step.run(ctx)
+              : {state: 'done', pill: 'aguardando spec',
+                 note: 'Lógica desta etapa ainda não especificada.'};
+          } catch (e) {
+            payload = {state: 'error', pill: 'falhou',
+                       note: `Erro inesperado: ${e.message || e}`};
+          }
+          payload = payload || {state: 'done', note: ''};
+          if (payload.state === 'error') dErr++;
+          else if (payload.state === 'warn') dWarn++;
+          this._setCardState(step.key, payload);
+        }
+        totalErrors += dErr;
+        totalWarns  += dWarn;
+        completedOps++;
+
+        if (isRange && !isAll) {
+          const dayMs    = Math.round(performance.now() - dT0);
+          const dayState = dErr ? 'error' : 'done';
+          const parts    = [];
+          if (dErr)  parts.push(`${dErr} erro(s)`);
+          if (dWarn) parts.push(`${dWarn} apontamento(s)`);
+          const msg = parts.length
+            ? `${day} · ${parts.join(', ')} (${(dayMs / 1000).toFixed(1)}s)`
+            : `${day} · ok (${(dayMs / 1000).toFixed(1)}s)`;
+          this._setDayStep(day, dayState, msg);
+          this._setDayElapsed(day, dayMs);
+        }
       }
     }
 
     const parts = [];
     if (totalErrors) parts.push(`${totalErrors} com falha`);
     if (totalWarns)  parts.push(`${totalWarns} com apontamentos`);
+    const label = isAll ? `${totalOps} operação(ões)` : `${days.length} dia(s)`;
     status.textContent = parts.length
-      ? `Fluxo concluído em ${completedDays} dia(s) — ${parts.join(', ')}.`
-      : `Fluxo concluído em ${completedDays} dia(s) — sem apontamentos.`;
+      ? `Fluxo concluído em ${label} — ${parts.join(', ')}.`
+      : `Fluxo concluído em ${label} — sem apontamentos.`;
     this._running = false;
     document.getElementById('fx-run-btn').disabled = false;
     document.getElementById('fx-reset-btn').disabled = false;
@@ -9494,6 +9569,12 @@ const Fluxo = {
     radios.forEach(r => { r.checked = (r.value === 'single'); });
     this.onModeChange('single');
 
+    this._selectedStepKeys = new Set(this.STEPS.map(s => s.key));
+    this._renderStepCheckboxes();
+    const grpCard = document.getElementById('fx-groupings-card');
+    const walCard = document.getElementById('fx-wallets-card');
+    if (grpCard) grpCard.classList.remove('hidden');
+    if (walCard) walCard.classList.remove('hidden');
     this._renderGroupingPanes();
     this._renderWalletPanes();
     this._renderDatePanes();
