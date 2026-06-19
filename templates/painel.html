@@ -1,0 +1,946 @@
+{% extends "base.html" %}
+{% set active = "painel" %}
+{% block title %}Rotinas de Verificação{% endblock %}
+
+{% block head %}
+<style>
+  .table-wrap    { overflow-x: auto; max-height: calc(100vh - 340px); overflow-y: auto; }
+  .date-card.active { border-color: #1d4ed8; background: #eff6ff; }
+  .date-card.active .card-date  { color: #1d4ed8; }
+  .date-card.active .card-total { color: #1d4ed8; }
+  .tab-btn.active { border-bottom-color: #2563eb !important; color: #2563eb !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<header class="bg-white shadow px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+  <h1 class="font-semibold text-gray-700">Rotinas de Verificação</h1>
+</header>
+
+<!-- ── Filters ─────────────────────────────────────────────────────────────── -->
+<div class="px-6 pt-5 pb-3 flex items-end gap-6 flex-wrap">
+  <div>
+    <label class="block text-xs text-gray-500 mb-1.5">Empresa</label>
+    <select id="company-select" onchange="onCompanyChange()"
+      class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[280px]">
+      <option value="">Selecione uma empresa...</option>
+      {% for c in companies %}
+      <option value="{{ c.id }}">{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs text-gray-500 mb-1.5">Data final</label>
+    <input type="date" id="end-date-input" onchange="onEndDateChange()"
+      class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+  </div>
+  <button id="analyze-btn" onclick="runAnalysis()" disabled
+    class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded px-5 py-2 text-sm font-semibold transition-colors">
+    Analisar
+  </button>
+</div>
+
+<!-- ── Date pills ──────────────────────────────────────────────────────────── -->
+<div id="dates-section" class="hidden px-6 pt-2 pb-2">
+  <p class="text-xs text-gray-400 mb-2">Selecione uma data:</p>
+  <div id="date-cards" class="grid grid-cols-10 gap-3"></div>
+</div>
+
+<!-- ── Loading spinner ─────────────────────────────────────────────────────── -->
+<div id="loading" class="hidden px-6 py-12 text-center">
+  <p class="text-gray-400 text-sm">Analisando...</p>
+</div>
+
+<!-- ── Results ─────────────────────────────────────────────────────────────── -->
+<div id="results" class="hidden">
+
+  <!-- Anomaly summary pills -->
+  <div class="px-6 pt-4 pb-2">
+    <div id="anomaly-pills" class="flex gap-3 flex-wrap"></div>
+  </div>
+
+  <!-- Tabs bar -->
+  <div class="px-6 pt-4">
+    <div class="flex border-b border-gray-200">
+      <button data-tab="tab-concil" onclick="switchTab('tab-concil')"
+        class="tab-btn active px-4 py-2.5 text-xs font-medium border-b-2 transition-colors">
+        Anomalias em ativos
+        <span id="badge-concil" class="ml-1 bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]"></span>
+      </button>
+      <button data-tab="tab-buysell" onclick="switchTab('tab-buysell')"
+        class="tab-btn px-4 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+        Anomalias em transacoes
+        <span id="badge-buysell" class="ml-1 bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]"></span>
+      </button>
+      <button data-tab="tab-rentab" onclick="switchTab('tab-rentab')"
+        class="tab-btn px-4 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+        Validacao Rentab.
+        <span id="badge-rentab" class="ml-1 bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]"></span>
+      </button>
+      <button data-tab="tab-posicoes" onclick="switchTab('tab-posicoes')"
+        class="tab-btn px-4 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+        Validacao Posicoes
+        <span id="badge-posicoes" class="ml-1 bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]"></span>
+      </button>
+      <button data-tab="tab-caixa" onclick="switchTab('tab-caixa')"
+        class="tab-btn px-4 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+        Validacao Caixa
+        <span id="badge-caixa" class="ml-1 bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]"></span>
+      </button>
+      <button data-tab="tab-execprice" onclick="switchTab('tab-execprice')"
+        class="tab-btn px-4 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+        Preços de Execução
+        <span id="badge-execprice" class="ml-1 bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Tab 1: Global Analysis ──────────────────────────────────────────── -->
+  <div id="tab-concil" class="tab-content px-6 pt-4 pb-6">
+    <div id="concil-export-bar" class="mb-3 flex items-center gap-3" style="display:none">
+      <span class="text-xs text-gray-500"><span id="concil-selected-count">0</span> selecionado(s)</span>
+      <button id="concil-export-btn" onclick="sendSelectedToCorrecoes()" disabled
+        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded px-4 py-1.5 text-xs font-semibold transition-colors">
+        Enviar para Correções
+      </button>
+      <span id="concil-export-status" class="text-xs text-gray-500"></span>
+    </div>
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="tbl-concil" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 w-10 text-center">
+                <input type="checkbox" id="concil-select-all" onchange="toggleConcilSelectAll()" class="rounded" title="Selecionar todos exportaveis">
+              </th>
+              <th class="px-3 py-2.5 text-left min-w-[220px]">Ativo</th>
+              <th class="px-3 py-2.5 text-left">Tipo</th>
+              <th class="px-3 py-2.5 text-left">Flag</th>
+              <th class="px-3 py-2.5 text-right">Impacto Total</th>
+              <th class="px-3 py-2.5 text-right">Impacto Medio</th>
+              <th class="px-3 py-2.5 text-right">Carteiras</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-concil"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="empty-concil" class="text-gray-400 text-sm py-8 text-center" style="display:none">Nenhum flag encontrado.</p>
+  </div>
+
+  <!-- ── Tab 2: buySell Transactions ─────────────────────────────────────── -->
+  <div id="tab-buysell" class="tab-content px-6 pt-4 pb-6 hidden">
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="tbl-buysell" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 text-left min-w-[180px]">Carteira</th>
+              <th class="px-3 py-2.5 text-left min-w-[200px]">Ativo</th>
+              <th class="px-3 py-2.5 text-left">Direcao</th>
+              <th class="px-3 py-2.5 text-right">Saldo</th>
+              <th class="px-3 py-2.5 text-right">Quantidade</th>
+              <th class="px-3 py-2.5 text-right">Preco</th>
+              <th class="px-3 py-2.5 text-left min-w-[200px]">Problema</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-buysell"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="empty-buysell" class="text-gray-400 text-sm py-8 text-center" style="display:none">Todas as transacoes buySell estao correspondidas.</p>
+  </div>
+
+  <!-- ── Tab 3: Validacao Rentabilidades ──────────────────────────────────── -->
+  <div id="tab-rentab" class="tab-content px-6 pt-4 pb-6 hidden">
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="tbl-rentab" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 text-left min-w-[180px]">Carteira</th>
+              <th class="px-3 py-2.5 text-left min-w-[220px]">Ativo</th>
+              <th class="px-3 py-2.5 text-left">Pricing</th>
+              <th class="px-3 py-2.5 text-right">Rentab PU</th>
+              <th class="px-3 py-2.5 text-right">Rentab Contrib</th>
+              <th class="px-3 py-2.5 text-center">Status</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-rentab"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="empty-rentab" class="text-gray-400 text-sm py-8 text-center" style="display:none">Nenhum security encontrado.</p>
+  </div>
+
+  <!-- ── Tab 4: Validacao Posicoes ────────────────────────────────────────── -->
+  <div id="tab-posicoes" class="tab-content px-6 pt-4 pb-6 hidden">
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="tbl-posicoes" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 text-left min-w-[220px]">Carteira</th>
+              <th class="px-3 py-2.5 text-right">Flags</th>
+              <th class="px-3 py-2.5 text-right">Unprocessed</th>
+              <th class="px-3 py-2.5 text-right">Processed</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-posicoes"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="empty-posicoes" class="text-gray-400 text-sm py-8 text-center" style="display:none">Nenhuma divergencia encontrada.</p>
+  </div>
+
+  <!-- ── Tab 5: Validacao Caixa ──────────────────────────────────────────── -->
+  <div id="tab-caixa" class="tab-content px-6 pt-4 pb-6 hidden">
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="tbl-caixa" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 text-left min-w-[220px]">Carteira</th>
+              <th class="px-3 py-2.5 text-right min-w-[130px]">Caixa Anterior</th>
+              <th class="px-3 py-2.5 text-right min-w-[130px]">Transacoes</th>
+              <th class="px-3 py-2.5 text-right min-w-[130px]">Caixa Projetado</th>
+              <th class="px-3 py-2.5 text-right min-w-[130px]">Caixa Atual</th>
+              <th class="px-3 py-2.5 text-right min-w-[130px]">Diferenca</th>
+              <th class="px-3 py-2.5 text-center min-w-[80px]">Status</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-caixa"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="empty-caixa" class="text-gray-400 text-sm py-8 text-center" style="display:none">Nenhuma divergencia de caixa encontrada.</p>
+  </div>
+
+  <!-- ── Modal: carteiras afetadas (Anomalias em ativos) ──────────────────── -->
+  <div id="concil-wallets-modal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+       onclick="if (event.target === this) closeConcilWalletsModal()">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+      <div class="px-5 py-3 border-b flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h3 class="text-sm font-semibold text-gray-700">Carteiras afetadas</h3>
+          <p id="concil-wallets-modal-sub" class="text-[11px] text-gray-500 mt-0.5 truncate"></p>
+        </div>
+        <button type="button" onclick="closeConcilWalletsModal()"
+          class="text-gray-400 hover:text-gray-700 text-lg leading-none" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="overflow-y-auto">
+        <table class="w-full text-xs border-collapse">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2 text-left">Carteira</th>
+              <th class="px-3 py-2 text-left">securityId</th>
+              <th class="px-3 py-2 text-right">Impacto</th>
+            </tr>
+          </thead>
+          <tbody id="concil-wallets-modal-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tab 6: Preços de Execução ───────────────────────────────────────── -->
+  <div id="tab-execprice" class="tab-content px-6 pt-4 pb-6 hidden">
+    <p class="text-[11px] text-gray-500 mb-3">
+      Securities com <strong>amountDifference</strong> e transação buySell associada na data.
+      Para cada um, o preço de execução implícito (<code>−Σbalance ÷ ΔQtd</code>) é comparado
+      com o preço usado pelo sistema (<code>executionPrice</code> ou <code>PU</code>); divergências
+      maiores que 0,5% são listadas. Selecione as linhas a enviar para Correções —
+      cada linha vira uma entrada em <em>Preços de Execução</em> que pode então ser
+      empurrada para a API upstream.
+    </p>
+    <div id="execprice-export-bar" class="mb-3 flex items-center gap-3" style="display:none">
+      <span class="text-xs text-gray-500"><span id="execprice-selected-count">0</span> selecionado(s)</span>
+      <button id="execprice-export-btn" onclick="sendExecPricesToCorrecoes()" disabled
+        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded px-4 py-1.5 text-xs font-semibold transition-colors">
+        Enviar para Correções
+      </button>
+      <span id="execprice-export-status" class="text-xs text-gray-500"></span>
+    </div>
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="tbl-execprice" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 w-10 text-center">
+                <input type="checkbox" id="execprice-select-all" onchange="toggleExecPriceSelectAll()" class="rounded" title="Selecionar todos pendentes">
+              </th>
+              <th class="px-3 py-2.5 text-left min-w-[180px]">Carteira</th>
+              <th class="px-3 py-2.5 text-left min-w-[260px]">Ativo</th>
+              <th class="px-3 py-2.5 text-right">ΔQtd</th>
+              <th class="px-3 py-2.5 text-right">Preço usado</th>
+              <th class="px-3 py-2.5 text-right">Preço sugerido</th>
+              <th class="px-3 py-2.5 text-right">Δ %</th>
+              <th class="px-3 py-2.5 text-right">Impacto</th>
+              <th class="px-3 py-2.5 text-center">Status</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-execprice"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="empty-execprice" class="text-gray-400 text-sm py-8 text-center" style="display:none">Nenhum preço de execução divergente encontrado.</p>
+  </div>
+
+</div>
+
+<script>
+/* ── State ────────────────────────────────────────────────────────────────── */
+let _company = '';
+let _date    = '';
+let _walletNames = {};
+
+/* ── Formatters ───────────────────────────────────────────────────────────── */
+const fmtMoney = v =>
+  v == null ? '<span class="text-gray-300">\u2014</span>'
+            : v.toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+const fmtPct = v =>
+  v == null ? '<span class="text-gray-300">\u2014</span>'
+            : (v * 100).toLocaleString("pt-BR", {minimumFractionDigits: 4, maximumFractionDigits: 4}) + "%";
+
+function escHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/* ── Navigation helper ───────────────────────────────────────────────────── */
+function goTo(page) {
+  const params = new URLSearchParams({ companyId: _company, date: _date }).toString();
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'navigate', path: page, params: params }, '*');
+  } else {
+    window.location.href = `${page}?${params}`;
+  }
+}
+
+/* ── Company / date handlers ──────────────────────────────────────────────── */
+function onCompanyChange() {
+  _company = document.getElementById("company-select").value;
+  _date = '';
+  document.getElementById("results").classList.add("hidden");
+  document.getElementById("analyze-btn").disabled = true;
+  if (_company) loadDates();
+  else document.getElementById("dates-section").classList.add("hidden");
+}
+
+function onEndDateChange() {
+  if (_company) loadDates();
+}
+
+async function loadDates() {
+  const end = document.getElementById("end-date-input").value;
+  const qs = `companyId=${encodeURIComponent(_company)}` + (end ? `&endDate=${end}` : '');
+  const res = await fetch(`/api/painel/dates?${qs}`);
+  const { cards } = await res.json();
+
+  document.getElementById("date-cards").innerHTML = cards.map(c => `
+    <button data-date="${escHtml(c.date)}" onclick="selectDate('${escHtml(c.date)}')"
+      class="date-card border-2 border-gray-200 rounded-xl px-3 py-3 text-left bg-white hover:border-blue-300 transition-colors">
+      <p class="card-date text-[10px] font-semibold text-gray-500 truncate">${escHtml(c.date)}</p>
+      <p class="card-total text-2xl font-bold ${c.total > 0 ? 'text-gray-700' : 'text-gray-300'} mt-1">${c.total}</p>
+      <p class="text-[10px] text-gray-400 mt-0.5">carteiras</p>
+    </button>`).join("");
+
+  document.getElementById("dates-section").classList.remove("hidden");
+  document.getElementById("results").classList.add("hidden");
+  _date = '';
+  document.getElementById("analyze-btn").disabled = true;
+  if (cards.length) selectDate(cards[cards.length - 1].date);
+}
+
+function selectDate(date) {
+  _date = date;
+  document.querySelectorAll(".date-card").forEach(c =>
+    c.classList.toggle("active", c.dataset.date === date)
+  );
+  document.getElementById("analyze-btn").disabled = false;
+}
+
+/* ── Tab switching ────────────────────────────────────────────────────────── */
+function switchTab(tabId) {
+  document.querySelectorAll(".tab-content").forEach(t => t.classList.add("hidden"));
+  document.getElementById(tabId).classList.remove("hidden");
+  document.querySelectorAll(".tab-btn").forEach(b => {
+    const isActive = b.dataset.tab === tabId;
+    b.classList.toggle("active", isActive);
+    if (!isActive) {
+      b.style.borderBottomColor = "transparent";
+      b.style.color = "";
+    } else {
+      b.style.borderBottomColor = "";
+      b.style.color = "";
+    }
+  });
+}
+
+/* ── Run analysis ─────────────────────────────────────────────────────────── */
+async function runAnalysis() {
+  if (!_company || !_date) return;
+
+  document.getElementById("loading").classList.remove("hidden");
+  document.getElementById("results").classList.add("hidden");
+  document.getElementById("analyze-btn").disabled = true;
+
+  const cid = encodeURIComponent(_company);
+  const dt  = encodeURIComponent(_date);
+
+  const safe = (p) => p.catch(() => null);
+
+  const [namesData, concilData, buysellData, rentabData, posicoesData, caixaData, execPriceData, anomalyKeysData] = await Promise.all([
+    safe(fetch(`/api/painel/wallet-names?companyId=${cid}`).then(r => r.json())),
+    safe(fetch(`/api/conciliacao/global-analysis?companyId=${cid}&date=${dt}`).then(r => r.json())),
+    safe(fetch(`/api/conciliacao/transaction-check?companyId=${cid}&date=${dt}`).then(r => r.json())),
+    safe(fetch(`/api/validacao-rentabilidades/securities?companyId=${cid}&date=${dt}`).then(r => r.json())),
+    safe(fetch(`/api/posicoes/analyze?companyId=${cid}&date=${dt}`).then(r => r.json())),
+    safe(fetch(`/api/caixa/analyze?companyId=${cid}&date=${dt}`).then(r => r.json())),
+    safe(fetch(`/api/conciliacao/global-execution-prices?companyId=${cid}&date=${dt}`).then(r => r.json())),
+    safe(fetch(`/api/correcoes/anomaly-keys?companyId=${cid}&date=${dt}`).then(r => r.json())),
+  ]);
+
+  _walletNames = namesData || {};
+  _concilAnomalyKeys = new Set((anomalyKeysData && anomalyKeysData.keys) || []);
+
+  document.getElementById("loading").classList.add("hidden");
+  document.getElementById("results").classList.remove("hidden");
+  document.getElementById("analyze-btn").disabled = false;
+
+  renderConcil(concilData || { securities: [] });
+  renderBuySell(buysellData || { unmatched: [], totalTransactions: 0 });
+  renderRentab(rentabData || { securities: [] });
+  renderPosicoes(posicoesData || { wallets: [] });
+  renderCaixa(caixaData || { wallets: [] });
+  renderExecPrice(execPriceData || { rows: [] });
+  renderAnomalyPills(concilData, buysellData, rentabData, posicoesData, caixaData, execPriceData);
+
+  switchTab('tab-concil');
+}
+
+/* ── Render: Anomaly pills ────────────────────────────────────────────────── */
+function renderAnomalyPills(concilData, buysellData, rentabData, posicoesData, caixaData, execPriceData) {
+  const concilSecs  = (concilData  || {}).securities || [];
+  const unmatched   = (buysellData || {}).unmatched  || [];
+  const rentabSecs  = (rentabData  || {}).securities || [];
+  const rentabAnom  = rentabSecs.filter(s => s.isAnomaly);
+  const posWallets  = (posicoesData || {}).wallets   || [];
+  const caixaWallets = ((caixaData || {}).wallets || []).filter(w => w.isAnomaly);
+  const execRows    = ((execPriceData || {}).rows || []).filter(r => !r.accepted);
+
+  const pills = [
+    { label: "Anomalias em ativos",   count: concilSecs.length,  tab: "tab-concil"   },
+    { label: "Anomalias em transacoes", count: unmatched.length, tab: "tab-buysell"  },
+    { label: "Anomalias Rentab.",    count: rentabAnom.length,   tab: "tab-rentab"   },
+    { label: "Divergencias Posicao", count: posWallets.length,  tab: "tab-posicoes" },
+    { label: "Divergencias Caixa",   count: caixaWallets.length, tab: "tab-caixa"   },
+    { label: "Preços de Execução",   count: execRows.length,     tab: "tab-execprice" },
+  ];
+
+  const container = document.getElementById("anomaly-pills");
+  container.innerHTML = pills.map(p => `
+    <button onclick="switchTab('${p.tab}')"
+      class="rounded-full px-4 py-1.5 text-xs font-semibold border transition-colors cursor-pointer
+      ${p.count > 0
+        ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+        : 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'}">
+      ${escHtml(p.label)}
+      <span class="ml-1 font-bold">${p.count}</span>
+    </button>`).join("");
+}
+
+/* ── Render: Tab 1 \u2014 Global Analysis ──────────────────────────────────────── */
+const EXPORTABLE_FLAGS = new Set(["MISSING_TRANSACTION", "MISSING_PROVISION", "MISSING_EVENT"]);
+let _concilRows = [];
+let _concilAnomalyKeys = new Set();
+
+function _anomalyKey(walletId, flag, securityId) {
+  return `${_company}|${_date}|${walletId}|${flag}|${securityId || ""}`;
+}
+
+function _rowFullyMoved(row) {
+  if (!EXPORTABLE_FLAGS.has(row.flag)) return false;
+  const ws = row.wallets || [];
+  if (!ws.length) return false;
+  return ws.every(w => _concilAnomalyKeys.has(_anomalyKey(w.walletId, row.flag, row.securityId)));
+}
+
+function renderConcil(data) {
+  _concilRows = data.securities || [];
+  document.getElementById("badge-concil").textContent = _concilRows.length;
+
+  const hasExportable = _concilRows.some(s =>
+    EXPORTABLE_FLAGS.has(s.flag) && !_rowFullyMoved(s)
+  );
+  document.getElementById("concil-export-bar").style.display = hasExportable ? "" : "none";
+  document.getElementById("concil-select-all").checked = false;
+  document.getElementById("concil-export-status").textContent = "";
+
+  if (!_concilRows.length) {
+    document.getElementById("tbl-concil").style.display = "none";
+    document.getElementById("empty-concil").style.display = "";
+    updateConcilExportBtn();
+    return;
+  }
+  document.getElementById("tbl-concil").style.display = "";
+  document.getElementById("empty-concil").style.display = "none";
+
+  document.getElementById("tbody-concil").innerHTML = _concilRows.map((s, i) => {
+    const moved      = _rowFullyMoved(s);
+    const exportable = EXPORTABLE_FLAGS.has(s.flag) && !moved;
+
+    const cbCell = exportable
+      ? `<td class="px-3 py-2.5 text-center" onclick="event.stopPropagation()">
+           <input type="checkbox" class="concil-row-cb rounded" data-idx="${i}" onchange="updateConcilSelectAll()">
+         </td>`
+      : `<td class="px-3 py-2.5 text-center">${moved ? '<span class="text-gray-300" title="Ja enviado para Correcoes">&#10003;</span>' : ''}</td>`;
+
+    const rowCls = moved
+      ? "border-t border-gray-100 opacity-50 cursor-pointer"
+      : "border-t border-gray-100 hover:bg-blue-50 cursor-pointer";
+    const textCls = moved ? "text-gray-400" : "text-gray-700";
+    const typeCls = moved ? "text-gray-400" : "text-gray-500";
+    const flagCls = moved
+      ? "bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded text-[10px] font-mono line-through"
+      : "bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[10px] font-mono";
+
+    return `
+    <tr class="${rowCls}" onclick="goTo('/conciliacao')">
+      ${cbCell}
+      <td class="px-3 py-2.5 font-medium ${textCls} whitespace-nowrap">${escHtml(s.securityName)}</td>
+      <td class="px-3 py-2.5 ${typeCls}">${escHtml(s.securityType)}</td>
+      <td class="px-3 py-2.5">
+        <span class="${flagCls}">${escHtml(s.flag)}</span>
+      </td>
+      <td class="px-3 py-2.5 text-right font-mono ${moved ? 'text-gray-400' : ''}">${fmtMoney(s.totalImpact)}</td>
+      <td class="px-3 py-2.5 text-right font-mono ${moved ? 'text-gray-400' : ''}">${fmtMoney(s.avgImpact)}</td>
+      <td class="px-3 py-2.5 text-right ${moved ? 'text-gray-400' : ''}">
+        <button type="button" onclick="event.stopPropagation(); openConcilWalletsModal(${i})"
+          class="underline decoration-dotted hover:text-blue-700 hover:decoration-solid"
+          title="Ver carteiras afetadas">${s.walletCount}</button>
+      </td>
+    </tr>`;
+  }).join("");
+
+  updateConcilExportBtn();
+}
+
+function toggleConcilSelectAll() {
+  const checked = document.getElementById("concil-select-all").checked;
+  document.querySelectorAll(".concil-row-cb").forEach(cb => { cb.checked = checked; });
+  updateConcilExportBtn();
+}
+
+function updateConcilSelectAll() {
+  const boxes = document.querySelectorAll(".concil-row-cb");
+  const allChecked = boxes.length > 0 && Array.from(boxes).every(cb => cb.checked);
+  document.getElementById("concil-select-all").checked = allChecked;
+  updateConcilExportBtn();
+}
+
+function getConcilSelectedRows() {
+  return Array.from(document.querySelectorAll(".concil-row-cb:checked"))
+    .map(cb => _concilRows[parseInt(cb.dataset.idx, 10)])
+    .filter(Boolean);
+}
+
+function updateConcilExportBtn() {
+  const n = getConcilSelectedRows().length;
+  document.getElementById("concil-selected-count").textContent = n;
+  document.getElementById("concil-export-btn").disabled = n === 0;
+}
+
+/* ── Modal: carteiras afetadas ───────────────────────────────────────────── */
+function openConcilWalletsModal(rowIdx) {
+  const row = _concilRows[rowIdx];
+  if (!row) return;
+  const wallets = row.wallets || [];
+  const sid = row.securityId || "";
+  document.getElementById("concil-wallets-modal-sub").textContent =
+    `${row.securityName || ""} • ${row.flag || ""} • ${wallets.length} carteira(s)`;
+  document.getElementById("concil-wallets-modal-body").innerHTML = wallets.length
+    ? wallets.map(w => `
+        <tr class="border-t border-gray-100">
+          <td class="px-3 py-2 text-gray-700 whitespace-nowrap">${escHtml(w.walletName || _walletNames[w.walletId] || w.walletId)}</td>
+          <td class="px-3 py-2 font-mono text-[11px] text-gray-500 break-all">${escHtml(sid)}</td>
+          <td class="px-3 py-2 text-right font-mono">${fmtMoney(w.impact)}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="3" class="px-3 py-4 text-center text-gray-400">Sem carteiras.</td></tr>`;
+  document.getElementById("concil-wallets-modal").classList.remove("hidden");
+}
+
+function closeConcilWalletsModal() {
+  document.getElementById("concil-wallets-modal").classList.add("hidden");
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeConcilWalletsModal();
+});
+
+/* ── Send selected anomalies -> /api/correcoes/bulk ───────────────────────── */
+async function sendSelectedToCorrecoes() {
+  const rows = getConcilSelectedRows();
+  if (!rows.length) return;
+
+  const btn    = document.getElementById("concil-export-btn");
+  const status = document.getElementById("concil-export-status");
+  btn.disabled = true;
+  status.textContent = "Enviando...";
+
+  // Group items by walletId, tagging each with its wallet-level anomaly key.
+  const byWallet = new Map();
+  for (const row of rows) {
+    for (const w of (row.wallets || [])) {
+      const wid = w.walletId;
+      if (!byWallet.has(wid)) byWallet.set(wid, []);
+      byWallet.get(wid).push({
+        flag:              row.flag,
+        securityId:        row.securityId,
+        securityName:      row.securityName,
+        impact:            w.impact,
+        sourceAnomalyKey:  _anomalyKey(wid, row.flag, row.securityId),
+      });
+    }
+  }
+
+  try {
+    // 1) Materialize rows through the conciliacao generators (one call pair per wallet).
+    const walletBuckets = {}; // {walletId: {transactions: [], provisions: []}}
+    const walletIds = [];
+    const calls = [];
+    for (const [walletId, items] of byWallet.entries()) {
+      walletIds.push(walletId);
+      const body = JSON.stringify({ walletId, date: _date, items });
+      calls.push(
+        fetch("/api/conciliacao/generate-transactions", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body
+        }).then(r => r.ok ? r.json() : Promise.reject(new Error(`txn ${r.status}`))),
+        fetch("/api/conciliacao/generate-provisions", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body
+        }).then(r => r.ok ? r.json() : Promise.reject(new Error(`prov ${r.status}`))),
+      );
+    }
+    const results = await Promise.all(calls);
+    let companyId = _company;
+    for (let i = 0; i < walletIds.length; i++) {
+      const wid = walletIds[i];
+      const txnRes  = results[i * 2];
+      const provRes = results[i * 2 + 1];
+      if (txnRes?.companyId) companyId = txnRes.companyId;
+      walletBuckets[wid] = {
+        transactions: txnRes?.transactions  || [],
+        provisions:   provRes?.provisions   || [],
+      };
+    }
+
+    // 2) Bulk-append to the correcoes store.
+    const bulkRes = await fetch("/api/correcoes/bulk", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ companyId, date: _date, wallets: walletBuckets }),
+    });
+    if (!bulkRes.ok) {
+      const err = await bulkRes.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${bulkRes.status}`);
+    }
+    const { added } = await bulkRes.json();
+    const total = (added?.transactions || 0) + (added?.provisions || 0);
+
+    // 3) Refresh anomaly keys and re-render so rows go gray.
+    const refreshed = await fetch(
+      `/api/correcoes/anomaly-keys?companyId=${encodeURIComponent(_company)}&date=${encodeURIComponent(_date)}`
+    ).then(r => r.json()).catch(() => ({ keys: [] }));
+    _concilAnomalyKeys = new Set(refreshed.keys || []);
+    renderConcil({ securities: _concilRows });
+
+    status.textContent = total
+      ? `${total} linha(s) enviada(s) para Correcoes.`
+      : "Nenhuma linha gerada (flags selecionados nao produzem correcao automatica).";
+  } catch (err) {
+    status.textContent = `Erro: ${err.message}`;
+    updateConcilExportBtn();
+  }
+}
+
+/* ── Render: Tab 2 \u2014 buySell Transactions ─────────────────────────────────── */
+function renderBuySell(data) {
+  const items = data.unmatched || [];
+  const total = data.totalTransactions || 0;
+  document.getElementById("badge-buysell").textContent =
+    total ? `${items.length}/${total}` : '0';
+
+  if (!items.length) {
+    document.getElementById("tbl-buysell").style.display = "none";
+    document.getElementById("empty-buysell").style.display = "";
+    return;
+  }
+  document.getElementById("tbl-buysell").style.display = "";
+  document.getElementById("empty-buysell").style.display = "none";
+
+  document.getElementById("tbody-buysell").innerHTML = items.map(u => `
+    <tr class="border-t border-gray-100 hover:bg-blue-50 cursor-pointer" onclick="goTo('/conciliacao')">
+      <td class="px-3 py-2.5 text-gray-700 whitespace-nowrap">${escHtml(u.walletName)}</td>
+      <td class="px-3 py-2.5 font-medium whitespace-nowrap">${escHtml(u.securityName)}</td>
+      <td class="px-3 py-2.5 text-gray-500">${escHtml(u.direction)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(u.balance)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(u.quantity)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(u.price)}</td>
+      <td class="px-3 py-2.5 text-red-600">${escHtml(u.problem)}</td>
+    </tr>`).join("");
+}
+
+/* ── Render: Tab 3 \u2014 Validacao Rentabilidades ──────────────────────────────── */
+function renderRentab(data) {
+  const secs = data.securities || [];
+  const anomalies = secs.filter(s => s.isAnomaly);
+  document.getElementById("badge-rentab").textContent =
+    secs.length ? `${anomalies.length}/${secs.length}` : '0';
+
+  if (!secs.length) {
+    document.getElementById("tbl-rentab").style.display = "none";
+    document.getElementById("empty-rentab").style.display = "";
+    return;
+  }
+  document.getElementById("tbl-rentab").style.display = "";
+  document.getElementById("empty-rentab").style.display = "none";
+
+  document.getElementById("tbody-rentab").innerHTML = secs.map(s => `
+    <tr class="border-t border-gray-100 hover:bg-blue-50 cursor-pointer ${s.isAnomaly ? 'bg-red-50' : ''}" onclick="goTo('/validacao-rentabilidades')">
+      <td class="px-3 py-2.5 text-gray-700 whitespace-nowrap">${escHtml(_walletNames[s.walletId] || s.walletId)}</td>
+      <td class="px-3 py-2.5 font-medium whitespace-nowrap">${escHtml(s.beehusName)}</td>
+      <td class="px-3 py-2.5 text-gray-500">${escHtml(s.pricingType)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtPct(s.rentabPU)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtPct(s.rentabContribution)}</td>
+      <td class="px-3 py-2.5 text-center">
+        ${s.isAnomaly
+          ? '<span class="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[10px] font-semibold">Anomalia</span>'
+          : '<span class="text-green-600 text-[10px]">OK</span>'}
+      </td>
+    </tr>`).join("");
+}
+
+/* ── Render: Tab 4 \u2014 Validacao Posicoes ────────────────────────────────────── */
+function renderPosicoes(data) {
+  const wallets = data.wallets || [];
+  document.getElementById("badge-posicoes").textContent = wallets.length;
+
+  if (!wallets.length) {
+    document.getElementById("tbl-posicoes").style.display = "none";
+    document.getElementById("empty-posicoes").style.display = "";
+    return;
+  }
+  document.getElementById("tbl-posicoes").style.display = "";
+  document.getElementById("empty-posicoes").style.display = "none";
+
+  document.getElementById("tbody-posicoes").innerHTML = wallets.map(w => `
+    <tr class="border-t border-gray-100 hover:bg-blue-50 cursor-pointer" onclick="goTo('/posicoes')">
+      <td class="px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">${escHtml(w.walletName)}</td>
+      <td class="px-3 py-2.5 text-right text-red-600 font-semibold">${w.flags}</td>
+      <td class="px-3 py-2.5 text-right">${w.totalUnprocessed}</td>
+      <td class="px-3 py-2.5 text-right">${w.totalProcessed}</td>
+    </tr>`).join("");
+}
+
+/* ── Render / Send: Tab 6 — Preços de Execução ────────────────────────────── */
+let _execPriceRows = [];
+
+const fmtPx = v =>
+  v == null ? '<span class="text-gray-300">—</span>'
+            : Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 4, maximumFractionDigits: 8});
+
+function renderExecPrice(data) {
+  _execPriceRows = data.rows || [];
+  const pending = _execPriceRows.filter(r => !r.accepted);
+  document.getElementById("badge-execprice").textContent =
+    _execPriceRows.length ? `${pending.length}/${_execPriceRows.length}` : '0';
+
+  const exportBar = document.getElementById("execprice-export-bar");
+  exportBar.style.display = pending.length ? "" : "none";
+  document.getElementById("execprice-select-all").checked = false;
+  document.getElementById("execprice-export-status").textContent = "";
+
+  if (!_execPriceRows.length) {
+    document.getElementById("tbl-execprice").style.display = "none";
+    document.getElementById("empty-execprice").style.display = "";
+    updateExecPriceExportBtn();
+    return;
+  }
+  document.getElementById("tbl-execprice").style.display = "";
+  document.getElementById("empty-execprice").style.display = "none";
+
+  document.getElementById("tbody-execprice").innerHTML = _execPriceRows.map((r, i) => {
+    const accepted = !!r.accepted;
+    const cb = accepted
+      ? `<td class="px-3 py-2.5 text-center"><span class="text-gray-300" title="Já está em Correções">&#10003;</span></td>`
+      : `<td class="px-3 py-2.5 text-center" onclick="event.stopPropagation()">
+           <input type="checkbox" class="execprice-row-cb rounded" data-idx="${i}" onchange="updateExecPriceSelectAll()">
+         </td>`;
+    const rowCls = accepted
+      ? "border-t border-gray-100 opacity-50"
+      : "border-t border-gray-100 hover:bg-blue-50";
+    const textCls = accepted ? "text-gray-400" : "text-gray-700";
+    const deltaSign = (r.deltaPct || 0) > 0 ? '+' : '';
+    const statusBadge = accepted
+      ? `<span class="bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-semibold">✓ Em Correções</span>`
+      : `<span class="bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded text-[10px] font-semibold">Pendente</span>`;
+    return `
+    <tr class="${rowCls}">
+      ${cb}
+      <td class="px-3 py-2.5 ${textCls} whitespace-nowrap">${escHtml(r.walletName)}</td>
+      <td class="px-3 py-2.5 ${textCls}">${escHtml(r.securityName)}</td>
+      <td class="px-3 py-2.5 text-right font-mono ${accepted ? 'text-gray-400' : ''}">${fmtMoney(r.amountDiff)}</td>
+      <td class="px-3 py-2.5 text-right font-mono ${accepted ? 'text-gray-400' : ''}">${fmtPx(r.priceUsed)}</td>
+      <td class="px-3 py-2.5 text-right font-mono ${accepted ? 'text-gray-400' : 'font-semibold text-purple-700'}">${fmtPx(r.expectedExecPrice)}</td>
+      <td class="px-3 py-2.5 text-right font-mono ${accepted ? 'text-gray-400' : ''}">${deltaSign}${(r.deltaPct || 0).toFixed(2)}%</td>
+      <td class="px-3 py-2.5 text-right font-mono ${accepted ? 'text-gray-400' : ''}">${fmtMoney(r.impact)}</td>
+      <td class="px-3 py-2.5 text-center">${statusBadge}</td>
+    </tr>`;
+  }).join("");
+
+  updateExecPriceExportBtn();
+}
+
+function toggleExecPriceSelectAll() {
+  const checked = document.getElementById("execprice-select-all").checked;
+  document.querySelectorAll(".execprice-row-cb").forEach(cb => { cb.checked = checked; });
+  updateExecPriceExportBtn();
+}
+
+function updateExecPriceSelectAll() {
+  const boxes = document.querySelectorAll(".execprice-row-cb");
+  const allChecked = boxes.length > 0 && Array.from(boxes).every(cb => cb.checked);
+  document.getElementById("execprice-select-all").checked = allChecked;
+  updateExecPriceExportBtn();
+}
+
+function getExecPriceSelectedRows() {
+  return Array.from(document.querySelectorAll(".execprice-row-cb:checked"))
+    .map(cb => _execPriceRows[parseInt(cb.dataset.idx, 10)])
+    .filter(Boolean);
+}
+
+function updateExecPriceExportBtn() {
+  const n = getExecPriceSelectedRows().length;
+  document.getElementById("execprice-selected-count").textContent = n;
+  document.getElementById("execprice-export-btn").disabled = n === 0;
+}
+
+async function sendExecPricesToCorrecoes() {
+  const rows = getExecPriceSelectedRows();
+  if (!rows.length) return;
+
+  const btn    = document.getElementById("execprice-export-btn");
+  const status = document.getElementById("execprice-export-status");
+  btn.disabled = true;
+  status.textContent = "Enviando...";
+
+  // Group by wallet, build the items[] each generator expects (mirrors the
+  // diagnose modal's MISSING_EXECUTION_PRICE flag shape so the generator can
+  // pull executionPrice / pu / actualBalance / amountDiff / sourceAnomalyKey).
+  const byWallet = new Map();
+  for (const r of rows) {
+    if (!byWallet.has(r.walletId)) byWallet.set(r.walletId, []);
+    byWallet.get(r.walletId).push({
+      flag:                "MISSING_EXECUTION_PRICE",
+      securityId:          r.securityId,
+      securityName:        r.securityName,
+      impact:              r.impact,
+      expectedExecPrice:   r.expectedExecPrice,
+      executionPrice:      r.priorExecutionPrice,  // price the system used (carried into row.priorExecutionPrice on save)
+      pu:                  r.pu,
+      expectedValue:       r.expectedValue,
+      actualBalance:       r.actualBalance,
+      amountDiff:          r.amountDiff,
+      sourceAnomalyKey:    r.sourceAnomalyKey,
+    });
+  }
+
+  try {
+    const walletBuckets = {};
+    let companyId = _company;
+    const walletIds = [];
+    const calls = [];
+    for (const [walletId, items] of byWallet.entries()) {
+      walletIds.push(walletId);
+      const body = JSON.stringify({ walletId, date: _date, items });
+      calls.push(
+        fetch("/api/conciliacao/generate-execution-prices", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body
+        }).then(r => r.ok ? r.json() : Promise.reject(new Error(`exec ${r.status}`)))
+      );
+    }
+    const results = await Promise.all(calls);
+    for (let i = 0; i < walletIds.length; i++) {
+      const res = results[i];
+      if (res?.companyId) companyId = res.companyId;
+      walletBuckets[walletIds[i]] = {
+        executionPrices: res?.executionPrices || [],
+      };
+    }
+
+    const bulkRes = await fetch("/api/correcoes/bulk", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ companyId, date: _date, wallets: walletBuckets }),
+    });
+    const bulkBody = await bulkRes.json().catch(() => ({}));
+    if (!bulkRes.ok) {
+      throw new Error(bulkBody.error || `HTTP ${bulkRes.status}`);
+    }
+    if (Array.isArray(bulkBody.rejected) && bulkBody.rejected.length) {
+      const reasons = bulkBody.rejected.map(r => `${r.walletId} (${r.reason})`).join(", ");
+      throw new Error(`Carteira(s) rejeitada(s): ${reasons}`);
+    }
+
+    const total = (bulkBody.added && bulkBody.added.executionPrices) || 0;
+
+    // Refresh anomaly keys + mark accepted rows so they go gray.
+    const refreshed = await fetch(
+      `/api/correcoes/anomaly-keys?companyId=${encodeURIComponent(_company)}&date=${encodeURIComponent(_date)}`
+    ).then(r => r.json()).catch(() => ({ keys: [] }));
+    const keys = new Set(refreshed.keys || []);
+    _execPriceRows.forEach(r => { if (keys.has(r.sourceAnomalyKey)) r.accepted = true; });
+    renderExecPrice({ rows: _execPriceRows });
+
+    status.textContent = total
+      ? `${total} preço(s) enviado(s) para Correções.`
+      : "Nenhuma linha gerada.";
+  } catch (err) {
+    status.textContent = `Erro: ${err.message}`;
+    updateExecPriceExportBtn();
+  }
+}
+
+/* ── Render: Tab 5 — Validacao Caixa ───────────────────────────────────────── */
+function renderCaixa(data) {
+  const wallets = (data.wallets || []).filter(w => w.isAnomaly);
+  document.getElementById("badge-caixa").textContent = wallets.length;
+
+  if (!wallets.length) {
+    document.getElementById("tbl-caixa").style.display = "none";
+    document.getElementById("empty-caixa").style.display = "";
+    return;
+  }
+  document.getElementById("tbl-caixa").style.display = "";
+  document.getElementById("empty-caixa").style.display = "none";
+
+  document.getElementById("tbody-caixa").innerHTML = wallets.map(w => `
+    <tr class="border-t border-gray-100 hover:bg-blue-50 cursor-pointer bg-red-50" onclick="goTo('/caixa')">
+      <td class="px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">${escHtml(w.walletName)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(w.formerCash)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(w.totalTxns)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(w.projectedCash)}</td>
+      <td class="px-3 py-2.5 text-right font-mono">${fmtMoney(w.currentCash)}</td>
+      <td class="px-3 py-2.5 text-right font-mono font-semibold text-red-600">${fmtMoney(w.cashDiff)}</td>
+      <td class="px-3 py-2.5 text-center">
+        <span class="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[10px] font-semibold">Anomalia</span>
+      </td>
+    </tr>`).join("");
+}
+
+</script>
+
+{% endblock %}

@@ -7,7 +7,7 @@ Fluxo:
   3. Buscar candidatos em cache indexado + scoring
 """
 import re, unicodedata, json, os, logging
-from datetime import date as _date
+from datetime import datetime, date as _date
 from collections import defaultdict
 
 log = logging.getLogger(__name__)

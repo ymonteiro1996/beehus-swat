@@ -55,8 +55,7 @@ def _headers() -> dict:
     t = get_token()
     if not t:
         raise PartnerAuthError(
-            "Bearer token not set. Call set_token() with today's partner token "
-            "(CLI tools read it from the BEEHUS_PARTNER_TOKEN env var)."
+            "Bearer token not set. Open /parceiro and paste today's partner token."
         )
     return {
         "Authorization": f"Bearer {t}",
@@ -84,8 +83,7 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
 
     if r.status_code in (401, 403):
         raise PartnerAuthError(
-            f"Token rejected ({r.status_code}). Provide a fresh partner token via "
-            f"set_token() (CLI tools read it from BEEHUS_PARTNER_TOKEN).",
+            f"Token rejected ({r.status_code}). Re-paste today's partner token on /parceiro.",
             status=r.status_code,
             body=r.text[:500],
         )

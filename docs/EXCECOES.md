@@ -51,7 +51,7 @@ data/excecoes/<companyId>/<exceptionId>.json
 - `sourceWalletId` é a carteira **sinalizada como exceção**. Sua posição diária é a fonte dos valores que migram para as carteiras de saída.
 - `outputWalletIds` é a lista de carteiras alvo. A origem **não** é incluída automaticamente — só aparece como destino se o usuário a escolher explicitamente em uma regra.
 - `kind` é o tipo de exceção. Hoje só existe `position_strip`; futuros tipos vão coexistir no mesmo arquivo.
-- `rules[].unprocessedId` referencia um ativo agregado da posição da origem (mesmo agrupamento usado em `pages/excecoes._aggregate_unprocessed`).
+- `rules[].unprocessedId` referencia um ativo agregado da posição da origem (mesmo agrupamento usado em `pages/posicoes._group_unprocessed`).
 - Cada regra deve ter `addToWalletId` e/ou `removeFromWalletId`. Ambas precisam pertencer a `{sourceWalletId} ∪ outputWalletIds`. Regras sem nenhum dos dois lados são silenciosamente descartadas no save.
 - `caixa` controla a coluna `Caixa` (Sim/Não) do Excel enviado. Default `false`.
 - Validação rígida de path: `[A-Za-z0-9_-]+` para ids e `YYYY-MM-DD` para datas. Outros valores → 400.
@@ -585,7 +585,7 @@ Regra do **"Ativo"** das rows day-trade: usa o `beehusName` da security (lido de
 
 Para cada `(walletId, date)` com pelo menos uma security day-traded:
 
-1. Lê o `unprocessedSecurityPositions` correspondente e agrega por `unprocessedId` (mesmo agrupamento de `pages/excecoes._aggregate_unprocessed`).
+1. Lê o `unprocessedSecurityPositions` correspondente e agrega por `unprocessedId` (mesmo agrupamento de `pages/posicoes._group_unprocessed`).
 2. Identifica os `unprocessedId`s do baseline que mapeiam (via `securityMappings.from→to`) para alguma security day-traded — esses são **removidos** do upload (`replacedUnprocessedIds[]`) para evitar dois nomes para a mesma security lógica no payload.
 3. Adiciona **uma** row sintética por `securityId` day-traded, com `quantity = pu = balance = 0` e `Ativo = beehusName`. Currency: a registrada na carteira (`db.wallets.currencyId`); fallback: a `currencyId` da transação.
 4. Securities cujo `securityId` não tem `beehusName` em `db.securities` ficam em `unmappedSecurityIds[]` (aviso amarelo) — sem nome não dá para construir a row.

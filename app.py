@@ -5,19 +5,24 @@ import subprocess
 
 from flask import Flask, jsonify, redirect, request, render_template
 from pymongo.errors import PyMongoError
+from pages.painel         import bp as painel_bp
 from pages.config         import bp as config_bp
 from pages.nav            import bp as nav_bp
 from pages.conciliacao    import bp as conciliacao_bp
 from pages.setup          import bp as setup_bp
 from pages.stubs          import bp as stubs_bp
+from pages.validacao_rentabilidades import bp as validacao_rentabilidades_bp
+from pages.posicoes      import bp as posicoes_bp
 from pages.caixa         import bp as caixa_bp
 from pages.correcoes     import bp as correcoes_bp
 from pages.beehus_console import bp as beehus_console_bp
 from pages.controlpanel   import bp as controlpanel_bp
+from pages.parceiro       import bp as parceiro_bp
 from pages.excecoes       import bp as excecoes_bp
 from pages.carteira       import bp as carteira_bp
 from pages.repetir_posicoes import bp as repetir_posicoes_bp
 from pages.precificacao   import bp as precificacao_bp
+from pages.fundos         import bp as fundos_bp
 import db as db_module
 import db_profiler
 import auth
@@ -41,19 +46,24 @@ db_profiler.install(app)
 # If a new blueprint registers its own before_request before this line, an
 # unauthenticated user hitting /setup gets a 401 instead of the setup page.
 auth.install(app)
+app.register_blueprint(painel_bp)
 app.register_blueprint(config_bp)
 app.register_blueprint(nav_bp)
 app.register_blueprint(conciliacao_bp)
 app.register_blueprint(setup_bp)
 app.register_blueprint(stubs_bp)
+app.register_blueprint(validacao_rentabilidades_bp)
+app.register_blueprint(posicoes_bp)
 app.register_blueprint(caixa_bp)
 app.register_blueprint(correcoes_bp)
 app.register_blueprint(beehus_console_bp)
 app.register_blueprint(controlpanel_bp)
+app.register_blueprint(parceiro_bp)
 app.register_blueprint(excecoes_bp)
 app.register_blueprint(carteira_bp)
 app.register_blueprint(repetir_posicoes_bp)
 app.register_blueprint(precificacao_bp)
+app.register_blueprint(fundos_bp)
 
 
 @app.route("/")

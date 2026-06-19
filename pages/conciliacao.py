@@ -116,8 +116,10 @@ def _sanitize(obj):
     if isinstance(obj, list):
         return [_sanitize(v) for v in obj]
     return _safe_num(obj)
-from pages.bayesian import (extract_factors, compute_summary,
+from pages.bayesian import (extract_factors, score_combinations, compute_summary,
                             optimize_with_validation, _load_config as _load_bayesian_config)
+
+_THRESHOLDS_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "rentability_thresholds.json")
 
 # ── Conciliação config (editable diff threshold) ──────────────────────────────
 _CONFIG_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "conciliacao_config.json")
@@ -170,6 +172,13 @@ def _diff_threshold_decimal(request_obj=None):
         pct = float(_load_conciliacao_config().get("diffThresholdPct", _DEFAULT_DIFF_THRESHOLD_PCT))
     # stored/UI unit is percent (e.g. 0.01 = 0.01%). Mongo compares decimals.
     return max(0.0, pct / 100.0)
+
+
+def _load_thresholds():
+    if not os.path.exists(_THRESHOLDS_FILE):
+        return {}
+    with open(_THRESHOLDS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 bp = Blueprint("conciliacao", __name__)
@@ -2004,12 +2013,34 @@ def diagnose():
             "sampleSize":    len(returns),
         }
 
-    # 6.2 Per-security anomalies — DISABLED. The sole producer of
-    # rentability_thresholds.json (the removed "Validação Rentabilidades"
-    # page) no longer exists, so there are no thresholds to compare against;
-    # this stays an empty list. Reintroduce a thresholds producer
-    # (batch/pre-compute) to re-enable per-security anomaly detection.
+    # 6.2 Per-security anomalies (from rentability_thresholds.json)
     security_anomalies = []
+    thresholds = _load_thresholds()
+    if thresholds:
+        for sec_entry in suspects:
+            sid   = sec_entry["securityId"]
+            th    = thresholds.get(sid)
+            ret   = None
+            # Compute rentabPU for this security
+            pu    = sec_entry.get("pu")
+            f_pu  = sec_entry.get("formerPu")
+            try:
+                ret = pu / f_pu - 1 if (pu and f_pu) else None
+            except (TypeError, ZeroDivisionError):
+                ret = None
+            if th and ret is not None:
+                lb = th.get("lowerBound")
+                ub = th.get("upperBound")
+                is_anom = (lb is not None and ub is not None) and (ret < lb or ret > ub)
+                if is_anom:
+                    security_anomalies.append({
+                        "securityId":    sid,
+                        "securityName":  sec_entry.get("name", ""),
+                        "currentReturn": round(ret, 8),
+                        "mean":          th.get("mean"),
+                        "stdDev":        th.get("stdDev"),
+                        "isAnomaly":     True,
+                    })
 
     step6_status = "ok"
     if (wallet_anomaly and wallet_anomaly["isAnomaly"]) or any(a["isAnomaly"] for a in security_anomalies):

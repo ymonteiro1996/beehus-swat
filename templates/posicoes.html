@@ -1,0 +1,491 @@
+{% extends "base.html" %}
+{% set active = "posicoes" %}
+{% block title %}Validação Processed{% endblock %}
+
+{% block head %}
+<style>
+  .table-wrap    { overflow-x: auto; max-height: calc(100vh - 340px); overflow-y: auto; }
+  .date-card.active { border-color: #1d4ed8; background: #eff6ff; }
+  .date-card.active .card-date  { color: #1d4ed8; }
+  .date-card.active .card-total { color: #1d4ed8; }
+  .flag-cell { background: #fef2f2; color: #dc2626; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- ══════════════════ MAIN VIEW ══════════════════ -->
+<div id="main-view">
+
+  <header class="bg-white shadow px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="font-semibold text-gray-700">Validação Processed</h1>
+  </header>
+
+  <!-- Filters -->
+  <div class="px-6 pt-5 pb-3 flex items-end gap-6 flex-wrap">
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5">Empresa</label>
+      <select id="company-select" onchange="onCompanyChange()"
+        class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[280px]">
+        <option value="">Selecione uma empresa...</option>
+        {% for c in companies %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5">Entidade</label>
+      <select id="entity-select" onchange="onEntityChange()"
+        class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[280px]">
+        <option value="">Todas</option>
+        {% for e in entities %}
+        <option value="{{ e.id }}">{{ e.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5">Data final</label>
+      <input type="date" id="end-date-input" onchange="onEndDateChange()"
+        class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+    </div>
+  </div>
+
+  <!-- Tolerances -->
+  <div class="px-6 pb-3 flex items-end gap-4 flex-wrap">
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5" title="Tolerancia para diferenca de quantidade">Tol. Quantidade</label>
+      <input type="number" id="tol-qty" value="0.0001" step="0.0001" min="0"
+        class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 w-28" />
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1.5" title="Tolerancia para diferenca de PU">Tol. PU</label>
+      <input type="number" id="tol-pu" value="0.01" step="0.001" min="0"
+        class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 w-28" />
+    </div>
+    <button id="run-btn" onclick="runAnalysis()" disabled
+      class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded px-5 py-2 text-sm font-semibold transition-colors">
+      Analisar
+    </button>
+  </div>
+
+  <!-- Date cards -->
+  <div id="dates-section" class="hidden px-6 pt-2 pb-2">
+    <p class="text-xs text-gray-400 mb-2">Selecione uma data:</p>
+    <div id="date-cards" class="grid grid-cols-10 gap-3"></div>
+  </div>
+
+  <!-- Analysis loading -->
+  <div id="analysis-loading" class="hidden px-6 py-8 text-center">
+    <p class="text-gray-400 text-sm">Analisando...</p>
+  </div>
+
+  <!-- Flagged wallets table -->
+  <div id="wallet-section" class="hidden px-6 pb-6 mt-4">
+    <div class="flex items-center gap-4 mb-3">
+      <p class="text-xs font-semibold text-gray-700">Carteiras com Divergencia</p>
+      <span id="wallet-count" class="text-xs text-gray-400"></span>
+      <input id="wallet-filter" type="text" oninput="filterWallets()" placeholder="Filtrar carteira..."
+        class="border rounded px-3 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[250px] ml-auto" />
+    </div>
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="w-full text-xs border-collapse" id="wallet-table" style="display:none">
+          <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+            <tr>
+              <th class="px-3 py-2.5 text-left min-w-[250px]">Carteira</th>
+              <th class="px-3 py-2.5 text-right min-w-[80px]">Flags</th>
+              <th class="px-3 py-2.5 text-right min-w-[110px]">Ativos Unproc.</th>
+              <th class="px-3 py-2.5 text-right min-w-[110px]">Ativos Proc.</th>
+              <th class="px-3 py-2.5 text-center min-w-[80px]">Detalhe</th>
+            </tr>
+          </thead>
+          <tbody id="wallet-tbody"></tbody>
+        </table>
+        <p id="wallet-msg" class="text-center text-gray-400 text-sm py-8">Selecione uma empresa e execute a analise.</p>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main-view -->
+
+
+<!-- ══════════════════ DETAIL MODAL ══════════════════ -->
+<div id="detail-modal" class="hidden fixed inset-0 z-50 overflow-auto bg-black/50 flex items-start justify-center pt-6 pb-6 px-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl flex flex-col" style="max-height:92vh">
+
+    <!-- Modal header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
+      <div>
+        <h2 class="font-semibold text-gray-800 text-sm">Detalhe Comparativo</h2>
+        <p id="detail-subtitle" class="text-[11px] text-gray-400 mt-0.5 font-mono"></p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="copyDetailTable()"
+          class="flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg px-3 py-1.5 text-xs font-semibold">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          Copiar
+        </button>
+        <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 ml-2 shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="px-6 pt-3 pb-1 flex items-center gap-4 text-[10px] shrink-0">
+      <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-red-100 border border-red-300 inline-block"></span> Divergencia</span>
+      <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-amber-100 border border-amber-300 inline-block"></span> Sem mapeamento / ausente</span>
+      <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-100 border border-blue-300 inline-block"></span> Somente processado</span>
+    </div>
+
+    <!-- Filter row -->
+    <div class="px-6 pb-2 flex items-center gap-3 shrink-0">
+      <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+        <input type="checkbox" id="detail-only-flags" onchange="renderDetail()" checked />
+        Apenas com divergencia
+      </label>
+      <input id="detail-filter" type="text" oninput="renderDetail()" placeholder="Filtrar ativo..."
+        class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[220px] ml-auto" />
+    </div>
+
+    <!-- Modal body -->
+    <div class="overflow-auto flex-1 px-6 pb-4">
+      <table class="w-full text-xs border-collapse" id="detail-table">
+        <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+          <tr>
+            <th class="px-3 py-2.5 text-left min-w-[240px]">Ativo</th>
+            <th class="px-3 py-2.5 text-left min-w-[70px]">Pricing</th>
+            <th class="px-3 py-2.5 text-left min-w-[80px]">Status</th>
+            <th class="px-3 py-2.5 text-right min-w-[120px]">Qtd Unproc.</th>
+            <th class="px-3 py-2.5 text-right min-w-[120px]">Qtd Proc.</th>
+            <th class="px-3 py-2.5 text-right min-w-[100px]">Diff Qtd</th>
+            <th class="px-3 py-2.5 text-right min-w-[110px]">PU Unproc.</th>
+            <th class="px-3 py-2.5 text-right min-w-[110px]">PU Proc.</th>
+            <th class="px-3 py-2.5 text-right min-w-[100px]">Diff PU</th>
+            <th class="px-3 py-2.5 text-right min-w-[130px]">Saldo Unproc.</th>
+            <th class="px-3 py-2.5 text-right min-w-[130px]">Saldo Proc.</th>
+          </tr>
+        </thead>
+        <tbody id="detail-tbody"></tbody>
+      </table>
+      <p id="detail-msg" class="text-center text-gray-400 py-8 text-xs" style="display:none"></p>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}
+
+{% block modals %}
+<script>
+  let _selectedCompany = "";
+  let _selectedEntity  = "";
+  let _selectedDate    = null;
+  let _walletsData     = [];
+  let _detailData      = [];
+  let _detailWalletName = "";
+
+  // ── Number formatting ───────────────────────────────────────────────────────
+  const fmtNum = v =>
+    v == null ? '<span class="text-gray-300">--</span>'
+              : v.toLocaleString("pt-BR", {minimumFractionDigits: 6, maximumFractionDigits: 6});
+
+  const fmtMoney = v =>
+    v == null ? '<span class="text-gray-300">--</span>'
+              : v.toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+  function escHtml(s) {
+    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  // end-date starts empty — server auto-detects last processedPosition date
+
+  function _updateRunBtn() {
+    document.getElementById("run-btn").disabled = !(_selectedCompany || _selectedEntity);
+  }
+
+  // ── Company / Entity change ─────────────────────────────────────────────────
+  function onCompanyChange() {
+    _selectedCompany = document.getElementById("company-select").value;
+    _selectedDate = null;
+    _updateRunBtn();
+    resetResults();
+    document.getElementById("end-date-input").value = "";
+    if (_selectedCompany) loadDates();
+  }
+
+  function onEntityChange() {
+    _selectedEntity = document.getElementById("entity-select").value;
+    _selectedDate = null;
+    _updateRunBtn();
+    resetResults();
+    document.getElementById("end-date-input").value = "";
+    if (_selectedCompany || _selectedEntity) loadDates();
+  }
+
+  let _endDateTimer = null;
+  function onEndDateChange() {
+    if (!_selectedCompany && !_selectedEntity) return;
+    clearTimeout(_endDateTimer);
+    _endDateTimer = setTimeout(() => {
+      const v = document.getElementById("end-date-input").value;
+      if (!v || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return;
+      _selectedDate = null;
+      resetResults();
+      loadDates();
+    }, 500);
+  }
+
+  function resetResults() {
+    document.getElementById("dates-section").classList.add("hidden");
+    document.getElementById("wallet-section").classList.add("hidden");
+    document.getElementById("analysis-loading").classList.add("hidden");
+    document.getElementById("date-cards").innerHTML = "";
+    document.getElementById("wallet-tbody").innerHTML = "";
+    document.getElementById("wallet-table").style.display = "none";
+    document.getElementById("wallet-msg").textContent = "Selecione uma empresa e execute a analise.";
+    document.getElementById("wallet-msg").style.display = "block";
+  }
+
+  // ── Date pills ──────────────────────────────────────────────────────────────
+  function loadDates() {
+    const endDate = document.getElementById("end-date-input").value;
+    let url = `/api/posicoes/dates?companyId=${encodeURIComponent(_selectedCompany)}&entityId=${encodeURIComponent(_selectedEntity)}`;
+    if (endDate) url += `&endDate=${encodeURIComponent(endDate)}`;
+    fetch(url)
+      .then(r => r.json())
+      .then(({ cards }) => {
+        document.getElementById("dates-section").classList.remove("hidden");
+        if (cards.length && !endDate) {
+          document.getElementById("end-date-input").value = cards[cards.length - 1].date;
+        }
+        renderCards(cards);
+        if (cards.length) selectDate(cards[cards.length - 1].date);
+      })
+      .catch(() => {
+        document.getElementById("date-cards").innerHTML = '<p class="text-xs text-red-500">Erro ao carregar datas.</p>';
+      });
+  }
+
+  function renderCards(cards) {
+    document.getElementById("date-cards").innerHTML = cards.map(c => `
+      <button
+        data-date="${escHtml(c.date)}"
+        onclick="selectDate('${escHtml(c.date)}')"
+        class="date-card border-2 border-gray-200 rounded-xl px-3 py-3 text-left bg-white hover:border-blue-300 transition-colors">
+        <p class="card-date text-[10px] font-semibold text-gray-500 truncate">${escHtml(c.date)}</p>
+        <p class="card-total text-2xl font-bold ${c.total > 0 ? 'text-gray-700' : 'text-gray-300'} mt-1">${c.total}</p>
+        <p class="text-[10px] text-gray-400 mt-0.5">carteiras</p>
+      </button>`).join("");
+  }
+
+  function selectDate(d) {
+    _selectedDate = d;
+    document.querySelectorAll(".date-card").forEach(el => {
+      el.classList.toggle("active", el.dataset.date === d);
+    });
+    _updateRunBtn();
+  }
+
+  // ── Run analysis ────────────────────────────────────────────────────────────
+  function runAnalysis() {
+    if (!_selectedDate) {
+      alert("Selecione uma data primeiro.");
+      return;
+    }
+
+    const tolQty = document.getElementById("tol-qty").value;
+    const tolPu  = document.getElementById("tol-pu").value;
+
+
+    document.getElementById("wallet-section").classList.add("hidden");
+    document.getElementById("analysis-loading").classList.remove("hidden");
+
+    const url = `/api/posicoes/analyze?companyId=${encodeURIComponent(_selectedCompany)}&entityId=${encodeURIComponent(_selectedEntity)}&date=${encodeURIComponent(_selectedDate)}&tolQty=${tolQty}&tolPu=${tolPu}`;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById("analysis-loading").classList.add("hidden");
+        _walletsData = data.wallets || [];
+        renderWallets();
+      })
+      .catch(() => {
+        document.getElementById("analysis-loading").classList.add("hidden");
+        document.getElementById("wallet-section").classList.remove("hidden");
+        document.getElementById("wallet-msg").textContent = "Erro ao analisar posicoes.";
+        document.getElementById("wallet-msg").style.display = "block";
+        document.getElementById("wallet-table").style.display = "none";
+      });
+  }
+
+  // ── Render flagged wallets ──────────────────────────────────────────────────
+  function renderWallets() {
+    const section = document.getElementById("wallet-section");
+    const table   = document.getElementById("wallet-table");
+    const tbody   = document.getElementById("wallet-tbody");
+    const msg     = document.getElementById("wallet-msg");
+    const count   = document.getElementById("wallet-count");
+
+    section.classList.remove("hidden");
+
+    const filter = (document.getElementById("wallet-filter").value || "").toLowerCase();
+    const filtered = _walletsData.filter(w => !filter || w.walletName.toLowerCase().includes(filter));
+
+    count.textContent = `${filtered.length} de ${_walletsData.length} carteira(s)`;
+
+    if (!filtered.length) {
+      table.style.display = "none";
+      msg.textContent = _walletsData.length ? "Nenhuma carteira corresponde ao filtro." : "Nenhuma divergencia encontrada.";
+      msg.style.display = "block";
+      return;
+    }
+
+    msg.style.display = "none";
+    table.style.display = "";
+
+    tbody.innerHTML = filtered.map(w => `
+      <tr class="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onclick="openDetail('${escHtml(w.walletId)}')">
+        <td class="px-3 py-2.5 font-medium text-gray-800">${escHtml(w.walletName)}</td>
+        <td class="px-3 py-2.5 text-right"><span class="inline-block bg-red-100 text-red-700 font-bold rounded-full px-2.5 py-0.5 text-[11px]">${w.flags}</span></td>
+        <td class="px-3 py-2.5 text-right text-gray-600">${w.totalUnprocessed}</td>
+        <td class="px-3 py-2.5 text-right text-gray-600">${w.totalProcessed}</td>
+        <td class="px-3 py-2.5 text-center">
+          <button class="text-blue-600 hover:text-blue-800 text-xs font-semibold">Ver</button>
+        </td>
+      </tr>`).join("");
+  }
+
+  function filterWallets() { renderWallets(); }
+
+  // ── Detail modal ────────────────────────────────────────────────────────────
+  function openDetail(walletId) {
+    const modal = document.getElementById("detail-modal");
+    modal.classList.remove("hidden");
+    document.getElementById("detail-tbody").innerHTML = "";
+    document.getElementById("detail-msg").textContent = "Carregando...";
+    document.getElementById("detail-msg").style.display = "block";
+
+    const tolQty = document.getElementById("tol-qty").value;
+    const tolPu  = document.getElementById("tol-pu").value;
+
+
+    const url = `/api/posicoes/wallet-detail?walletId=${encodeURIComponent(walletId)}&date=${encodeURIComponent(_selectedDate)}&tolQty=${tolQty}&tolPu=${tolPu}`;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        _detailData = data.securities || [];
+        _detailWalletName = data.walletName || walletId;
+        document.getElementById("detail-subtitle").textContent = `${_detailWalletName}  |  ${_selectedDate}`;
+        renderDetail();
+      })
+      .catch(() => {
+        document.getElementById("detail-msg").textContent = "Erro ao carregar detalhes.";
+        document.getElementById("detail-msg").style.display = "block";
+      });
+  }
+
+  function closeDetailModal() {
+    document.getElementById("detail-modal").classList.add("hidden");
+  }
+
+  function renderDetail() {
+    const tbody = document.getElementById("detail-tbody");
+    const msg   = document.getElementById("detail-msg");
+    const onlyFlags = document.getElementById("detail-only-flags").checked;
+    const filter = (document.getElementById("detail-filter").value || "").toLowerCase();
+
+    let rows = _detailData;
+    if (onlyFlags) {
+      rows = rows.filter(r => r.status !== "ok");
+    }
+    if (filter) {
+      rows = rows.filter(r => (r.securityName || "").toLowerCase().includes(filter) || (r.unprocessedId || "").toLowerCase().includes(filter));
+    }
+
+    if (!rows.length) {
+      tbody.innerHTML = "";
+      msg.textContent = _detailData.length ? "Nenhum ativo corresponde ao filtro." : "Nenhum ativo encontrado.";
+      msg.style.display = "block";
+      return;
+    }
+    msg.style.display = "none";
+
+    tbody.innerHTML = rows.map(r => {
+      let rowCls = "";
+      if (r.status === "unmapped" || r.status === "missing_processed") rowCls = "bg-amber-50";
+      else if (r.status === "only_processed") rowCls = "bg-blue-50";
+      else if (r.status === "flagged") rowCls = "bg-red-50/50";
+
+      const statusLabel = {
+        ok: '<span class="text-green-600">OK</span>',
+        flagged: '<span class="text-red-600 font-semibold">Divergencia</span>',
+        unmapped: '<span class="text-amber-600 font-semibold">Sem mapeamento</span>',
+        missing_processed: '<span class="text-amber-600 font-semibold">Ausente proc.</span>',
+        only_processed: '<span class="text-blue-600">So processado</span>',
+      }[r.status] || r.status;
+
+      return `<tr class="border-t border-gray-100 ${rowCls}">
+        <td class="px-3 py-2.5 text-left">
+          <div class="font-medium text-gray-800">${escHtml(r.securityName)}</div>
+          ${r.unprocessedId ? `<div class="text-[10px] text-gray-400 font-mono">${escHtml(r.unprocessedId)}</div>` : ""}
+        </td>
+        <td class="px-3 py-2.5 text-left text-gray-500">${escHtml(r.pricingType || "--")}</td>
+        <td class="px-3 py-2.5 text-left">${statusLabel}</td>
+        <td class="px-3 py-2.5 text-right">${fmtNum(r.unp_qty)}</td>
+        <td class="px-3 py-2.5 text-right">${fmtNum(r.proc_qty)}</td>
+        <td class="px-3 py-2.5 text-right ${r.flag_qty ? 'flag-cell' : ''}">${fmtNum(r.diff_qty)}</td>
+        <td class="px-3 py-2.5 text-right">${fmtNum(r.unp_pu)}</td>
+        <td class="px-3 py-2.5 text-right">${fmtNum(r.proc_pu)}</td>
+        <td class="px-3 py-2.5 text-right ${r.flag_pu ? 'flag-cell' : ''}">${fmtNum(r.diff_pu)}</td>
+        <td class="px-3 py-2.5 text-right">${fmtMoney(r.unp_bal)}</td>
+        <td class="px-3 py-2.5 text-right">${fmtMoney(r.proc_bal)}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  // ── Copy detail table ───────────────────────────────────────────────────────
+  function copyDetailTable() {
+    const headers = ["Ativo","Pricing","Status","Qtd Unproc.","Qtd Proc.","Diff Qtd","PU Unproc.","PU Proc.","Diff PU","Saldo Unproc.","Saldo Proc."];
+    const rows = _detailData.map(r => [
+      r.securityName, r.pricingType || "", r.status,
+      r.unp_qty, r.proc_qty, r.diff_qty,
+      r.unp_pu, r.proc_pu, r.diff_pu,
+      r.unp_bal, r.proc_bal
+    ].map(v => v == null ? "" : v).join("\t")).join("\n");
+    navigator.clipboard.writeText(headers.join("\t") + "\n" + rows);
+  }
+
+  // ── Keyboard ────────────────────────────────────────────────────────────────
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") closeDetailModal();
+  });
+
+  // ── Auto-init from URL params (e.g. coming from Painel) ────────────────────
+  (function() {
+    const params = new URLSearchParams(window.location.search);
+    const cid = params.get('companyId');
+    const dt  = params.get('date');
+    if (!cid) return;
+
+    const sel = document.getElementById('company-select');
+    sel.value = cid;
+    _selectedCompany = cid;
+    _updateRunBtn();
+
+    if (dt) document.getElementById('end-date-input').value = dt;
+    loadDates();
+
+    // Auto-run analysis once date pills are loaded and date is selected
+    const _wait = setInterval(() => {
+      if (_selectedDate) { clearInterval(_wait); runAnalysis(); }
+    }, 150);
+  })();
+</script>
+{% endblock %}

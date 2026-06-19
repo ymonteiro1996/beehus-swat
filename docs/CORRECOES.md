@@ -70,6 +70,7 @@ Blueprint: `pages/correcoes.py`.
 
 | Método | Rota                           | Propósito |
 |--------|--------------------------------|-----------|
+| GET    | `/correcoes`                   | Página HTML |
 | GET    | `/api/correcoes/dates`         | 10 pills de datas úteis com contagem total de linhas por data. Se `companyId` não for passado, agrega em **todas as empresas visíveis** ao usuário (`get_company_filter()`); caso contrário, escopa só àquela empresa. Quando `endDate` **não** é passado, o backend ancora a janela no **último dia que de fato contém correções** em disco (`_latest_date_with_data`) — se não há nada persistido, cai para hoje. Passar `endDate` explicitamente sempre respeita o valor |
 | GET    | `/api/correcoes`               | Lê todas as linhas de uma data combinando os arquivos de todas as wallets. Se `companyId` não for passado, retorna linhas de **todas** as empresas visíveis. Cada linha carrega `companyId`. Resposta: `{transactions, provisions, wallets, walletsByCompany, companies}` — `wallets`: `{walletId: walletName}` achatado; `walletsByCompany`: `{companyId: {walletId: walletName}}` para o cascading dropdown do modal; `companies`: `{companyId: companyName}` |
 | POST   | `/api/correcoes/items`         | Cria uma linha. Body: `{companyId, date, walletId, kind, row}` onde `kind ∈ {"transactions","provisions"}` |
@@ -120,15 +121,9 @@ Se não há nenhuma linha persistida para aquela (empresa, data), retorna 400 co
 
 ---
 
-## Página (REMOVIDA)
+## Página (`templates/correcoes.html`)
 
-> **A página dedicada `/correcoes` (`templates/correcoes.html` + rota `index`) foi removida.**
-> O blueprint `pages/correcoes.py` continua servindo apenas os endpoints `/api/correcoes/*`
-> e as funções-helper consumidas por `pages/conciliacao.py` e pelos fluxos *Aceitar* do
-> Painel/Conciliação. A loja de correções em disco (`data/correcoes/...`) é inalterada.
-> A descrição abaixo é mantida como referência histórica do comportamento que existia na UI.
-
-A página **não tinha filtro global por empresa**. Em vez disso, mostra linhas de **todas as empresas visíveis** de uma vez e oferece filtros por coluna.
+A página **não tem filtro global por empresa**. Em vez disso, mostra linhas de **todas as empresas visíveis** de uma vez e oferece filtros por coluna.
 
 - Cabeçalho: badge **Token** (clicável) à direita do título — abre o mesmo modal de Bearer Token usado em `/beehus` (página *Funções*). O token é compartilhado entre as páginas (estado em memória de processo em `beehus_api/client.py`) e usado pelos botões *Enviar via API* das abas Provisões e Preços de Execução. Endpoints reutilizados: `GET/POST/DELETE /api/beehus/token`. O badge troca de cor: verde quando carregado, vermelho quando ausente, e é refrescado automaticamente após qualquer falha de envio para sinalizar token expirado/revogado.
 - Modal de Adicionar/Editar **não expõe** o campo `currencyId`. O backend resolve a moeda diretamente da carteira (`db.wallets.<walletId>.currencyId`) em todos os endpoints de escrita (`POST /api/correcoes/items`, `PUT /api/correcoes/items`, `POST /api/correcoes/bulk` e o helper interno `append_rows_for_wallet`) — vale tanto para `transactions` quanto para `provisions`. Qualquer `currencyId` enviado pelo cliente é descartado/sobrescrito; isto evita que um default obsoleto de "BRL" no front-end (Painel, Conciliação, modal manual) corrompa carteiras em USD/EUR/etc. Fallback é `"BRL"` apenas quando a wallet não tem o campo.
