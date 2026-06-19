@@ -47,7 +47,7 @@ from db import (
     get_grouping_index,
     get_security_names,
     get_wallet_names,
-    sum_cash_by_dates,
+    sum_cash_by_dates_bulk,
 )
 
 bp = Blueprint("carteira", __name__)
@@ -349,7 +349,7 @@ def get_data():
     response shape. Performs three reads:
       - processedPosition for {walletId ∈ targets, positionDate ∈ range}
       - provisions overlapping the range, summed per (wallet, date)
-      - cashAccounts via `sum_cash_by_dates` (one scan per wallet)
+      - cashAccounts via `sum_cash_by_dates_bulk` (one $in scan for all wallets)
     """
     body = request.get_json(silent=True) or {}
     company_id = (body.get("companyId") or "").strip()
@@ -400,10 +400,10 @@ def get_data():
             pos_map[(wid, d)] = doc.get("securities") or []
 
     prov_map = _provisions_by_wallet_date(company_id, wallet_ids, dates)
+    # One `cashAccounts` $in query for all wallets (was one find per wallet).
     cash_map = {}
-    for wid in wallet_ids:
-        # sum_cash_by_dates returns {date: total_or_None}
-        for dt, val in sum_cash_by_dates(wid, dates).items():
+    for wid, by_date in sum_cash_by_dates_bulk(wallet_ids, dates).items():
+        for dt, val in by_date.items():
             cash_map[(wid, dt)] = val
 
     # `securityId → unprocessedId` per wallet, anchored on the wallet's

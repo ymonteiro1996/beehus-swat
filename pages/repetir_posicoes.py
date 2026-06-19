@@ -63,6 +63,7 @@ from db import (
     get_wallet_names,
     sum_cash,
     sum_cash_by_dates,
+    sum_cash_by_dates_bulk,
     today_in_brt,
 )
 from beehus_api import (
@@ -1094,8 +1095,29 @@ def _compute_curva_pu_map(target_dates, wallet_ids=None):
 
 # ── Preview ─────────────────────────────────────────────────────────────────
 
-def _load_source_processed(wallet_id, source_date):
-    """Return the processedPosition.securities[] for a wallet+date, or []."""
+# Sentinel for "no precomputed value supplied". Lets a batch caller pass an
+# explicit None/[]/{} (a real, cached result) while an *absent* key still
+# falls back to a live per-wallet query — so a stale/odd item degrades to a
+# correct-but-un-batched result, never a wrong one. See `_build_preview_preload`.
+_MISSING = object()
+
+
+def _preload_get(preload, name, key):
+    """Fetch `preload[name][key]` or `_MISSING` when no preload / no key.
+    `preload` is the dict from `_build_preview_preload` (or None)."""
+    if not preload:
+        return _MISSING
+    return preload.get(name, {}).get(key, _MISSING)
+
+
+def _load_source_processed(wallet_id, source_date, *, securities=_MISSING):
+    """Return the processedPosition.securities[] for a wallet+date, or [].
+
+    `securities` (optional) is the precomputed list from
+    `_build_preview_preload`; when supplied (even as []), the find_one is
+    skipped."""
+    if securities is not _MISSING:
+        return securities or []
     doc = db.processedPosition.find_one(
         {"walletId": wallet_id, "positionDate": source_date},
         {"securities": 1},
@@ -1105,7 +1127,7 @@ def _load_source_processed(wallet_id, source_date):
     return doc.get("securities") or []
 
 
-def _security_meta(security_ids):
+def _security_meta(security_ids, *, cache=None):
     """Return `{securityId: {maturityDate, beehusName, subscriptionOffset,
     redemptionOffset}}` for the given ids.
 
@@ -1114,9 +1136,22 @@ def _security_meta(security_ids):
     `transaction_security_classifier._fetch_offsets`) — é o "offset"
     que o operador usa pra cruzar transação com a NAV correspondente
     no `amountDifference`. Quando o campo upstream é `None`, assume 0.
-    """
+
+    `cache` (optional) is a run-level `{sid: meta}` dict shared across the
+    wallets of one preview/apply run: securities are global, so a sid resolved
+    for one wallet is reused for the next, and only the misses are queried."""
     out = {}
-    oids = _to_oids(security_ids)
+    want = {str(s) for s in security_ids if s}
+    if not want:
+        return out
+    if cache is not None:
+        for sid in want:
+            if sid in cache:
+                out[sid] = cache[sid]
+        want = {sid for sid in want if sid not in cache}
+        if not want:
+            return out
+    oids = _to_oids(want)
     if not oids:
         return out
     for s in db.securities.find(
@@ -1128,16 +1163,20 @@ def _security_meta(security_ids):
         sid = str(s["_id"])
         sub_off = (s.get("subscriptionSettlementDays") or 0) - (s.get("subscriptionNavDays") or 0)
         red_off = (s.get("redemptionSettlementDays")   or 0) - (s.get("redemptionNavDays")   or 0)
-        out[sid] = {
+        meta = {
             "maturityDate":       str(s.get("maturityDate") or "")[:10] or None,
             "beehusName":         s.get("beehusName") or sid,
             "subscriptionOffset": int(sub_off),
             "redemptionOffset":   int(red_off),
         }
+        out[sid] = meta
+        if cache is not None:
+            cache[sid] = meta
     return out
 
 
-def _unprocessed_id_map(company_id, wallet_id, source_date):
+def _unprocessed_id_map(company_id, wallet_id, source_date, *,
+                        unprocessed_doc=_MISSING, mappings=_MISSING):
     """Return `{securityId: unprocessedId}` for the wallet's
     `unprocessedSecurityPositions` snapshot at `source_date`.
 
@@ -1162,11 +1201,16 @@ def _unprocessed_id_map(company_id, wallet_id, source_date):
     if not wallet_id or not source_date:
         return {}
 
-    doc = db.unprocessedSecurityPositions.find_one(
-        {"walletId": wallet_id, "positionDate": source_date},
-        {"securities.unprocessedId": 1},
-    )
+    if unprocessed_doc is _MISSING:
+        doc = db.unprocessedSecurityPositions.find_one(
+            {"walletId": wallet_id, "positionDate": source_date},
+            {"securities.unprocessedId": 1},
+        )
+    else:
+        doc = unprocessed_doc
     if not doc:
+        # Prefetch covers only the exact source_date; the prior-date fallback
+        # stays a (rare) per-wallet query.
         doc = db.unprocessedSecurityPositions.find_one(
             {"walletId": wallet_id, "positionDate": {"$lte": source_date}},
             {"securities.unprocessedId": 1},
@@ -1183,14 +1227,16 @@ def _unprocessed_id_map(company_id, wallet_id, source_date):
     if not uids_in_doc:
         return {}
 
-    mapping_doc = db.securityMappings.find_one(
-        {"companyId": company_id}, {"mappings": 1}
-    )
-    if not mapping_doc:
+    if mappings is _MISSING:
+        mapping_doc = db.securityMappings.find_one(
+            {"companyId": company_id}, {"mappings": 1}
+        )
+        mappings = (mapping_doc.get("mappings") or []) if mapping_doc else None
+    if mappings is None:
         return {}
 
     out = {}
-    for m in (mapping_doc.get("mappings") or []):
+    for m in (mappings or []):
         uid = m.get("from")
         sid = m.get("to")
         if not uid or not sid or uid not in uids_in_doc:
@@ -1236,7 +1282,8 @@ def _empty_txn_bundle():
     }
 
 
-def _load_window_transactions(company_id, wallet_id, source_date, target_date):
+def _load_window_transactions(company_id, wallet_id, source_date, target_date, *,
+                              docs=_MISSING):
     """Single-scan loader for every transaction-derived metric used by
     the preview. Substitui as 6 funções antigas (`_buysell_txns_by_security`,
     `_cash_events_by_security`, `_all_txns_cash_delta`, `_in_and_out_flows`,
@@ -1264,26 +1311,39 @@ def _load_window_transactions(company_id, wallet_id, source_date, target_date):
     """
     if not wallet_id or not target_date:
         return _empty_txn_bundle()
-    q = {
-        "companyId":       company_id,
-        "walletId":        wallet_id,
-        "liquidationDate": {"$lte": target_date},
-        "trashed":         {"$ne": True},
-    }
-    if source_date:
-        q["liquidationDate"]["$gt"] = source_date
+    if docs is _MISSING:
+        q = {
+            "companyId":       company_id,
+            "walletId":        wallet_id,
+            "liquidationDate": {"$lte": target_date},
+            "trashed":         {"$ne": True},
+        }
+        if source_date:
+            q["liquidationDate"]["$gt"] = source_date
+        cursor = db.transactions.find(q, {
+            "securityId":            1,
+            "quantity":              1,
+            "balance":               1,
+            "description":           1,
+            "operationDate":         1,
+            "liquidationDate":       1,
+            "beehusTransactionType": 1,
+        })
+        apply_window = False
+    else:
+        # Prefetched per-wallet docs over the run's union window; re-apply
+        # this item's exact (source, target] window in the loop below.
+        cursor = docs
+        apply_window = True
 
     bundle = _empty_txn_bundle()
-    cursor = db.transactions.find(q, {
-        "securityId":            1,
-        "quantity":              1,
-        "balance":               1,
-        "description":           1,
-        "operationDate":         1,
-        "liquidationDate":       1,
-        "beehusTransactionType": 1,
-    })
     for d in cursor:
+        if apply_window:
+            liq_raw = str(d.get("liquidationDate") or "")
+            if liq_raw > target_date:
+                continue
+            if source_date and liq_raw <= source_date:
+                continue
         ttype = d.get("beehusTransactionType") or ""
         sid   = str(d.get("securityId") or "")
         liq   = str(d.get("liquidationDate") or "")[:10]
@@ -1375,6 +1435,40 @@ def _dividend_events_by_sid(wallet_id, position_date):
     return out
 
 
+def _dividend_events_by_date(target_dates):
+    """Batched form of `_dividend_events_by_sid` for a whole preview/apply
+    run: ONE `securityEvents` query for all distinct target dates instead of
+    one per wallet. Returns `{position_date: {securityId: Σ balance}}`.
+
+    `_dividend_events_by_sid` ignores its `wallet_id` arg (the events are
+    scoped by `operationDate`/`eventType` only), so the result for a given
+    date is identical across every wallet — precomputing it once per request
+    collapses the per-wallet fan-out, mirroring how `curva_pu_map` is
+    precomputed. Rides the (operationDate, eventType) index via the `$in`."""
+    wanted = sorted({d for d in target_dates if d})
+    if not wanted:
+        return {}
+    out = {d: {} for d in wanted}
+    cursor = db.securityEvents.find(
+        {
+            "operationDate": {"$in": wanted},
+            "eventType":     {"$in": ["cashDividend", "interestOnEquity"]},
+            "trashed":       {"$ne": True},
+        },
+        {"securityId": 1, "balance": 1, "operationDate": 1},
+    )
+    for d in cursor:
+        pd  = str(d.get("operationDate") or "")
+        sid = str(d.get("securityId") or "")
+        if not sid or pd not in out:
+            continue
+        try:
+            out[pd][sid] = out[pd].get(sid, 0.0) + float(d.get("balance") or 0)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def _security_contribution(former_quantity, former_pu, quantity, pu,
                            coupon_amort=0.0, dividend_per_share=0.0,
                            execution_price=None,
@@ -1416,7 +1510,7 @@ def _security_contribution(former_quantity, former_pu, quantity, pu,
     }
 
 
-def _nav_package_for(wallet_id, position_date):
+def _nav_package_for(wallet_id, position_date, *, doc=_MISSING):
     """Snapshot de `db.navPackages` para `(walletId, positionDate)`.
 
     Retorna `{nav, navPerShare, amount, formerAmount, inAndOutFlows,
@@ -1427,16 +1521,20 @@ def _nav_package_for(wallet_id, position_date):
     `trashed != True` filtrado pra ignorar pacotes apagados. Não força
     `companyId` no filtro — `walletId` já é único por carteira; o doc
     da `wallets` é a fonte canônica de `companyId`.
+
+    `doc` (opcional) é o doc bruto pré-carregado (ou None = sem pacote) de
+    `_build_preview_preload`; quando fornecido, o find_one é pulado.
     """
-    if not wallet_id or not position_date:
-        return None
-    doc = db.navPackages.find_one(
-        {"walletId": wallet_id, "positionDate": position_date,
-         "trashed":  {"$ne": True}},
-        {"nav": 1, "navPerShare": 1, "amount": 1, "formerAmount": 1,
-         "inAndOutFlows": 1, "currency": 1,
-         "returnNavPerShare": 1, "returnContribution": 1},
-    )
+    if doc is _MISSING:
+        if not wallet_id or not position_date:
+            return None
+        doc = db.navPackages.find_one(
+            {"walletId": wallet_id, "positionDate": position_date,
+             "trashed":  {"$ne": True}},
+            {"nav": 1, "navPerShare": 1, "amount": 1, "formerAmount": 1,
+             "inAndOutFlows": 1, "currency": 1,
+             "returnNavPerShare": 1, "returnContribution": 1},
+        )
     if not doc:
         return None
     def _f(v):
@@ -1456,7 +1554,7 @@ def _nav_package_for(wallet_id, position_date):
     }
 
 
-def _provisions_detail(company_id, wallet_id, target_date):
+def _provisions_detail(company_id, wallet_id, target_date, *, docs=_MISSING):
     """Return the individual provision documents whose
     `[initialDate, liquidationDate)` window covers `target_date`.
 
@@ -1471,22 +1569,39 @@ def _provisions_detail(company_id, wallet_id, target_date):
     Same overlap-window rule as `pages/carteira.py::_provisions_by_wallet_date`.
     Sorted by `liquidationDate` ASC so the soonest-to-liquidate
     provisions appear first — matches the order the operator already
-    sees in `Painel de Controle > Carteira`."""
+    sees in `Painel de Controle > Carteira`.
+
+    `docs` (optional) is the wallet's prefetched provision docs from
+    `_build_preview_preload` (a superset over the run's date span); when
+    supplied, the same `[initialDate <= target < liquidationDate]` window is
+    re-applied in Python and the find is skipped. `walletId` alone scopes the
+    company (a wallet belongs to one company), so the prefetch needs no
+    `companyId` filter."""
     if not wallet_id or not target_date:
         return []
+    if docs is _MISSING:
+        cursor = db.provisions.find(
+            {
+                "companyId":       company_id,
+                "walletId":        wallet_id,
+                "initialDate":     {"$lte": target_date},
+                "liquidationDate": {"$gt":  target_date},
+                "trashed":         {"$ne": True},
+            },
+            {"balance": 1, "description": 1, "initialDate": 1,
+             "liquidationDate": 1, "provisionType": 1, "type": 1,
+             "securityId": 1},
+        )
+    else:
+        # Mongo applied the window in the query path; here we re-apply the
+        # identical predicate (raw string compare, same as the $lte/$gt) to
+        # the prefetched superset.
+        cursor = [
+            d for d in docs
+            if str(d.get("initialDate") or "") <= target_date
+            and str(d.get("liquidationDate") or "") > target_date
+        ]
     out = []
-    cursor = db.provisions.find(
-        {
-            "companyId":       company_id,
-            "walletId":        wallet_id,
-            "initialDate":     {"$lte": target_date},
-            "liquidationDate": {"$gt":  target_date},
-            "trashed":         {"$ne": True},
-        },
-        {"balance": 1, "description": 1, "initialDate": 1,
-         "liquidationDate": 1, "provisionType": 1, "type": 1,
-         "securityId": 1},
-    )
     for d in cursor:
         bal = d.get("balance")
         try:
@@ -1537,7 +1652,8 @@ _TXN_TYPES_SEC_CASH_EVENT = {
 
 
 def _find_orphan_transactions(wallet_id, target_date, *,
-                              txns, qty_source, qty_target, sec_meta):
+                              txns, qty_source, qty_target, sec_meta,
+                              prov_sids_covering_target=_MISSING):
     """Detecta transações **órfãs** na janela `(source_date, target_date]`.
 
     Assinatura **stateless**: toda E/S de Mongo foi removida (transactions
@@ -1591,21 +1707,25 @@ def _find_orphan_transactions(wallet_id, target_date, *,
     # filtra por `companyId` (não-essencial aqui — walletId já discrimina)
     # **e** o conjunto `{sid}` aqui basta. Mantida como aggregate única
     # pra continuar barato (índice em walletId + initialDate).
-    prov_sids_covering_target = set()
-    cur = db.provisions.aggregate([
-        {"$match": {
-            "walletId":        wallet_id,
-            "initialDate":     {"$lte": target_date},
-            "liquidationDate": {"$gt":  target_date},
-            "trashed":         {"$ne": True},
-            "securityId":      {"$ne": None},
-        }},
-        {"$project": {"securityId": 1}},
-    ])
-    for d in cur:
-        sid = str(d.get("securityId") or "")
-        if sid:
-            prov_sids_covering_target.add(sid)
+    # When the caller already computed the covering-provision sids (batch
+    # path derives them from the prefetched provisions list), skip the
+    # aggregate entirely.
+    if prov_sids_covering_target is _MISSING:
+        prov_sids_covering_target = set()
+        cur = db.provisions.aggregate([
+            {"$match": {
+                "walletId":        wallet_id,
+                "initialDate":     {"$lte": target_date},
+                "liquidationDate": {"$gt":  target_date},
+                "trashed":         {"$ne": True},
+                "securityId":      {"$ne": None},
+            }},
+            {"$project": {"securityId": 1}},
+        ])
+        for d in cur:
+            sid = str(d.get("securityId") or "")
+            if sid:
+                prov_sids_covering_target.add(sid)
 
     orphans = []
     for t in txns:
@@ -1733,7 +1853,7 @@ def _provisions_sum(company_id, wallet_id, target_date):
     )
 
 
-def _target_processed_position(wallet_id, target_date):
+def _target_processed_position(wallet_id, target_date, *, securities=_MISSING):
     """Return `{securityId: {quantity, pu, balance}}` from
     `processedPosition` at `(walletId, target_date)`. Empty dict when
     no doc exists at that exact date.
@@ -1744,17 +1864,21 @@ def _target_processed_position(wallet_id, target_date):
       • Preview-time diff report — each row compares the calculated
         (quantity, pu, balance) against the target processedPosition's
         values so the operator can see where the repetition diverges
-        from the actual upstream snapshot for the same date."""
-    if not wallet_id or not target_date:
-        return {}
-    doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": target_date},
-        {"securities": 1},
-    )
-    if not doc:
-        return {}
+        from the actual upstream snapshot for the same date.
+
+    `securities` (optional) is the precomputed processedPosition.securities[]
+    from `_build_preview_preload`; when supplied, the find_one is skipped and
+    the same transform runs over it."""
+    if securities is _MISSING:
+        if not wallet_id or not target_date:
+            return {}
+        doc = db.processedPosition.find_one(
+            {"walletId": wallet_id, "positionDate": target_date},
+            {"securities": 1},
+        )
+        securities = (doc.get("securities") or []) if doc else []
     out = {}
-    for s in doc.get("securities") or []:
+    for s in securities or []:
         sid = str(s.get("securityId") or "")
         if not sid:
             continue
@@ -1779,8 +1903,145 @@ def _target_processed_position(wallet_id, target_date):
     return out
 
 
+def _build_preview_preload(items):
+    """Precompute, in a handful of `$in` queries, every per-wallet lookup that
+    `_build_preview_for_wallet` would otherwise issue one-at-a-time (the daily
+    routine runs dozens of wallets sharing one source/target date). Returns a
+    dict of maps consumed via `_preload_get` / passed to the per-wallet
+    helpers.
+
+    Any key absent from a map degrades to a live per-wallet query in the
+    helper, so results stay correct — batching is an optimization, not a
+    correctness dependency. `walletId` is globally unique (one company), so the
+    position/transaction/provision prefetches scope by walletId alone."""
+    wids, seen = [], set()
+    for it in items:
+        w = it.get("walletId")
+        if w and w not in seen:
+            seen.add(w); wids.append(w)
+    source_dates = sorted({it.get("sourceDate") for it in items if it.get("sourceDate")})
+    target_dates = sorted({it.get("targetDate") for it in items if it.get("targetDate")})
+    pos_dates    = sorted(set(source_dates) | set(target_dates))
+    companies    = sorted({it.get("companyId") for it in items if it.get("companyId")})
+
+    pre = {
+        "proc_secs":      {},
+        "navpkg":         {},
+        "provisions":     {w: [] for w in wids},
+        "txns":           {w: [] for w in wids},
+        "uproc":          {},
+        "mappings":       {},
+        "currency":       {},
+        "cash":           {},
+        "sec_meta_cache": {},
+    }
+    if not wids:
+        return pre
+
+    # processedPosition + navPackages (source + target dates). Pre-seed empties
+    # so a wallet with no doc at a date is a cached empty, not a fallback.
+    for w in wids:
+        for d in pos_dates:
+            pre["proc_secs"][(w, d)] = []
+            pre["navpkg"][(w, d)]    = None
+    if pos_dates:
+        for doc in db.processedPosition.find(
+            {"walletId": {"$in": wids}, "positionDate": {"$in": pos_dates}},
+            {"walletId": 1, "positionDate": 1, "securities": 1},
+        ):
+            key = (str(doc.get("walletId") or ""), str(doc.get("positionDate") or ""))
+            if key in pre["proc_secs"]:
+                pre["proc_secs"][key] = doc.get("securities") or []
+        for doc in db.navPackages.find(
+            {"walletId": {"$in": wids}, "positionDate": {"$in": pos_dates},
+             "trashed": {"$ne": True}},
+            {"walletId": 1, "positionDate": 1,
+             "nav": 1, "navPerShare": 1, "amount": 1, "formerAmount": 1,
+             "inAndOutFlows": 1, "currency": 1,
+             "returnNavPerShare": 1, "returnContribution": 1},
+        ):
+            key = (str(doc.get("walletId") or ""), str(doc.get("positionDate") or ""))
+            if key in pre["navpkg"] and pre["navpkg"][key] is None:
+                pre["navpkg"][key] = doc
+
+    # unprocessedSecurityPositions — exact source_date only (the prior-date
+    # fallback in _unprocessed_id_map stays a rare per-wallet query).
+    for w in wids:
+        for d in source_dates:
+            pre["uproc"][(w, d)] = None
+    if source_dates:
+        for doc in db.unprocessedSecurityPositions.find(
+            {"walletId": {"$in": wids}, "positionDate": {"$in": source_dates}},
+            {"walletId": 1, "positionDate": 1, "securities.unprocessedId": 1},
+        ):
+            key = (str(doc.get("walletId") or ""), str(doc.get("positionDate") or ""))
+            if key in pre["uproc"] and pre["uproc"][key] is None:
+                pre["uproc"][key] = doc
+
+    # provisions covering any target date in the run (superset window; each
+    # item's exact window is re-applied in _provisions_detail).
+    if target_dates:
+        for doc in db.provisions.find(
+            {"walletId":        {"$in": wids},
+             "initialDate":     {"$lte": target_dates[-1]},
+             "liquidationDate": {"$gt":  target_dates[0]},
+             "trashed":         {"$ne": True}},
+            {"walletId": 1, "balance": 1, "description": 1, "initialDate": 1,
+             "liquidationDate": 1, "provisionType": 1, "type": 1, "securityId": 1},
+        ):
+            w = str(doc.get("walletId") or "")
+            if w in pre["provisions"]:
+                pre["provisions"][w].append(doc)
+
+    # transactions over the union window (each wallet's exact window is
+    # re-applied in _load_window_transactions). Lower-bound only when *every*
+    # item carries a source_date — an item without one needs the whole
+    # history ≤ target, matching the live per-wallet query.
+    if target_dates:
+        tq = {"walletId": {"$in": wids},
+              "liquidationDate": {"$lte": target_dates[-1]},
+              "trashed": {"$ne": True}}
+        if source_dates and all(it.get("sourceDate") for it in items):
+            tq["liquidationDate"]["$gt"] = source_dates[0]
+        for doc in db.transactions.find(tq, {
+            "walletId": 1, "securityId": 1, "quantity": 1, "balance": 1,
+            "description": 1, "operationDate": 1, "liquidationDate": 1,
+            "beehusTransactionType": 1,
+        }):
+            w = str(doc.get("walletId") or "")
+            if w in pre["txns"]:
+                pre["txns"][w].append(doc)
+
+    # securityMappings per company.
+    for c in companies:
+        pre["mappings"][c] = None
+    if companies:
+        for doc in db.securityMappings.find(
+            {"companyId": {"$in": companies}}, {"companyId": 1, "mappings": 1},
+        ):
+            c = str(doc.get("companyId") or "")
+            if c in pre["mappings"]:
+                pre["mappings"][c] = doc.get("mappings") or []
+
+    # wallet currencyId.
+    for w in wids:
+        pre["currency"][w] = "BRL"
+    oids = _to_oids(wids)
+    if oids:
+        for doc in db.wallets.find({"_id": {"$in": oids}}, {"currencyId": 1}):
+            w = str(doc.get("_id"))
+            if w in pre["currency"]:
+                pre["currency"][w] = str(doc.get("currencyId") or "BRL")
+
+    # caixa — one $in over cashAccounts for all wallets/dates (item #2 helper).
+    pre["cash"] = sum_cash_by_dates_bulk(wids, pos_dates)
+
+    return pre
+
+
 def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date,
-                              curva_pu_map=None):
+                              curva_pu_map=None, dividend_evt_map=None,
+                              preload=None):
     """Apply the rule chain and return a preview dict for a single wallet.
 
     `curva_pu_map` (optional) is the precomputed lookup produced by
@@ -1790,13 +2051,21 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     provided, the curva rule is a no-op (the preview falls back to
     source PUs).
 
+    `dividend_evt_map` (optional) is the precomputed
+    `{target_date: {securityId: Σ balance}}` from `_dividend_events_by_date`.
+    When provided, the per-wallet `securityEvents` lookup is served from it
+    (the events are wallet-agnostic); when omitted, it falls back to the
+    per-wallet `_dividend_events_by_sid` query.
+
     The response also carries a per-row `targetProcessed` block (qty/pu/
     balance from `processedPosition` at `target_date`, when available)
     plus a `diff` block computed from `repetition - targetProcessed`.
     The wallet-level `targetSummary` aggregates row counts and totals so
     the UI can highlight divergences between the calculated repetition
     and the upstream's actual snapshot for the same date."""
-    source_secs = _load_source_processed(wallet_id, source_date)
+    source_secs = _load_source_processed(
+        wallet_id, source_date,
+        securities=_preload_get(preload, "proc_secs", (wallet_id, source_date)))
 
     # Carrega TODAS as transactions da janela (source, target] numa só
     # varredura e dispatcha em Python por tipo. Substitui as 6 queries
@@ -1806,6 +2075,7 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     # tipo diferentes. Ver `_load_window_transactions`.
     txn_bundle = _load_window_transactions(
         company_id, wallet_id, source_date, target_date,
+        docs=_preload_get(preload, "txns", wallet_id),
     )
     txn_by_security      = txn_bundle["buysell_by_sid"]
     cash_events_by_sid   = txn_bundle["cash_events_by_sid"]
@@ -1820,19 +2090,31 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     for _sid in cash_events_by_sid.keys():
         if _sid:
             sec_ids.add(_sid)
-    sec_meta = _security_meta(sec_ids)
+    sec_meta = _security_meta(
+        sec_ids, cache=(preload.get("sec_meta_cache") if preload else None))
     # `unprocessedId` per security, sourced from the wallet's snapshot at
     # `source_date` and translated via `securityMappings`. Used both as a
     # display column in the preview and as the `Ativo` field in the
     # upstream .xlsx (replacing the previous `beehusName` label).
-    uid_by_sid = _unprocessed_id_map(company_id, wallet_id, source_date)
+    uid_by_sid = _unprocessed_id_map(
+        company_id, wallet_id, source_date,
+        unprocessed_doc=_preload_get(preload, "uproc", (wallet_id, source_date)),
+        mappings=_preload_get(preload, "mappings", company_id))
 
     # Target processedPosition: drives both the new authoritative PU
     # rule (`RULE_TARGET_PROCESSED_PRICE`) and the per-row diff report.
-    target_processed = _target_processed_position(wallet_id, target_date)
+    target_processed = _target_processed_position(
+        wallet_id, target_date,
+        securities=_preload_get(preload, "proc_secs", (wallet_id, target_date)))
 
     # Dividends ainda vêm de `db.securityEvents` (collection separada).
-    dividend_evt_by_sid = _dividend_events_by_sid(wallet_id, target_date)
+    # Pré-computados uma vez por request (`_dividend_events_by_date`) e
+    # injetados — a query ignora wallet_id, então o resultado por data
+    # serve toda carteira; fallback à busca avulsa se o mapa não vier.
+    if dividend_evt_map is not None:
+        dividend_evt_by_sid = dividend_evt_map.get(target_date, {})
+    else:
+        dividend_evt_by_sid = _dividend_events_by_sid(wallet_id, target_date)
 
     # Securities que aparecem só em transactions/target/cash events e
     # ainda não foram cobertos pelo `_security_meta` inicial. Coletamos
@@ -1848,7 +2130,9 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
                 _extra_sids.add(sid)
     if _extra_sids:
         sec_ids |= _extra_sids
-        sec_meta.update(_security_meta(list(_extra_sids)))
+        sec_meta.update(_security_meta(
+            list(_extra_sids),
+            cache=(preload.get("sec_meta_cache") if preload else None)))
 
     ctx = {
         "companyId":        company_id,
@@ -1876,7 +2160,9 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     # (descrição + datas de liquidação por provisão individual).
     # Provisões **sem** `securityId` ficam na lista geral só (chip do
     # header), não entram em nenhuma row.
-    provisions_list = _provisions_detail(company_id, wallet_id, target_date)
+    provisions_list = _provisions_detail(
+        company_id, wallet_id, target_date,
+        docs=_preload_get(preload, "provisions", wallet_id))
     provisions_by_sid_sum = {}
     provisions_by_sid_list = {}
     for _p in provisions_list:
@@ -2244,7 +2530,11 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     # comentário em db.sum_cash_by_dates), então cada chamada separada
     # era um full-scan — dobrá-las para 1 reduz materialmente o tempo da
     # prévia.
-    _cash_by_dt = sum_cash_by_dates(wallet_id, [source_date, target_date])
+    _cash_src = _preload_get(preload, "cash", wallet_id)
+    if _cash_src is not _MISSING:
+        _cash_by_dt = {d: _cash_src.get(d) for d in (source_date, target_date)}
+    else:
+        _cash_by_dt = sum_cash_by_dates(wallet_id, [source_date, target_date])
     former_cash = _cash_by_dt.get(source_date)
     delta_cash  = txn_bundle["all_cash_delta"]
     new_cash    = (former_cash or 0) + delta_cash if former_cash is not None else None
@@ -2508,8 +2798,12 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     # `(sourceDate, targetDate]` para tipos em `_TXN_TYPES_IN_OUT_FLOWS`
     # (withdrawalDeposit, …, taxes) — fluxo investidor, distinto do
     # delta de caixa total (que inclui buySell, coupons, etc).
-    nav_anterior = _nav_package_for(wallet_id, source_date)
-    nav_atual    = _nav_package_for(wallet_id, target_date)
+    nav_anterior = _nav_package_for(
+        wallet_id, source_date,
+        doc=_preload_get(preload, "navpkg", (wallet_id, source_date)))
+    nav_atual    = _nav_package_for(
+        wallet_id, target_date,
+        doc=_preload_get(preload, "navpkg", (wallet_id, target_date)))
     inflows      = txn_bundle["inflows_total"]
 
     # NAV projetada — soma dos saldos da repetição + caixa projetado
@@ -2708,15 +3002,24 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
         qty_source=source_qty_by_sid,
         qty_target=_qty_target_by_sid,
         sec_meta=sec_meta,
+        # Batch path: the covering-provision sids are already in provisions_list
+        # (same walletId+window as the orphan aggregate), so skip that query.
+        prov_sids_covering_target=(
+            {p["securityId"] for p in provisions_list if p.get("securityId")}
+            if preload is not None else _MISSING),
     )
 
     # Currency for the xlsx upload — wallets table is the source of truth.
-    w_oid = _to_oid(wallet_id)
-    currency_id = "BRL"
-    if w_oid is not None:
-        w_doc = db.wallets.find_one({"_id": w_oid}, {"currencyId": 1, "name": 1})
-        if w_doc:
-            currency_id = str(w_doc.get("currencyId") or "BRL")
+    _cur = _preload_get(preload, "currency", wallet_id)
+    if _cur is not _MISSING:
+        currency_id = _cur
+    else:
+        w_oid = _to_oid(wallet_id)
+        currency_id = "BRL"
+        if w_oid is not None:
+            w_doc = db.wallets.find_one({"_id": w_oid}, {"currencyId": 1, "name": 1})
+            if w_doc:
+                currency_id = str(w_doc.get("currencyId") or "BRL")
 
     return {
         "walletId":   wallet_id,
@@ -2840,6 +3143,13 @@ def preview():
         [it["targetDate"] for it in items],
         wallet_ids=[it["walletId"] for it in items],
     )
+    # securityEvents are scoped by date only (not wallet), so one batched
+    # lookup per request replaces the per-wallet fan-out — same idea as
+    # curva_pu_map above.
+    dividend_evt_map = _dividend_events_by_date(
+        [it["targetDate"] for it in items])
+    # Batch every remaining per-wallet lookup into a handful of $in queries.
+    preload = _build_preview_preload(items)
 
     results = []
     for it in items:
@@ -2851,6 +3161,8 @@ def preview():
             source_date=it["sourceDate"],
             target_date=it["targetDate"],
             curva_pu_map=curva_pu_map,
+            dividend_evt_map=dividend_evt_map,
+            preload=preload,
         ))
 
     # Persiste um log de prévia em `data/repeat_positions_logs/` —
@@ -3320,6 +3632,10 @@ def apply_repeat():
         [it["targetDate"] for it in items],
         wallet_ids=[it["walletId"] for it in items],
     )
+    # Same per-request batch as /preview — securityEvents are wallet-agnostic.
+    dividend_evt_map = _dividend_events_by_date(
+        [it["targetDate"] for it in items])
+    preload = _build_preview_preload(items)
 
     # rows_by_company: companyId -> [xlsx row dicts]
     rows_by_company = {}
@@ -3339,6 +3655,8 @@ def apply_repeat():
             source_date=it["sourceDate"],
             target_date=target_date,
             curva_pu_map=curva_pu_map,
+            dividend_evt_map=dividend_evt_map,
+            preload=preload,
         )
 
         accepted = it["acceptedSecurityIds"]

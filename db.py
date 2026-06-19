@@ -381,10 +381,57 @@ def sum_cash_by_dates(wallet_id, dates):
 def sum_cash(wallet_id, pos_date):
     """Sum cashAccounts.values for a wallet on a specific date.
     Single-date convenience over `sum_cash_by_dates`; callers fetching
-    multiple dates per wallet should call `sum_cash_by_dates` directly."""
+    multiple dates per wallet should call `sum_cash_by_dates` directly, and
+    callers iterating over many wallets should use `sum_cash_by_dates_bulk`."""
     if not pos_date:
         return None
     return sum_cash_by_dates(wallet_id, [pos_date])[pos_date]
+
+
+def sum_cash_by_dates_bulk(wallet_ids, dates):
+    """Like `sum_cash_by_dates`, but for many wallets in ONE `cashAccounts`
+    query (`walletId: {$in: [...]}`) instead of one `find` per wallet.
+
+    Returns `{wallet_id: {date: total_or_None}}`, keyed by the original
+    `wallet_ids` and `dates` entries. Per-wallet semantics match
+    `sum_cash_by_dates` exactly: None/empty dates map to None; dates with no
+    matching cash value map to None (not 0); wallets with no `cashAccounts`
+    doc map every date to None. Collapses the per-wallet `find()` fan-out that
+    callers were issuing in a loop (e.g. the carteira position matrix) into a
+    single round-trip — the dominant cost was the round-trip count, so this
+    holds whether or not the `(walletId)` index is present."""
+    if not wallet_ids:
+        return {}
+    wanted = {d[:10] for d in dates if d}
+    if not wanted:
+        return {wid: {d: None for d in dates} for wid in wallet_ids}
+    sums  = {}    # (wallet_str, day_key) -> running total
+    found = set()  # (wallet_str, day_key) seen with a value
+    for doc in db.cashAccounts.find(
+        {"walletId": {"$in": list(wallet_ids)}}, {"walletId": 1, "values": 1}
+    ):
+        wid_s = str(doc.get("walletId") or "")
+        for v in doc.get("values", []) or []:
+            d_raw = v.get("date")
+            if d_raw is None:
+                continue
+            k = str(d_raw)[:10]
+            if k in wanted:
+                key = (wid_s, k)
+                sums[key] = sums.get(key, 0.0) + float(v.get("value") or 0)
+                found.add(key)
+    out = {}
+    for wid in wallet_ids:
+        wid_s = str(wid)
+        per = {}
+        for d in dates:
+            if not d:
+                per[d] = None
+                continue
+            key = (wid_s, d[:10])
+            per[d] = sums[key] if key in found else None
+        out[wid] = per
+    return out
 
 
 def resolve_wallet(wallet_id, projection=None):
