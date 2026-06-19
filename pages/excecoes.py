@@ -3941,11 +3941,13 @@ def _build_managed_plan(blob, initial_date, final_date):
         }
 
     # ── publishedPositionSecurities scan ────────────────────────────────
-    # One $in scan, then we filter the pair set in Python because Mongo
-    # can't match a cross-field tuple efficiently without a compound
-    # index. Materialised up front (vs streaming) because we need to
-    # know the actual date bounds BEFORE choosing the final-snapshot
-    # date — see the "effective window" block below.
+    # Indexed via the walletId $in (rides the walletId_groupingId_positionDate
+    # index — confirmed via explain → IXSCAN, not a collection scan); the
+    # walletId/securityId cross-product is then trimmed to real (wallet,
+    # security) pairs in Python below (Mongo can't match a cross-field tuple
+    # via a single index). Materialised up front (vs streaming) because we need
+    # the actual date bounds BEFORE choosing the final-snapshot date — see the
+    # "effective window" block below.
     raw_rows = list(db.publishedPositionSecurities.find(
         {"walletId":     {"$in": list(sel_wallets)},
          "securityId":   {"$in": list(sel_securities)},

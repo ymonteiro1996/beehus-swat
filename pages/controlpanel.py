@@ -389,11 +389,12 @@ def _unidentified_txn_count_by_company(date, wallet_to_company):
     """Count transactions still missing a `beehusTransactionType` per company
     for `date`.
 
-    Mirrors the Identificar Transações default search (company wallets,
-    `identified=false`, single day): transactions are scoped to a company
-    through `walletId → companyId` (they carry no companyId field), the date
-    axis is `liquidationDate`, and "não identificada" means
-    `beehusTransactionType` is null or empty. `trashed` rows are excluded.
+    Mirrors the Identificar Transações default search (single day,
+    `identified=false`). The single-day `liquidationDate` range rides the
+    standalone `liquidationDate` index (confirmed via explain → IXSCAN, not a
+    collection scan), grouped by `walletId` and attributed to a company through
+    `wallet_to_company` (a txn whose walletId is unknown is dropped). "Não
+    identificada" = `beehusTransactionType` null or empty; `trashed` excluded.
     Returns {companyId: count}.
     """
     counts = {}
