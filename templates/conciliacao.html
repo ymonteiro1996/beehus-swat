@@ -3388,14 +3388,66 @@
           <span class="text-[11px] text-gray-400 italic">Calculando recomendação bayesiana…</span>
         </div>`;
 
+    const gapProvHtml = (hasGap && !recalcZero)
+      ? `<div class="mt-2 pt-2 border-t ${tone.divider} flex items-center gap-3">
+          <div class="flex-1 min-w-0">
+            <p class="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-0.5">Provisão sugerida</p>
+            <p class="text-[11px] text-gray-700">
+              Cobrir gap integralmente:
+              <strong class="font-mono">${fmtMoney(-s1.gapCash)}</strong>
+              liquidando em <strong>${_nextBizDayStr(_selectedDate)}</strong>
+            </p>
+          </div>
+          <button id="diag-gap-prov-btn" onclick="_acceptGapProvision()"
+            class="shrink-0 text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white shadow-sm whitespace-nowrap">
+            Aprovar provisão
+          </button>
+        </div>`
+      : '';
+
     return `<section class="rounded-xl p-4 ${tone.card}">
       <div class="flex items-center gap-6">
         ${gapHtml}
         ${recalcHtml}
         ${verdictHtml}
       </div>
+      ${gapProvHtml}
       ${recoHtml}
     </section>`;
+  }
+
+  function _acceptGapProvision() {
+    const s1 = _diagData?.step1 || {};
+    const gapCash = s1.gapCash;
+    if (!gapCash || Math.abs(gapCash) < 0.01) return;
+
+    const btn = document.getElementById("diag-gap-prov-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Processando…"; }
+
+    const liqDate = _nextBizDayStr(_selectedDate);
+    const item = {
+      flag:             "MISSING_PROVISION",
+      manualDecision:   "provision",
+      sourceAnomalyKey: `gap_coverage_${_currentWalletId}_${_selectedDate}`,
+      provisionData: {
+        initialDate:     _selectedDate,
+        liquidationDate: liqDate,
+        provisionType:   "buySell",
+        balance:         -(Number(gapCash)),
+        offset:          1,
+      },
+      acceptable: true,
+      step:       "gap_coverage",
+      label:      "Provisão gap total",
+    };
+
+    _sendItemsToCorrecoes([item], (err) => {
+      if (err && btn) {
+        btn.disabled = false;
+        btn.textContent = "Aprovar provisão";
+      }
+      // On success _openConfirmSendModal is already open; button stays disabled
+    });
   }
 
   // Fills the Layer 1 "Recomendação" slot once bayesian data arrives.
