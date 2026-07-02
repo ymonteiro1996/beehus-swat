@@ -1,10 +1,12 @@
 from flask import Blueprint, render_template, jsonify, request
-from db import (db, get_biz_dates, get_company_filter, valid_wallet_ids, atomic_write_json,
+from db import (get_biz_dates, get_company_filter, valid_wallet_ids, atomic_write_json,
                 atomic_write_text, company_visible, get_company_names, get_wallet_names,
-                resolve_wallet, sum_cash_by_dates as _sum_cash_by_dates, sum_cash as _sum_cash)
-from bson import ObjectId as _OID
+                resolve_wallet)
 from datetime import date as _date, timedelta, datetime as _dt, timezone
 import json, math, os, re, statistics, subprocess, shutil, sys
+import logging
+
+import beehus_catalog
 
 # Pending corrections stored by the Correções page are injected into the
 # diagnostic pipeline so gaps, flags and listings reflect the "post-correction"
@@ -20,13 +22,15 @@ from beehus_api import (delete_transaction as _api_delete_transaction,
                         delete_provision as _api_delete_provision,
                         update_provision as _api_update_provision,
                         calculate_nav_wallets as _api_calculate_nav_wallets,
+                        list_transactions as _api_list_transactions,
+                        list_provisions as _api_list_provisions,
                         BeehusAPIError, BeehusAuthError)
 
 
 def _wallet_company(wallet_id):
     """Resolve the companyId for a given walletId. Returns '' if unknown.
     Used to scope pending-correction lookups from wallet-only endpoints."""
-    w = resolve_wallet(wallet_id, {"companyId": 1})
+    w = beehus_catalog.wallet_doc(wallet_id)
     return str(w.get("companyId", "")) if w else ""
 
 
@@ -247,28 +251,35 @@ def get_dates():
     end_date   = request.args.get("endDate") or None
     if not company_visible(company_id):
         return jsonify({"cards": []})
-    threshold  = _diff_threshold_decimal(request)
+    threshold = _diff_threshold_decimal(request)
 
-    # If no explicit endDate, use the most recent navPackages date for this company's wallets
+    pkgs = beehus_catalog.nav_packages(company_id)
     if not end_date:
-        latest = db.navPackages.find_one(
-            {"companyId": company_id, "trashed": {"$ne": True}},
-            {"positionDate": 1},
-            sort=[("positionDate", -1)]
-        )
-        if latest and latest.get("positionDate"):
-            end_date = str(latest["positionDate"])[:10]
+        dates_in_pkgs = [str(p.get("positionDate") or "")[:10]
+                         for p in pkgs if p.get("positionDate")]
+        if dates_in_pkgs:
+            end_date = max(dates_in_pkgs)
 
     dates = get_biz_dates(_NUM_DATES, end_date)
+    dates_set = set(dates)
 
     totals = {}
-    for doc in db.navPackages.aggregate([
-        {"$match": _mismatch_query(company_id, None, dates, threshold=threshold)},
-        {"$group": {"_id": "$positionDate", "n": {"$sum": 1}}},
-    ]):
-        d = str(doc["_id"])[:10]
-        if d:
-            totals[d] = doc["n"]
+    for pkg in pkgs:
+        pd = str(pkg.get("positionDate") or "")[:10]
+        if pd not in dates_set:
+            continue
+        wid = str(pkg.get("walletId") or "")
+        if not wid:
+            continue
+        rnps = pkg.get("returnNavPerShare")
+        rc   = pkg.get("returnContribution")
+        is_gap = (
+            (abs((rnps or 0) - (rc or 0)) > threshold)
+            if threshold > 0
+            else (rnps != rc)
+        )
+        if is_gap:
+            totals[pd] = totals.get(pd, 0) + 1
 
     cards = [{"date": d, "total": totals.get(d, 0)} for d in dates]
     return jsonify({"cards": cards})
@@ -309,89 +320,84 @@ def get_rows():
         date       = request.args.get("date", "")
         if not company_visible(company_id):
             return jsonify({"rows": [], "dates": []})
-        threshold  = _diff_threshold_decimal(request)
+        threshold = _diff_threshold_decimal(request)
 
-        wallet_names = dict(get_wallet_names())
+        # All navPackages for the company (cached by beehus_catalog)
+        all_pkgs = beehus_catalog.nav_packages(company_id)
 
-        proj = {
-            "walletId": 1, "nav": 1, "navPerShare": 1, "amount": 1,
-            "inAndOutFlows": 1, "returnNavPerShare": 1, "returnContribution": 1,
-            "formerNav": 1, "formerAmount": 1,
-        }
-
-        # Pre-fetch former NAV + formerDate for each wallet — source of truth is
-        # the most recent untrashed navPackage strictly before `date`. Per-wallet:
-        # each wallet gets its own former date. Wallets without any prior
-        # untrashed navPackage are excluded from analysis entirely.
-        former_map = {}  # {walletId: {"nav": float, "date": str}}
-        for prev in db.navPackages.aggregate([
-            {"$match": {"companyId": company_id, "positionDate": {"$lt": date},
-                        "trashed": {"$ne": True}, "walletId": {"$nin": [None, ""]}}},
-            {"$sort": {"positionDate": -1}},
-            {"$group": {"_id": "$walletId",
-                        "nav": {"$first": "$nav"},
-                        "positionDate": {"$first": "$positionDate"}}},
-        ]):
-            pd = prev.get("positionDate")
-            former_map[str(prev["_id"])] = {
-                "nav":  prev.get("nav"),
-                "date": str(pd)[:10] if pd else None,
-            }
+        # Build former_map: most recent navPackage strictly before `date` per wallet
+        # Also build current_pkgs_map: current day navPackage per wallet
+        former_map   = {}  # {walletId: {"nav": float, "date": str, "pkg": dict}}
+        current_pkgs = {}  # {walletId: pkg}
+        for pkg in all_pkgs:
+            pos_date = str(pkg.get("positionDate") or "")[:10]
+            wid = str(pkg.get("walletId") or "")
+            if not pos_date or not wid:
+                continue
+            if pos_date == date:
+                current_pkgs[wid] = pkg
+            elif pos_date < date:
+                if wid not in former_map or pos_date > former_map[wid]["date"]:
+                    former_map[wid] = {
+                        "nav":  pkg.get("nav"),
+                        "date": pos_date,
+                        "pkg":  pkg,
+                    }
 
         # Pre-load all pending provisions for this company in a single tree
         # walk, keyed by wallet — avoids re-scanning the correcoes store
-        # inside the per-row loop below (previously O(wallets × dateFolders)
-        # file opens; now O(wallets + dateFolders)).
+        # inside the per-row loop below.
         _all_pending_provs = load_all_pending_provisions_by_wallet(company_id)
+        wallet_names_map = dict(get_wallet_names())
 
         rows = []
-        for pkg in db.navPackages.find(_mismatch_query(company_id, None, date, threshold=threshold), proj):
-            raw_wid = pkg.get("walletId")
-            # Defensive: skip navPackages with no usable walletId (null/empty).
-            # `str(None)` would otherwise become the literal "None" and, since
-            # the former_map aggregation groups null walletIds under the same
-            # key, the row would survive the out-of-scope filter and render as
-            # a phantom "None" wallet mirroring real data.
-            if raw_wid is None or str(raw_wid).strip() == "":
+        for wid, pkg in current_pkgs.items():
+            rnps = _safe_num(pkg.get("returnNavPerShare"))
+            rc   = _safe_num(pkg.get("returnContribution"))
+            is_gap = (
+                (abs((rnps or 0) - (rc or 0)) > threshold)
+                if threshold > 0
+                else (rnps != rc)
+            )
+            if not is_gap:
                 continue
-            wid = str(raw_wid)
             former = former_map.get(wid)
             if not former or former.get("nav") is None:
-                # No prior untrashed navPackage for this wallet → out of scope
                 continue
 
-            return_nav    = _safe_num(pkg.get("returnNavPerShare"))
-            return_contrib = _safe_num(pkg.get("returnContribution"))
-            former_nav    = _safe_num(former.get("nav"))
-            gap_pct       = (return_nav - return_contrib) if (return_nav is not None and return_contrib is not None) else None
-            gap_cash      = (gap_pct * former_nav) if (gap_pct is not None and former_nav) else None
+            former_nav  = _safe_num(former["nav"])
+            gap_pct     = (
+                (rnps - rc)
+                if (rnps is not None and rc is not None)
+                else None
+            )
+            gap_cash    = (
+                (gap_pct * former_nav)
+                if (gap_pct is not None and former_nav)
+                else None
+            )
 
-            # Post-correction estimate. Provisions use full NAV recalc
-            # (via _recalc_gap_with_corrections); txns keep the legacy
-            # |balance|-closes-gap heuristic. Label as "est." in the UI.
-            new_gap_pct  = gap_pct
-            new_gap_cash = gap_cash
-            corrections_count = 0
-            if gap_cash is not None:
-                new_gap_cash, new_gap_pct, _impact_abs, corrections_count = \
-                    _recalc_gap_with_corrections(
-                        company_id, wid, date, pkg,
-                        former.get("date"), former_nav,
-                        return_contrib, gap_cash,
-                        pending_provs=_all_pending_provs.get(wid, []),
-                    )
+            new_gap_cash, new_gap_pct, _impact_abs, corrections_count = (
+                _recalc_gap_with_corrections(
+                    company_id, wid, date, pkg,
+                    former["date"], former_nav, rc, gap_cash,
+                    pending_provs=_all_pending_provs.get(wid, []),
+                )
+                if gap_cash is not None
+                else (gap_cash, gap_pct, 0, 0)
+            )
 
             rows.append({
                 "walletId":           wid,
-                "walletName":         wallet_names.get(wid, wid),
+                "walletName":         wallet_names_map.get(wid, wid),
                 "nav":                _safe_num(pkg.get("nav")),
                 "navPerShare":        _safe_num(pkg.get("navPerShare")),
                 "amount":             _safe_num(pkg.get("amount")),
                 "inAndOutFlows":      _safe_num(pkg.get("inAndOutFlows")),
-                "returnNavPerShare":  return_nav,
-                "returnContribution": return_contrib,
+                "returnNavPerShare":  rnps,
+                "returnContribution": rc,
                 "formerNav":          former_nav,
-                "formerDate":         former.get("date"),
+                "formerDate":         former["date"],
                 "newGapPct":          new_gap_pct,
                 "newGapCash":         new_gap_cash,
                 "correctionsCount":   corrections_count,
@@ -400,7 +406,7 @@ def get_rows():
         rows.sort(key=lambda x: x["walletName"])
         return jsonify({"rows": rows, "date": date})
     except Exception:
-        import logging, traceback
+        import traceback
         traceback.print_exc()
         logging.getLogger(__name__).exception("conciliacao /rows failed")
         return jsonify({"error": "falha ao processar"}), 500
@@ -410,59 +416,43 @@ def get_rows():
 def get_wallet_detail():
     wallet_id = request.args.get("walletId", "")
     date      = request.args.get("date", "")
-    _, err = _require_visible_wallet(wallet_id)
+    company_id, err = _require_visible_wallet(wallet_id)
     if err: return err
 
-    # Current position
-    current_pos = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": date},
-        {"securities": 1}
-    )
+    # Current position via processed envelope (position + provisions + cash)
+    cur_env = beehus_catalog.processed_envelope(wallet_id, date, company_id)
+    cur_pos = (cur_env or {}).get("position") or {}
+    current_pos_secs = cur_pos.get("securities") or []
 
     # Former date comes from the most recent untrashed navPackage for this wallet.
-    # processedPosition is never used to determine the previous date, because a
-    # processedPosition can exist on a date where no navPackage was calculated.
-    former_date, _ = _find_former_nav(wallet_id, date)
+    former_date, _ = beehus_catalog.nav_former_for_entity(
+        wallet_id, date, company_id)
 
-    # Fetch processedPosition at that specific former_date (if any) for former_map
-    former_pos = None
-    if former_date:
-        former_pos = db.processedPosition.find_one(
-            {"walletId": wallet_id, "positionDate": former_date},
-            {"securities": 1}
-        )
-
-    # Build former lookup: {securityId: {pu, quantity}}
+    # Fetch processed envelope at former_date for former_map
     former_map = {}
-    for sec in (former_pos or {}).get("securities", []):
-        sid = str(sec.get("securityId", ""))
-        former_map[sid] = {
-            "pu":       sec.get("pu"),
-            "quantity": sec.get("quantity"),
-        }
+    if former_date:
+        fmr_env = beehus_catalog.processed_envelope(
+            wallet_id, former_date, company_id)
+        fmr_secs = ((fmr_env or {}).get("position") or {}).get("securities") or []
+        for sec in fmr_secs:
+            sid = str(sec.get("securityId", ""))
+            former_map[sid] = {
+                "pu":       sec.get("pu"),
+                "quantity": sec.get("quantity"),
+            }
 
     # ── Pending deletion markers (MISCLASSIFIED corrections) ────────────────────
-    # Load first so we can exclude these txns from the aggregation below and
-    # surface them as "pending deletion" rows in the UI.
-    _company_for_corr = _wallet_company(wallet_id)
-    _c_txns, _c_provs, _c_dels = load_corrections_for_wallet(_company_for_corr, date, wallet_id)
-    _del_id_strs = [str(d.get("originalId")) for d in _c_dels if d.get("originalId")]
-    _del_id_variants = list(_del_id_strs)
-    for s in _del_id_strs:
-        try:
-            _del_id_variants.append(_OID(s))
-        except Exception:
-            pass
+    _company_for_corr = company_id
+    _c_txns, _c_provs, _c_dels = load_corrections_for_wallet(
+        _company_for_corr, date, wallet_id)
+    _del_id_strs = [
+        str(d.get("originalId")) for d in _c_dels if d.get("originalId")]
+    _del_id_set = set(_del_id_strs)
 
     # ── Build position-side lookup indices for transaction linkage ─────────────
-    # Two-stage matching:
-    #   1) Primary: stringified securityId (handles mixed ObjectId/string storage).
-    #   2) Fallback: case-insensitive name match (`beehusName` ↔ `securityName`)
-    #      so transactions stored with a name but stale/missing securityId still
-    #      attach to the right asset in the listing.
     _pos_sid_set  = set()
     _pos_by_name  = {}      # {beehusName.lower(): str(securityId)}
-    for sec in (current_pos or {}).get("securities", []):
+    for sec in current_pos_secs:
         _sid = str(sec.get("securityId", "") or "")
         if _sid:
             _pos_sid_set.add(_sid)
@@ -470,33 +460,22 @@ def get_wallet_detail():
         if _bn and _sid and _bn not in _pos_by_name:
             _pos_by_name[_bn] = _sid
 
-    # Cache securities.beehusName for txn securityIds we'll display per-asset.
-    # Scoped to just the IDs that appear in this wallet's txns to avoid a
-    # full-collection scan.
-    _txn_match = {"walletId": wallet_id, "liquidationDate": date, "balance": {"$ne": None}}
-    if _del_id_variants:
-        _txn_match["_id"] = {"$nin": _del_id_variants}
-    _txn_docs = list(db.transactions.find(
-        _txn_match,
-        {"_id": 1, "securityId": 1, "securityName": 1, "beehusTransactionType": 1,
-         "balance": 1, "operationDate": 1, "liquidationDate": 1, "description": 1,
-         "quantity": 1, "price": 1},
-    ))
-    _txn_sid_strs = {str(t.get("securityId") or "") for t in _txn_docs}
-    _txn_sid_strs.discard("")
+    # Fetch transactions via beehus_catalog; filter out deleted ones
+    _all_txn_docs = beehus_catalog.transactions_on_date(
+        company_id, [wallet_id], date)
+    _txn_docs = [
+        t for t in _all_txn_docs
+        if t.get("balance") is not None
+        and str(t.get("_id", "") or "") not in _del_id_set
+    ]
+
+    # Build name lookup from transactions (securityBeehusName field)
     _sec_name_by_id = {}
-    if _txn_sid_strs:
-        _oid_list = []
-        for s in _txn_sid_strs:
-            try:
-                _oid_list.append(_OID(s))
-            except Exception:
-                pass
-        if _oid_list:
-            _sec_name_by_id = {
-                str(d["_id"]): d.get("beehusName", "")
-                for d in db.securities.find({"_id": {"$in": _oid_list}}, {"beehusName": 1})
-            }
+    for t in _txn_docs:
+        sid_str = str(t.get("securityId") or "")
+        nm = t.get("securityBeehusName") or t.get("securityName") or ""
+        if sid_str and nm and sid_str not in _sec_name_by_id:
+            _sec_name_by_id[sid_str] = nm
 
     def _resolve_txn_to_pos_sid(raw_sid_str, raw_name):
         """Map a transaction's (securityId, securityName) onto a position's
@@ -594,7 +573,7 @@ def get_wallet_detail():
         _lst.sort(key=lambda e: (e.get("operationDate") or "", e.get("liquidationDate") or ""))
 
     securities = []
-    for sec in (current_pos or {}).get("securities", []):
+    for sec in current_pos_secs:
         sid = str(sec.get("securityId", ""))
         pu  = sec.get("pu")
         qty = sec.get("quantity")
@@ -683,10 +662,12 @@ def get_wallet_detail():
     unmatched_txns.sort(key=lambda e: (e.get("operationDate") or "", e.get("liquidationDate") or ""))
 
     # ── Cash accounts ──────────────────────────────────────────────────────────
-    # Batch both dates into one `cashAccounts` scan (no index on walletId).
-    _cash = _sum_cash_by_dates(wallet_id, [former_date, date])
-    former_cash  = _cash[former_date]
-    current_cash = _cash[date]
+    # Read cash from the processed envelope (already fetched above) plus
+    # the former date's envelope — one call covers both.
+    _cash_by_date, _ = beehus_catalog.wallet_cash_and_provisions(
+        wallet_id, [former_date, date], company_id)
+    former_cash  = _cash_by_date.get(former_date)
+    current_cash = _cash_by_date.get(date)
 
     # Total transactions = sum of all per-security transaction balances
     total_txns = sum(txn_by_security.values())
@@ -702,10 +683,10 @@ def get_wallet_detail():
     alerts = []
 
     # Alert 1: transactions with unidentified type
-    if db.transactions.find_one(
-        {"walletId": wallet_id, "liquidationDate": date, "beehusTransactionType": None},
-        {"_id": 1},
-    ) is not None:
+    if any(
+        t.get("beehusTransactionType") is None
+        for t in _txn_docs
+    ):
         alerts.append({"id": "unidentified_txns", "message": "Existem transações não identificadas"})
 
     # Alert 2: projected cash ≠ current cash
@@ -770,22 +751,34 @@ _TXN_EDIT_FIELDS = {
 
 
 def _find_wallet_txn(wallet_id, txn_id):
-    """Return the db.transactions doc for `txn_id` IF it belongs to `wallet_id`.
-
-    Handles mixed `_id` storage (ObjectId vs string) and returns None when the
-    txn doesn't exist or belongs to another wallet — closing the door on
-    editing/deleting an arbitrary transaction by guessing its id."""
-    if not txn_id:
+    """Return a minimal dict for `txn_id` IF it belongs to `wallet_id`, using
+    the Beehus API. Returns None when the txn doesn't exist or belongs to
+    another wallet — closing the door on editing/deleting by guessing an id."""
+    if not txn_id or not wallet_id:
         return None
-    id_variants = [txn_id]
+    company_id = _wallet_company(wallet_id)
+    if not company_id:
+        return None
     try:
-        id_variants.append(_OID(txn_id))
+        # Search a wide window; we only need to confirm ownership.
+        txns = _api_list_transactions(
+            company_id=company_id,
+            initial_date="2000-01-01",
+            final_date="2099-12-31",
+            wallet_ids=[wallet_id],
+        )
     except Exception:
-        pass
-    return db.transactions.find_one(
-        {"_id": {"$in": id_variants}, "walletId": wallet_id},
-        {"_id": 1, "walletId": 1},
-    )
+        return None
+    for t in txns:
+        tid = str(t.get("_id") or "")
+        wid = str(
+            (t.get("walletId") or {}).get("_id", "")
+            if isinstance(t.get("walletId"), dict)
+            else t.get("walletId", "")
+        )
+        if tid == txn_id and wid == wallet_id:
+            return {"_id": tid, "walletId": wid}
+    return None
 
 
 def _beehus_error_response(e, auth_status=401, api_status=502):
@@ -878,19 +871,33 @@ _PROV_EDIT_FIELDS = {
 
 
 def _find_wallet_provision(wallet_id, prov_id):
-    """Return the db.provisions doc for `prov_id` IF it belongs to `wallet_id`.
-    Same ownership guard as `_find_wallet_txn`, for provisions."""
-    if not prov_id:
+    """Return a minimal dict for `prov_id` IF it belongs to `wallet_id`, using
+    the Beehus API. Returns None when the provision doesn't exist or belongs to
+    another wallet."""
+    if not prov_id or not wallet_id:
         return None
-    id_variants = [prov_id]
+    company_id = _wallet_company(wallet_id)
+    if not company_id:
+        return None
     try:
-        id_variants.append(_OID(prov_id))
+        provs = _api_list_provisions(
+            company_id=company_id,
+            initial_date="2000-01-01",
+            final_date="2099-12-31",
+            wallet_id=wallet_id,
+        )
     except Exception:
-        pass
-    return db.provisions.find_one(
-        {"_id": {"$in": id_variants}, "walletId": wallet_id},
-        {"_id": 1, "walletId": 1},
-    )
+        return None
+    for prov in provs:
+        pid = str(prov.get("_id") or "")
+        wid = str(
+            (prov.get("walletId") or {}).get("_id", "")
+            if isinstance(prov.get("walletId"), dict)
+            else prov.get("walletId", "")
+        )
+        if pid == prov_id and wid == wallet_id:
+            return {"_id": pid, "walletId": wid}
+    return None
 
 
 @bp.route("/api/conciliacao/provision/delete", methods=["POST"])
@@ -999,45 +1006,34 @@ def get_transactions():
     company_id, err = _require_visible_wallet(wallet_id)
     if err: return err
 
-    proj = {
-        "_id": 1, "operationDate": 1, "liquidationDate": 1, "securityId": 1,
-        "beehusTransactionType": 1, "quantity": 1, "price": 1,
-        "balance": 1, "description": 1,
+    corr_txns, _, corr_dels = load_corrections_for_wallet(
+        company_id, date, wallet_id)
+    _del_by_id = {
+        str(d.get("originalId")): d
+        for d in corr_dels if d.get("originalId")
     }
 
-    # Pending deletions (MISCLASSIFIED) — keep rows in the list so the user
-    # sees what was marked, but flag them so the UI can grey/strike them and
-    # the calculations on the page can exclude them.
-    corr_txns, _, corr_dels = load_corrections_for_wallet(company_id, date, wallet_id)
-    _del_by_id = {str(d.get("originalId")): d for d in corr_dels if d.get("originalId")}
+    # Fetch transactions via catalog; securityBeehusName already populated.
+    raw_docs = beehus_catalog.transactions_on_date(
+        company_id, [wallet_id], date)
+    txn_docs = sorted(raw_docs, key=lambda t: str(t.get("operationDate") or ""))
 
-    # Materialize txns first so the security-name lookup can be scoped to just
-    # the IDs actually referenced on this wallet+date (was a full-collection
-    # scan of `securities`).
-    txn_docs = list(db.transactions.find(
-        {"walletId": wallet_id, "liquidationDate": date}, proj
-    ).sort("operationDate", 1))
-
-    _sec_str_ids = {str(t.get("securityId") or "") for t in txn_docs}
-    _sec_str_ids |= {str(ct.get("securityId") or "") for ct in corr_txns}
-    _sec_str_ids.discard("")
+    # Build security name map from the transaction docs themselves.
     security_names = {}
-    if _sec_str_ids:
-        _oids = []
-        for s in _sec_str_ids:
-            try:
-                _oids.append(_OID(s))
-            except Exception:
-                pass
-        if _oids:
-            security_names = {
-                str(d["_id"]): d.get("beehusName", "")
-                for d in db.securities.find({"_id": {"$in": _oids}}, {"beehusName": 1})
-            }
+    for txn in txn_docs:
+        sid = str(txn.get("securityId") or "")
+        nm  = txn.get("securityBeehusName") or txn.get("securityName") or ""
+        if sid and nm and sid not in security_names:
+            security_names[sid] = nm
+    for ct in corr_txns:
+        sid = str(ct.get("securityId") or "")
+        nm  = ct.get("securityName") or ""
+        if sid and nm and sid not in security_names:
+            security_names[sid] = nm
 
     txns = []
     for txn in txn_docs:
-        sid = str(txn.get("securityId", "") or "")
+        sid    = str(txn.get("securityId", "") or "")
         txn_id = str(txn.get("_id", "") or "")
         del_entry = _del_by_id.get(txn_id)
         txns.append({
@@ -1056,7 +1052,6 @@ def get_transactions():
             "deletionReason":        (del_entry or {}).get("reason", ""),
         })
 
-    # Append pending correction transactions (stored in /correcoes, not yet ingested).
     for ct in corr_txns:
         sid = str(ct.get("securityId", "") or "")
         txns.append({
@@ -1067,7 +1062,7 @@ def get_transactions():
             "beehusTransactionType": ct.get("beehusTransactionType", ""),
             "quantity":              None,
             "price":                 None,
-            "balance":                ct.get("balance"),
+            "balance":               ct.get("balance"),
             "description":           ct.get("description", ""),
             "isPending":             True,
             "correctionId":          ct.get("id"),
@@ -1100,27 +1095,12 @@ def _approx_txn(a, b):
     return diff <= _TOLERANCE_ABS or diff <= abs(b) * _TOLERANCE_REL_TXN
 
 
-def _find_former_nav(wallet_id, date):
-    """Resolve a wallet's immediately-prior untrashed navPackage.
-
-    Single source of truth for "former date" / "former NAV". Never uses
-    processedPosition — a processedPosition can exist for a date where no
-    navPackage was calculated, which would produce phantom multi-day returns
-    if picked as the reference.
+def _find_former_nav(wallet_id, date, company_id=None):
+    """Resolve a wallet's immediately-prior untrashed navPackage via API.
 
     Returns (former_date_str|None, former_nav_float|None).
     """
-    prev_pkg = db.navPackages.find_one(
-        {"walletId":     wallet_id,
-         "positionDate": {"$lt": date},
-         "trashed":      {"$ne": True}},
-        {"positionDate": 1, "nav": 1},
-        sort=[("positionDate", -1)],
-    )
-    if not prev_pkg:
-        return None, None
-    pd = prev_pkg.get("positionDate")
-    return (str(pd)[:10] if pd else None), prev_pkg.get("nav")
+    return beehus_catalog.nav_former_for_entity(wallet_id, date, company_id)
 
 
 def _exec_price_impact(row):
@@ -1225,10 +1205,10 @@ def _recalc_gap_with_corrections(company_id, wallet_id, date, nav_pkg, former_da
     # Full NAV recalc when any provision affects either nav
     recalc_gap_cash = gap_cash
     if delta_nav_today != 0 or delta_nav_former != 0:
-        former_pkg = db.navPackages.find_one(
-            {"walletId": wallet_id, "positionDate": former_date, "trashed": {"$ne": True}},
-            {"formerAmount": 1, "inAndOutFlows": 1, "navPerShare": 1, "nav": 1}
-        ) if former_date else None
+        former_pkg = (
+            beehus_catalog.nav_doc_for_entity_date(wallet_id, former_date, company_id)
+            if former_date else None
+        )
 
         former_shares = (former_pkg or {}).get("formerAmount") or 0
         today_shares  = nav_pkg.get("formerAmount") or 0
@@ -1277,26 +1257,18 @@ def diagnose():
     if err: return err
 
     # ── Data loading ────────────────────────────────────────────────────────────
+    company_id = _wallet_company(wallet_id)
 
-    # NAV package
-    nav_pkg = db.navPackages.find_one(
-        {"walletId": wallet_id, "positionDate": date, "trashed": {"$ne": True}},
-        {"returnNavPerShare": 1, "returnContribution": 1, "nav": 1,
-         "navPerShare": 1, "inAndOutFlows": 1, "amount": 1, "formerAmount": 1}
-    )
+    # NAV package via catalog
+    nav_pkg = beehus_catalog.nav_doc_for_entity_date(wallet_id, date, company_id)
     if not nav_pkg:
         return jsonify({"error": "navPackage não encontrado"}), 404
 
     return_nav_ps  = nav_pkg.get("returnNavPerShare", 0) or 0
     return_contrib = nav_pkg.get("returnContribution", 0) or 0
 
-    # Resolve former date + NAV from the most recent untrashed navPackage for this
-    # wallet (never from processedPosition). The `formerNav` field stored on
-    # today's navPackage is intentionally ignored: it can be stale if the prior
-    # package was trashed or regenerated after today's was computed.
-    former_date, former_nav = _find_former_nav(wallet_id, date)
+    former_date, former_nav = _find_former_nav(wallet_id, date, company_id)
 
-    # Wallet has no prior untrashed navPackage → out of scope for analysis.
     if former_date is None or former_nav is None:
         return jsonify({
             "error": "Carteira sem navPackage anterior — fora do escopo de análise.",
@@ -1307,11 +1279,8 @@ def diagnose():
     gap_cash = round(gap_pct * former_nav, 2) if former_nav is not None else None
 
     # ── Recalculated gap after applying pending corrections ─────────────────────
-    # Provisions are handled via full NAV recalc (see _recalc_gap_with_corrections
-    # docstring); txns/deletions keep the legacy |balance|-closes-gap heuristic.
-    _company_id_for_gap = _wallet_company(wallet_id)
     recalc_gap_cash, recalc_gap_pct, corrections_impact_abs, corrections_count = \
-        _recalc_gap_with_corrections(_company_id_for_gap, wallet_id, date, nav_pkg,
+        _recalc_gap_with_corrections(company_id, wallet_id, date, nav_pkg,
                                      former_date, former_nav, return_contrib, gap_cash)
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1355,54 +1324,40 @@ def diagnose():
             "step7": step7_no_gap,
         }))
 
-    # ── Processed positions ─────────────────────────────────────────────────────
-    pos_doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": date}, {"securities": 1}
-    )
-    # Use the navPackage-aligned former_date (resolved earlier) to fetch the
-    # processedPosition for the same date. Do NOT fall back to "most recent
-    # processedPosition before date" — that re-introduces the mismatch bug.
-    former_doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": former_date},
-        {"securities": 1}
-    ) if former_date else None
+    # ── Processed positions via catalog ─────────────────────────────────────────
+    cur_env = beehus_catalog.processed_envelope(wallet_id, date, company_id)
+    cur_secs = ((cur_env or {}).get("position") or {}).get("securities") or []
+
+    fmr_env = beehus_catalog.processed_envelope(
+        wallet_id, former_date, company_id) if former_date else None
+    fmr_secs = ((fmr_env or {}).get("position") or {}).get("securities") or []
     former_map = {
-        str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
-        for s in (former_doc or {}).get("securities", [])
+        str(s.get("securityId", "")): {
+            "pu": s.get("pu"), "quantity": s.get("quantity")}
+        for s in fmr_secs
     }
 
-    # ── Pending corrections (from /correcoes store) ─────────────────────────────
-    # These are rows the user has accepted (via Painel / Conciliação Aceitar) but
-    # not yet exported/ingested into the DB. Feeding them into the pipeline makes
-    # flags that would be "fixed" by them disappear, gaps close, etc.
-    #
-    # Transactions and deletions are acceptance-date-scoped (same folder as
-    # `date`). Provisions are NOT: a provision spanning [D, D+N) must be visible
-    # to every diagnose run whose date falls in that window, regardless of the
-    # folder it was accepted into. So we pull provisions cross-folder.
-    _company_id = _wallet_company(wallet_id)
-    _corr_txns, _, _corr_dels = load_corrections_for_wallet(_company_id, date, wallet_id)
-    _corr_provs = load_all_pending_provisions(_company_id, wallet_id)
-
-    # IDs of DB transactions the user asked to disregard (MISCLASSIFIED
-    # replacements). Filtered out of Steps 4/5 and Bayesian so the pipeline
-    # sees the post-correction world.
-    _deletion_ids = {str(d.get("originalId")) for d in _corr_dels if d.get("originalId")}
+    # ── Pending corrections ──────────────────────────────────────────────────────
+    _corr_txns, _, _corr_dels = load_corrections_for_wallet(
+        company_id, date, wallet_id)
+    _corr_provs = load_all_pending_provisions(company_id, wallet_id)
+    _deletion_ids = {
+        str(d.get("originalId")) for d in _corr_dels if d.get("originalId")}
 
     # ── Transactions grouped by securityId ──────────────────────────────────────
-    txns_by_security = {}   # {securityId: [{"type", "balance"}]}
-    wallet_txns      = []   # transactions with no securityId
-    all_txns_flat    = []   # every transaction (for Step 4 / Step 5)
-    for doc in db.transactions.find(
-        {"walletId": wallet_id, "liquidationDate": date},
-        {"_id": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1}
-    ):
+    txns_by_security = {}
+    wallet_txns      = []
+    all_txns_flat    = []
+    for doc in beehus_catalog.transactions_on_date(company_id, [wallet_id], date):
         txn_id = str(doc.get("_id", "") or "")
         if txn_id and txn_id in _deletion_ids:
-            continue  # user disregarded this DB txn (MISCLASSIFIED replacement)
-        entry = {"type": doc.get("beehusTransactionType"), "balance": doc.get("balance"),
-                 "securityId": str(doc.get("securityId", "") or ""),
-                 "txnId":      txn_id}
+            continue
+        entry = {
+            "type":       doc.get("beehusTransactionType"),
+            "balance":    doc.get("balance"),
+            "securityId": str(doc.get("securityId", "") or ""),
+            "txnId":      txn_id,
+        }
         all_txns_flat.append(entry)
         sid = entry["securityId"]
         if sid:
@@ -1410,12 +1365,13 @@ def diagnose():
         else:
             wallet_txns.append(entry)
 
-    # Inject pending correction transactions.
-    for ct in _corr_txns:
-        entry = {"type":       ct.get("beehusTransactionType"),
-                 "balance":    ct.get("balance"),
-                 "securityId": str(ct.get("securityId", "") or ""),
-                 "pending":    True}
+    for corr_txn in _corr_txns:
+        entry = {
+            "type":       corr_txn.get("beehusTransactionType"),
+            "balance":    corr_txn.get("balance"),
+            "securityId": str(corr_txn.get("securityId", "") or ""),
+            "pending":    True,
+        }
         all_txns_flat.append(entry)
         sid = entry["securityId"]
         if sid:
@@ -1423,55 +1379,40 @@ def diagnose():
         else:
             wallet_txns.append(entry)
 
-    # ── Security info (settlement days + securityType) ──────────────────────────
-    current_secs   = (pos_doc or {}).get("securities", [])
+    # ── Security info (settlement days + securityType) via catalog ───────────────
+    current_secs    = cur_secs
     current_sec_ids = {str(s.get("securityId", "")) for s in current_secs}
 
-    # Gather all securityIds we need info for (position + transactions)
-    all_sec_ids_raw = set()
-    for s in current_secs:
-        if s.get("securityId"):
-            all_sec_ids_raw.add(s["securityId"])
-    for sid in txns_by_security:
-        all_sec_ids_raw.add(sid)
+    all_sec_ids_raw = (
+        {str(s.get("securityId", "")) for s in current_secs if s.get("securityId")}
+        | set(txns_by_security.keys())
+    )
+    all_sec_ids_raw.discard("")
 
-    sec_ids_query = []
-    for sid in all_sec_ids_raw:
-        sec_ids_query.append(sid)
-        try:
-            sec_ids_query.append(_OID(str(sid)))
-        except Exception:
-            pass
+    if all_sec_ids_raw and beehus_catalog.securities_index_is_warm():
+        sec_info = {
+            str(d["_id"]): d
+            for d in beehus_catalog.securities_by_ids(
+                list(all_sec_ids_raw)).values()
+        }
+    else:
+        if all_sec_ids_raw:
+            beehus_catalog.warm_securities_index_async()
+        sec_info = {}
 
-    sec_info = {
-        str(s["_id"]): s
-        for s in db.securities.find(
-            {"_id": {"$in": sec_ids_query}},
-            {"redemptionNavDays": 1, "redemptionSettlementDays": 1,
-             "subscriptionNavDays": 1, "subscriptionSettlementDays": 1,
-             "securityType": 1, "beehusName": 1}
-        )
-    }
-
-    # ── Active provisions ───────────────────────────────────────────────────────
-    prov_map = {}    # {securityId: total active provision amount}
-    for doc in db.provisions.aggregate([
-        {"$match": {"walletId": wallet_id, "initialDate": {"$lte": date},
-                    "liquidationDate": {"$gt": date}, "securityId": {"$ne": None}}},
-        {"$group": {"_id": "$securityId", "total": {"$sum": {"$ifNull": ["$amount", 0]}}}},
-    ]):
-        sid_p = str(doc["_id"])
-        if sid_p:
-            prov_map[sid_p] = doc["total"]
-
-    # Provisions created or liquidated on this date (for Step 2 condition c)
+    # ── Active provisions + lifecycle sids via processed envelope ────────────────
+    # The processed-position envelope already contains exactly the provisions
+    # active on `date` (initialDate <= date < liquidationDate).
+    _prov_docs = (cur_env or {}).get("provisions") or []
+    prov_map = {}
     prov_lifecycle_sids = set()
-    for doc in db.provisions.find(
-        {"walletId": wallet_id, "securityId": {"$ne": None},
-         "$or": [{"initialDate": date}, {"liquidationDate": date}]},
-        {"securityId": 1}
-    ):
-        prov_lifecycle_sids.add(str(doc["securityId"]))
+    for pdoc in _prov_docs:
+        sid_p = str(pdoc.get("securityId") or "")
+        if not sid_p:
+            continue
+        bal = pdoc.get("balance") or 0
+        prov_map[sid_p] = prov_map.get(sid_p, 0) + float(bal)
+        prov_lifecycle_sids.add(sid_p)
 
     # Inject pending correction provisions.
     for cp in _corr_provs:
@@ -1982,11 +1923,18 @@ def diagnose():
 
     # 6.1 Wallet-level 3-sigma check
     wallet_anomaly = None
-    history = list(db.navPackages.find(
-        {"walletId": wallet_id, "positionDate": {"$lt": date}, "trashed": {"$ne": True}},
-        {"returnNavPerShare": 1},
-    ).sort("positionDate", -1).limit(60))
-    returns = [h["returnNavPerShare"] for h in history if h.get("returnNavPerShare") is not None]
+    _nav_series = beehus_catalog.nav_series_for_entity(wallet_id, company_id)
+    history = [
+        pkg for pkg in _nav_series
+        if str(pkg.get("positionDate") or "")[:10] < date
+    ]
+    history = sorted(history,
+                     key=lambda h: str(h.get("positionDate") or ""),
+                     reverse=True)[:60]
+    returns = [
+        h["returnNavPerShare"]
+        for h in history if h.get("returnNavPerShare") is not None
+    ]
 
     if len(returns) >= 3:
         mean   = statistics.mean(returns)
@@ -2109,121 +2057,83 @@ def diagnose():
 
 @bp.route("/api/conciliacao/provisions")
 def get_provisions():
-    wallet_id = request.args.get("walletId", "")
-    date      = request.args.get("date", "")
-    _, err = _require_visible_wallet(wallet_id)
+    wallet_id  = request.args.get("walletId", "")
+    date       = request.args.get("date", "")
+    company_id, err = _require_visible_wallet(wallet_id)
     if err: return err
 
-    # Fetch all active provisions for this wallet on this date
-    # Active = initialDate <= date AND liquidationDate > date
-    raw = list(db.provisions.find(
-        {"walletId": wallet_id, "initialDate": {"$lte": date}, "liquidationDate": {"$gt": date}},
-        {"_id": 1, "securityId": 1, "initialDate": 1, "liquidationDate": 1,
-         "amount": 1, "balance": 1, "provisionType": 1, "description": 1}
-    ))
+    # Active provisions from processed-position envelope (same source as
+    # wallet-detail and diagnose — avoids the slow full-scan from 2000-01-01).
+    raw = beehus_catalog.provisions_for_processed_date(wallet_id, date, company_id)
 
-    # Enrich with security names
-    sec_ids = list({str(p.get("securityId", "")) for p in raw if p.get("securityId")})
+    # Build name map from catalog (warm) or from provision docs themselves.
     name_map = {}
-    if sec_ids:
-        oid_list = []
-        for s in sec_ids:
-            try:
-                oid_list.append(_OID(s))
-            except Exception:
-                pass
-        for sec in db.securities.find({"_id": {"$in": oid_list}}, {"beehusName": 1}):
-            name_map[str(sec["_id"])] = sec.get("beehusName", "")
+    for prov in raw:
+        sid = str(prov.get("securityId") or "")
+        nm  = prov.get("securityBeehusName") or prov.get("securityName") or ""
+        if sid and nm:
+            name_map[sid] = nm
+
+    # Warm the securities index for any remaining unknowns (non-blocking).
+    unknown_sids = [
+        str(p.get("securityId") or "")
+        for p in raw
+        if str(p.get("securityId") or "") and
+           str(p.get("securityId") or "") not in name_map
+    ]
+    if unknown_sids:
+        if beehus_catalog.securities_index_is_warm():
+            for sid_u, doc in beehus_catalog.securities_by_ids(
+                    unknown_sids).items():
+                name_map[str(sid_u)] = doc.get("beehusName", "")
+        else:
+            beehus_catalog.warm_securities_index_async()
 
     provisions = []
-    for p in raw:
-        sid = str(p.get("securityId", "") or "")
-        amt = p.get("balance") if p.get("balance") is not None else p.get("amount")
+    for prov in raw:
+        sid = str(prov.get("securityId", "") or "")
+        amt = prov.get("balance") if prov.get("balance") is not None else prov.get("amount")
         provisions.append({
-            "provisionId":   str(p.get("_id", "") or ""),
-            "securityId":    sid,
-            "securityName":  name_map.get(sid, ""),
-            "initialDate":   str(p.get("initialDate", ""))[:10],
-            "liquidationDate": str(p.get("liquidationDate", ""))[:10],
-            "balance":       float(amt) if amt is not None else None,
-            "provisionType": p.get("provisionType", ""),
-            "description":   p.get("description", ""),
-            "isPending":     False,
+            "provisionId":    str(prov.get("_id", "") or ""),
+            "securityId":     sid,
+            "securityName":   name_map.get(sid, ""),
+            "initialDate":    str(prov.get("initialDate", ""))[:10],
+            "liquidationDate": str(prov.get("liquidationDate", ""))[:10],
+            "balance":        float(amt) if amt is not None else None,
+            "provisionType":  prov.get("provisionType", ""),
+            "description":    prov.get("description", ""),
+            "isPending":      False,
         })
 
-    # Append pending correction provisions whose active window includes `date`.
-    # Uses a cross-folder scan so a provision accepted on date X with active
-    # window [initialDate, liquidationDate) is visible on every date in that
-    # range — not only on its acceptance-date folder. The filter enforces the
-    # same rule used by db.provisions.find (upper-bound exclusive).
-    company_id = _wallet_company(wallet_id)
+    # Append pending correction provisions active on `date`.
     corr_provs = load_active_pending_provisions(company_id, wallet_id, date)
-    if corr_provs:
-        # Resolve security names for any correction-only securityIds.
-        corr_sec_ids = [sid for sid in
-                        {str(cp.get("securityId", "") or "") for cp in corr_provs}
-                        if sid and sid not in name_map]
-        if corr_sec_ids:
-            oid_list = []
-            for s in corr_sec_ids:
-                try:
-                    oid_list.append(_OID(s))
-                except Exception:
-                    pass
-            for sec in db.securities.find({"_id": {"$in": oid_list}}, {"beehusName": 1}):
-                name_map[str(sec["_id"])] = sec.get("beehusName", "")
-        for cp in corr_provs:
-            sid = str(cp.get("securityId", "") or "")
-            bal = cp.get("balance")
-            provisions.append({
-                "securityId":      sid,
-                "securityName":    name_map.get(sid, ""),
-                "initialDate":     str(cp.get("initialDate", ""))[:10],
-                "liquidationDate": str(cp.get("liquidationDate", ""))[:10],
-                "balance":         float(bal) if bal is not None else None,
-                "provisionType":   cp.get("provisionType", ""),
-                "description":     cp.get("description", ""),
-                "isPending":       True,
-                "correctionId":    cp.get("id"),
-            })
+    for corr_p in corr_provs:
+        sid = str(corr_p.get("securityId", "") or "")
+        bal = corr_p.get("balance")
+        provisions.append({
+            "securityId":      sid,
+            "securityName":    name_map.get(sid, ""),
+            "initialDate":     str(corr_p.get("initialDate", ""))[:10],
+            "liquidationDate": str(corr_p.get("liquidationDate", ""))[:10],
+            "balance":         float(bal) if bal is not None else None,
+            "provisionType":   corr_p.get("provisionType", ""),
+            "description":     corr_p.get("description", ""),
+            "isPending":       True,
+            "correctionId":    corr_p.get("id"),
+        })
 
-    provisions.sort(key=lambda p: (p["liquidationDate"], p["securityName"]))
-    total = round(sum(p["balance"] for p in provisions if p["balance"] is not None), 2)
-
+    provisions.sort(key=lambda pv: (pv["liquidationDate"], pv["securityName"]))
+    total = round(
+        sum(pv["balance"] for pv in provisions if pv["balance"] is not None), 2)
     return jsonify(_sanitize({"provisions": provisions, "total": total}))
 
 
 @bp.route("/api/conciliacao/diagnose/feedback", methods=["POST"])
 def diagnose_feedback():
-    data = request.get_json() or {}
-    _, err = _require_visible_wallet(str(data.get("walletId") or ""))
-    if err: return err
-
-    # Type-coerce every field so a payload like {"walletId": {"$gte": ""}}
-    # cannot land an operator-shaped document in the audit collection.
-    def _scalar(v, kind):
-        if isinstance(v, kind):
-            return v
-        return None
-
-    flags_raw = data.get("flagsInScenario") or []
-    flags = []
-    if isinstance(flags_raw, list):
-        for f in flags_raw[:50]:
-            if isinstance(f, (str, int, float, bool)):
-                flags.append(str(f)[:200])
-
-    db.diagnosticFeedback.insert_one({
-        "walletId":        str(data.get("walletId") or ""),
-        "date":            str(data.get("date") or "")[:10],
-        "gapCash":         _scalar(data.get("gapCash"), (int, float)),
-        "scenarioIndex":   _scalar(data.get("scenarioIndex"), int),
-        "confirmed":       bool(data.get("confirmed")) if data.get("confirmed") is not None else None,
-        "userNote":        str(data.get("userNote") or "")[:1024],
-        "flagsInScenario": flags,
-        "resolvedAt":      _dt.now(timezone.utc).isoformat(),
-    })
-    return jsonify({"ok": True})
+    return jsonify({
+        "error": "diagnose/feedback não disponível — armazenamento MongoDB removido.",
+        "code":  "MONGO_FREE",
+    }), 503
 
 
 # ── Refinement: offset / settlement-day drift ──────────────────────────────────
@@ -2242,37 +2152,27 @@ _REFINE_WINDOW_MAX     = 7
 def _processed_position_window(wallet_id, center_iso, window_days):
     """Return sorted list of YYYY-MM-DD strings for processedPosition dates that
     bracket `center_iso` — up to `window_days` dates strictly before and
-    strictly after. Excludes `center_iso` itself.
-
-    Using processedPosition dates (rather than calendar days) ensures we only
-    inspect business days where a reconciliation actually happened — weekends,
-    holidays and gaps are skipped automatically.
+    strictly after. Excludes `center_iso` itself. Uses catalog nav series as
+    a proxy for processed-position dates (same business-day cadence).
     """
     if not wallet_id or not center_iso:
         return []
-
-    # Fetch a modest window; 4×window_days of calendar span is a safe overshoot
-    # to cover holidays / missing days while keeping the query tight.
-    span_days = max(window_days * 4, 14)
     try:
-        center = _date.fromisoformat(center_iso[:10])
+        _date.fromisoformat(center_iso[:10])
     except Exception:
         return []
-    lo = (center - timedelta(days=span_days)).isoformat()
-    hi = (center + timedelta(days=span_days)).isoformat()
-
-    raw_dates = set()
-    for doc in db.processedPosition.find(
-        {"walletId": wallet_id,
-         "positionDate": {"$gte": lo, "$lte": hi, "$ne": center_iso[:10]}},
-        {"positionDate": 1}
-    ):
-        pd = str(doc.get("positionDate") or "")[:10]
-        if pd and pd != center_iso[:10]:
-            raw_dates.add(pd)
-
-    before = sorted([d for d in raw_dates if d < center_iso[:10]], reverse=True)[:window_days]
-    after  = sorted([d for d in raw_dates if d > center_iso[:10]])[:window_days]
+    center_str = center_iso[:10]
+    company_id = _wallet_company(wallet_id)
+    nav_series = beehus_catalog.nav_series_for_entity(wallet_id, company_id)
+    raw_dates = {
+        str(pkg.get("positionDate") or "")[:10]
+        for pkg in nav_series
+        if str(pkg.get("positionDate") or "")[:10] not in ("", center_str)
+    }
+    before = sorted(
+        [d for d in raw_dates if d < center_str], reverse=True)[:window_days]
+    after  = sorted(
+        [d for d in raw_dates if d > center_str])[:window_days]
     return sorted(before + after)
 
 
@@ -2647,405 +2547,11 @@ def diagnose_refine_accepted():
 
 @bp.route("/api/conciliacao/diagnose/refine")
 def diagnose_refine():
-    """Refinement analysis over a ±window-day neighborhood.
-
-    Scope (intentional): this is a refinement of flags left open by the primary
-    diagnose. It does NOT re-run the full pipeline — it looks at the specific
-    offset assumptions that the main engine relies on and surfaces evidence of
-    off-by-N-day drift.
-
-    Analysis 1 (security-side):
-        For each position security with amountDiff ≠ 0, look for transactions
-        in [date-W, date+W] (excluding date) on the same walletId + securityId.
-        Matches whose |balance| ≈ |amountDiff| × price are highlighted as likely
-        offset misconfiguration OR unexpected institution settlement.
-
-    Analysis 2 (transaction-side):
-        For each transaction on `date` whose securityId is NOT in today's
-        processedPosition (wrong/unknown security), scan processedPosition in
-        [date-W, date+W] (excluding date) for the same securityId. If the
-        security appears in a nearby day's position, the transaction is likely
-        mis-dated — the institution may have settled a day off, or the
-        settlement offset is wrong.
-    """
-    wallet_id = request.args.get("walletId", "")[:64]
-    date      = request.args.get("date", "")
-    if not _REFINE_SAFE_DATE_RE.match(str(date)):
-        return jsonify({"error": "date inválida"}), 400
-    _, err = _require_visible_wallet(wallet_id)
-    if err: return err
-    try:
-        window = int(request.args.get("window", _REFINE_WINDOW_DEFAULT) or _REFINE_WINDOW_DEFAULT)
-    except ValueError:
-        window = _REFINE_WINDOW_DEFAULT
-    window = max(1, min(window, _REFINE_WINDOW_MAX))
-
-    # Optional scope — when set, only one analysis runs and only for the given id.
-    # Used by per-row "Refinar" buttons in the UI so we don't re-scan the full
-    # wallet on each click.
-    scope_security_id    = str(request.args.get("securityId", "") or "")
-    scope_txn_security_id = str(request.args.get("txnSecurityId", "") or "")
-    run_analysis_1 = not scope_txn_security_id
-    run_analysis_2 = not scope_security_id
-
-    if not wallet_id or not date:
-        return jsonify({"error": "walletId e date são obrigatórios"}), 400
-
-    nearby_dates = _processed_position_window(wallet_id, date, window)
-    if not nearby_dates:
-        # No processedPosition neighbors → nothing to refine against.
-        return jsonify(_sanitize({
-            "walletId":               wallet_id,
-            "date":                   date,
-            "window":                 window,
-            "nearbyDates":            [],
-            "securityRefinements":    [],
-            "transactionRefinements": [],
-        }))
-
-    # ── Rank nearby dates for processed-position-day deltas ───────────────────
-    # UI counts "D-N / D+N" by processed-position day (i.e., rank among days
-    # where a reconciliation actually happened), not calendar days. This
-    # skips weekends/holidays/gaps, matching the user's mental model.
-    center_iso = date[:10]
-    _before_sorted = sorted([d for d in nearby_dates if d < center_iso], reverse=True)
-    _after_sorted  = sorted([d for d in nearby_dates if d > center_iso])
-    position_day_rank = {}  # {date_iso: signed rank, e.g. -1, -2, +1, +2}
-    for i, d in enumerate(_before_sorted, start=1):
-        position_day_rank[d] = -i
-    for i, d in enumerate(_after_sorted, start=1):
-        position_day_rank[d] = i
-
-    # ── Position today + former ────────────────────────────────────────────────
-    pos_doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": date}, {"securities": 1}
-    ) or {}
-    former_date, _ = _find_former_nav(wallet_id, date)
-    former_doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": former_date}, {"securities": 1}
-    ) if former_date else None
-
-    current_secs = (pos_doc or {}).get("securities", []) or []
-    former_map = {
-        str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
-        for s in ((former_doc or {}).get("securities", []) or [])
-    }
-    current_sec_ids = {str(s.get("securityId", "")) for s in current_secs}
-
-    # ── Transactions on `date` (to flag wrong/unknown securityIds) ─────────────
-    today_txns = list(db.transactions.find(
-        {"walletId": wallet_id, "liquidationDate": date},
-        {"_id": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1,
-         "operationDate": 1, "liquidationDate": 1, "quantity": 1, "price": 1}
-    ))
-
-    # ── Collect sec_ids we need names/offsets for ──────────────────────────────
-    sec_ids_raw = set()
-    for s in current_secs:
-        if s.get("securityId"):
-            sec_ids_raw.add(str(s["securityId"]))
-    for t in today_txns:
-        sid = t.get("securityId")
-        if sid:
-            sec_ids_raw.add(str(sid))
-
-    sec_ids_query = []
-    for sid in sec_ids_raw:
-        sec_ids_query.append(sid)
-        try:
-            sec_ids_query.append(_OID(str(sid)))
-        except Exception:
-            pass
-    sec_info = {
-        str(s["_id"]): s
-        for s in db.securities.find(
-            {"_id": {"$in": sec_ids_query}} if sec_ids_query else {"_id": None},
-            {"beehusName": 1, "securityType": 1,
-             "subscriptionNavDays": 1, "subscriptionSettlementDays": 1,
-             "redemptionNavDays": 1, "redemptionSettlementDays": 1}
-        )
-    } if sec_ids_query else {}
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Analysis 1 — securityRefinements
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Securities with amountDiff ≠ 0 → candidates for transactions that landed
-    # on the wrong liquidationDate.
-    amt_diff_secs = []
-    if not run_analysis_1:
-        current_secs_iter = []  # analysis 1 is scoped out by txnSecurityId
-    elif scope_security_id:
-        current_secs_iter = [s for s in current_secs if str(s.get("securityId", "")) == scope_security_id]
-    else:
-        current_secs_iter = current_secs
-    for s in current_secs_iter:
-        sid = str(s.get("securityId", ""))
-        if not sid:
-            continue
-        qty = s.get("quantity")
-        f_qty = (former_map.get(sid) or {}).get("quantity")
-        if qty is None:
-            continue
-        amt_diff = round(qty - (f_qty or 0), 6)
-        if amt_diff == 0:
-            continue
-        pu = s.get("pu")
-        exec_price = s.get("executionPrice")
-        price = exec_price if exec_price is not None else (pu or 0)
-        expected_impact = round(abs(amt_diff) * abs(price or 0), 2) if price else None
-        info = sec_info.get(sid, {})
-        # Configured offset per direction of the move
-        if amt_diff > 0:
-            settle = info.get("subscriptionSettlementDays") or 0
-            nav_d  = info.get("subscriptionNavDays") or 0
-            direction = "subscription"
-        else:
-            settle = info.get("redemptionSettlementDays") or 0
-            nav_d  = info.get("redemptionNavDays") or 0
-            direction = "redemption"
-        configured_offset = settle - nav_d
-        amt_diff_secs.append({
-            "sid":             sid,
-            "name":            s.get("beehusName") or info.get("beehusName", ""),
-            "amountDiff":      amt_diff,
-            "pu":              pu,
-            "formerPu":        (former_map.get(sid) or {}).get("pu"),
-            "executionPrice":  exec_price,
-            "expectedImpact":  expected_impact,
-            "direction":       direction,
-            "configuredOffset": configured_offset,
-            "settlementDays":  settle,
-            "navDays":         nav_d,
-        })
-
-    security_refinements = []
-    if amt_diff_secs:
-        # Single query: ALL transactions on the wallet in the nearby window,
-        # regardless of securityId. We need them to satisfy both match
-        # criteria: (a) same securityId as the suspect, and (b) balance
-        # proximity to the suspect's expectedImpact — the latter catches
-        # WRONG_SECURITY bookings where the cash moved under a different sid.
-        all_nearby_txns = list(db.transactions.find(
-            {"walletId": wallet_id,
-             "liquidationDate": {"$in": nearby_dates}},
-            {"_id": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1,
-             "operationDate": 1, "liquidationDate": 1, "quantity": 1, "price": 1}
-        ))
-
-        # Resolve names for any transaction securityIds we haven't seen yet,
-        # so the UI can surface "security divergente" matches with a readable
-        # name (not just the raw ObjectId).
-        txn_sids_unknown = set()
-        for t in all_nearby_txns:
-            t_sid = str(t.get("securityId") or "")
-            if t_sid and t_sid not in sec_info:
-                txn_sids_unknown.add(t_sid)
-        if txn_sids_unknown:
-            q_ids = list(txn_sids_unknown)
-            for sid in txn_sids_unknown:
-                try:
-                    q_ids.append(_OID(sid))
-                except Exception:
-                    pass
-            for sec in db.securities.find(
-                {"_id": {"$in": q_ids}},
-                {"beehusName": 1, "securityType": 1}
-            ):
-                sec_info[str(sec["_id"])] = sec
-
-        try:
-            center = _date.fromisoformat(date[:10])
-        except Exception:
-            center = None
-
-        for s in amt_diff_secs:
-            expected_impact = s["expectedImpact"]
-            # Expected balance sign: subscription (amtDiff>0) → buySell balance
-            # is negative (cash out); redemption (amtDiff<0) → positive.
-            expected_sign = -1 if s["amountDiff"] > 0 else 1
-
-            matches_by_id = {}   # dedupe across sid / balance passes
-            for t in all_nearby_txns:
-                t_sid = str(t.get("securityId") or "")
-                bal = float(t.get("balance") or 0)
-                same_security = (t_sid == s["sid"])
-                balance_approx = (
-                    expected_impact is not None
-                    and expected_impact > 0
-                    and _approx(abs(bal), expected_impact)
-                )
-
-                if not (same_security or balance_approx):
-                    continue
-
-                liq = str(t.get("liquidationDate") or "")[:10]
-                try:
-                    days_delta = (_date.fromisoformat(liq) - center).days if center else None
-                except Exception:
-                    days_delta = None
-
-                match_reason = (
-                    "both" if same_security and balance_approx
-                    else "securityId" if same_security
-                    else "balance"
-                )
-                sign_match = (bal == 0) or ((bal > 0) == (expected_sign > 0))
-
-                txn_sec_name = ""
-                if not same_security and t_sid:
-                    txn_sec_name = sec_info.get(t_sid, {}).get("beehusName", "") or t_sid
-
-                txn_id = str(t.get("_id", ""))
-                matches_by_id[txn_id] = {
-                    "txnId":                 txn_id,
-                    "liquidationDate":       liq,
-                    "operationDate":         str(t.get("operationDate") or "")[:10] or None,
-                    "balance":               round(bal, 2),
-                    "beehusTransactionType": t.get("beehusTransactionType"),
-                    "daysDelta":             days_delta,             # calendar-day delta (internal / offset config semantics)
-                    "positionDayDelta":      position_day_rank.get(liq),  # processed-position-day rank (UI label)
-                    "balanceApprox":         bool(balance_approx),
-                    "impliedOffset":         days_delta,
-                    "matchReason":           match_reason,
-                    "sameSecurity":          same_security,
-                    "txnSecurityId":         t_sid or None,
-                    "txnSecurityName":       txn_sec_name,
-                    "signMatch":             bool(sign_match),
-                }
-
-            matches = list(matches_by_id.values())
-            if not matches:
-                continue
-            # Sort: balance-approx first, then sign-match, then |daysDelta|,
-            # then same-security (as a tiebreaker when both candidates match
-            # on balance).
-            matches.sort(key=lambda m: (
-                0 if m["balanceApprox"] else 1,
-                0 if m["signMatch"] else 1,
-                abs(m["positionDayDelta"]) if m["positionDayDelta"] is not None else 99,
-                0 if m["sameSecurity"] else 1,
-            ))
-            has_approx = any(m["balanceApprox"] and m["signMatch"] for m in matches)
-            security_refinements.append({
-                "securityId":       s["sid"],
-                "securityName":     s["name"],
-                "amountDiff":       s["amountDiff"],
-                "expectedImpact":   s["expectedImpact"],
-                "direction":        s["direction"],
-                "configuredOffset": s["configuredOffset"],
-                "settlementDays":   s["settlementDays"],
-                "navDays":          s["navDays"],
-                "likelyCause":      bool(has_approx),
-                "matches":          matches,
-            })
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Analysis 2 — transactionRefinements
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Transactions on `date` whose securityId is NOT in today's position
-    # (WRONG_SECURITY / unknown): look for the security in nearby positions.
-    suspect_txns = []
-    if run_analysis_2:
-        for t in today_txns:
-            sid = str(t.get("securityId", "") or "")
-            if not sid:
-                continue
-            if sid in current_sec_ids:
-                continue
-            if scope_txn_security_id and sid != scope_txn_security_id:
-                continue
-            suspect_txns.append(t)
-
-    transaction_refinements = []
-    if suspect_txns:
-        suspect_sids = list({str(t.get("securityId")) for t in suspect_txns})
-        # Pull nearby positions once, extract only the sids we care about.
-        nearby_positions = list(db.processedPosition.find(
-            {"walletId": wallet_id, "positionDate": {"$in": nearby_dates}},
-            {"positionDate": 1, "securities.securityId": 1,
-             "securities.quantity": 1, "securities.pu": 1}
-        ))
-        # { sid: [ {positionDate, quantity, pu, daysDelta}, ... ] }
-        pos_index = {}
-        try:
-            center = _date.fromisoformat(date[:10])
-        except Exception:
-            center = None
-        for doc in nearby_positions:
-            pd = str(doc.get("positionDate") or "")[:10]
-            try:
-                days_delta = (_date.fromisoformat(pd) - center).days if center else None
-            except Exception:
-                days_delta = None
-            for s in (doc.get("securities") or []):
-                s_sid = str(s.get("securityId", "") or "")
-                if s_sid and s_sid in suspect_sids:
-                    pos_index.setdefault(s_sid, []).append({
-                        "positionDate":     pd,
-                        "quantity":         s.get("quantity"),
-                        "pu":               s.get("pu"),
-                        "daysDelta":        days_delta,                   # calendar-day delta
-                        "positionDayDelta": position_day_rank.get(pd),    # processed-position rank
-                    })
-
-        # Also fetch securities info for suspect sids that weren't in today's
-        # position (so we can show a readable name).
-        missing_name_sids = [sid for sid in suspect_sids if sid not in sec_info]
-        if missing_name_sids:
-            q_ids = list(missing_name_sids)
-            for s in missing_name_sids:
-                try:
-                    q_ids.append(_OID(s))
-                except Exception:
-                    pass
-            for sec in db.securities.find(
-                {"_id": {"$in": q_ids}},
-                {"beehusName": 1,
-                 "subscriptionSettlementDays": 1, "subscriptionNavDays": 1,
-                 "redemptionSettlementDays": 1, "redemptionNavDays": 1}
-            ):
-                sec_info[str(sec["_id"])] = sec
-
-        for t in suspect_txns:
-            sid = str(t.get("securityId"))
-            matches = pos_index.get(sid, [])
-            if not matches:
-                continue
-            matches.sort(key=lambda m: abs(m["positionDayDelta"]) if m["positionDayDelta"] is not None else 99)
-            info = sec_info.get(sid, {})
-            bal = float(t.get("balance") or 0)
-            # direction-based configured offset
-            if bal < 0:
-                settle = info.get("subscriptionSettlementDays") or 0
-                nav_d  = info.get("subscriptionNavDays") or 0
-                direction = "subscription"
-            else:
-                settle = info.get("redemptionSettlementDays") or 0
-                nav_d  = info.get("redemptionNavDays") or 0
-                direction = "redemption"
-            transaction_refinements.append({
-                "txnId":                 str(t.get("_id", "")),
-                "securityId":            sid,
-                "securityName":          info.get("beehusName", "") or sid,
-                "balance":               round(bal, 2),
-                "beehusTransactionType": t.get("beehusTransactionType"),
-                "operationDate":         str(t.get("operationDate") or "")[:10] or None,
-                "liquidationDate":       date,
-                "direction":             direction,
-                "configuredOffset":      settle - nav_d,
-                "settlementDays":        settle,
-                "navDays":               nav_d,
-                "matches":               matches,
-            })
-
-    return jsonify(_sanitize({
-        "walletId":                wallet_id,
-        "date":                    date,
-        "window":                  window,
-        "nearbyDates":             nearby_dates,
-        "securityRefinements":     security_refinements,
-        "transactionRefinements":  transaction_refinements,
-    }))
+    """Refinement analysis — temporarily unavailable (MongoDB removed)."""
+    return jsonify({
+        "error": "diagnose/refine não disponível — migração MongoDB em curso.",
+        "code":  "MONGO_FREE",
+    }), 503
 
 
 # ── Transaction type mapping per flag ──────────────────────────────────────────
@@ -3418,307 +2924,10 @@ def global_analysis():
     Runs a lightweight Steps 1-3 across all wallets with mismatches for the
     given company + date, then aggregates flags by (securityId, flagType).
     """
-    try:
-        company_id = request.args.get("companyId", "")
-        date       = request.args.get("date", "")
-        if not company_visible(company_id):
-            return jsonify({"securities": [], "date": date, "walletCount": 0})
-        threshold  = _diff_threshold_decimal(request)
-
-        wallet_ids = _valid_wallet_ids()
-        wallet_names = {wid: name for wid, name in get_wallet_names().items() if wid in wallet_ids}
-
-        # All wallets with a mismatch on this date
-        mismatch_pkgs = list(db.navPackages.find(
-            _mismatch_query(company_id, wallet_ids, date, threshold=threshold),
-            {"walletId": 1, "returnNavPerShare": 1, "returnContribution": 1,
-             "formerNav": 1, "nav": 1}
-        ))
-
-        if not mismatch_pkgs:
-            return jsonify(_sanitize({"securities": [], "date": date, "walletCount": 0}))
-
-        # Pre-load former NAV for wallets missing it
-        pkg_wallet_ids = list({str(p["walletId"]) for p in mismatch_pkgs})
-        former_nav_map = {}
-        for prev in db.navPackages.aggregate([
-            {"$match": {"walletId": {"$in": pkg_wallet_ids}, "positionDate": {"$lt": date}, "trashed": {"$ne": True}}},
-            {"$sort": {"positionDate": -1}},
-            {"$group": {"_id": "$walletId", "nav": {"$first": "$nav"}}},
-        ]):
-            former_nav_map[str(prev["_id"])] = prev.get("nav")
-
-        # Pre-load ALL current positions in one query (replaces N find_one calls)
-        all_sec_oids = set()
-        all_positions = {}  # {walletId: [securities]}
-        all_former    = {}  # {walletId: {securityId: {pu, quantity}}}
-
-        for doc in db.processedPosition.find(
-            {"walletId": {"$in": pkg_wallet_ids}, "positionDate": date},
-            {"walletId": 1, "securities": 1}
-        ):
-            wid = str(doc["walletId"])
-            secs = doc.get("securities", [])
-            all_positions[wid] = secs
-            for s in secs:
-                sid = s.get("securityId")
-                if sid:
-                    all_sec_oids.add(sid)
-                    try:
-                        all_sec_oids.add(_OID(str(sid)))
-                    except Exception:
-                        pass
-
-        # Pre-load ALL former positions in one aggregation (replaces N find_one calls)
-        for doc in db.processedPosition.aggregate([
-            {"$match": {"walletId": {"$in": pkg_wallet_ids}, "positionDate": {"$lt": date}}},
-            {"$sort": {"positionDate": -1}},
-            {"$group": {"_id": "$walletId", "securities": {"$first": "$securities"}}},
-        ]):
-            wid = str(doc["_id"])
-            all_former[wid] = {
-                str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
-                for s in (doc.get("securities") or [])
-            }
-
-        sec_info = {
-            str(s["_id"]): s
-            for s in db.securities.find(
-                {"_id": {"$in": list(all_sec_oids)}},
-                {"redemptionNavDays": 1, "redemptionSettlementDays": 1,
-                 "subscriptionNavDays": 1, "subscriptionSettlementDays": 1,
-                 "securityType": 1, "beehusName": 1, "currency": 1}
-            )
-        }
-
-        # Pre-load all transactions for these wallets on this date
-        all_txns = {}  # {walletId: {securityId: [entries]}}
-        for doc in db.transactions.find(
-            {"walletId": {"$in": pkg_wallet_ids}, "liquidationDate": date},
-            {"walletId": 1, "securityId": 1, "beehusTransactionType": 1, "balance": 1}
-        ):
-            wid = str(doc["walletId"])
-            sid = str(doc.get("securityId", "") or "")
-            entry = {"type": doc.get("beehusTransactionType"), "balance": doc.get("balance"),
-                     "securityId": sid, "txnId": str(doc.get("_id", "") or "")}
-            all_txns.setdefault(wid, {}).setdefault(sid, []).append(entry)
-
-        # Pre-load all active provisions
-        all_provs = {}  # {walletId: {securityId: total}}
-        for doc in db.provisions.aggregate([
-            {"$match": {"walletId": {"$in": pkg_wallet_ids}, "initialDate": {"$lte": date},
-                        "liquidationDate": {"$gt": date}, "securityId": {"$ne": None}}},
-            {"$group": {"_id": {"w": "$walletId", "s": "$securityId"}, "total": {"$sum": {"$ifNull": ["$amount", 0]}}}},
-        ]):
-            wid = str(doc["_id"]["w"])
-            sid = str(doc["_id"]["s"])
-            all_provs.setdefault(wid, {})[sid] = doc["total"]
-
-        # Pre-load provision lifecycle events
-        all_prov_lifecycle = {}  # {walletId: set(securityId)}
-        for doc in db.provisions.find(
-            {"walletId": {"$in": pkg_wallet_ids}, "securityId": {"$ne": None},
-             "$or": [{"initialDate": date}, {"liquidationDate": date}]},
-            {"walletId": 1, "securityId": 1}
-        ):
-            wid = str(doc["walletId"])
-            all_prov_lifecycle.setdefault(wid, set()).add(str(doc["securityId"]))
-
-        # Inject pending corrections for every wallet in scope so flags already
-        # "fixed" via /correcoes don't surface in global-analysis anymore.
-        # Batched once per (company, date) — without this, each of N wallets
-        # walked the full data/correcoes/<company>/*/*.json tree.
-        all_pending_provs = load_all_pending_provisions_by_wallet(company_id)
-        for wid in pkg_wallet_ids:
-            corr_t, _, corr_d = load_corrections_for_wallet(company_id, date, wid)
-            # Cross-folder provisions so a provision accepted on a neighbor date
-            # whose active window includes `date` also affects this wallet's
-            # global-analysis flags. Existing filter below (`init<=date<liq` +
-            # lifecycle `init==date or liq==date`) is preserved.
-            corr_p = all_pending_provs.get(wid, [])
-            _global_deletion_ids = {str(d.get("originalId")) for d in corr_d if d.get("originalId")}
-            if _global_deletion_ids and wid in all_txns:
-                for _sec_id, _txns in all_txns[wid].items():
-                    all_txns[wid][_sec_id] = [
-                        _t for _t in _txns
-                        if str(_t.get("txnId", "")) not in _global_deletion_ids
-                    ]
-            for ct in corr_t:
-                sid = str(ct.get("securityId", "") or "")
-                entry = {"type":       ct.get("beehusTransactionType"),
-                         "balance":    ct.get("balance"),
-                         "securityId": sid,
-                         "pending":    True}
-                all_txns.setdefault(wid, {}).setdefault(sid, []).append(entry)
-            for cp in corr_p:
-                sid = str(cp.get("securityId", "") or "")
-                if not sid:
-                    continue
-                init = cp.get("initialDate")
-                liq  = cp.get("liquidationDate")
-                bal  = float(cp.get("balance") or 0)
-                if (init or "") <= date and (liq or "") > date:
-                    all_provs.setdefault(wid, {})[sid] = all_provs.get(wid, {}).get(sid, 0) + bal
-                if init == date or liq == date:
-                    all_prov_lifecycle.setdefault(wid, set()).add(sid)
-
-        # ── Run Steps 1-3 per wallet, collect Tier 1 flags ─────────────────────
-        # Result: {(securityId, flag): {securityName, securityType, impact_sum, wallets: [...]}}
-        flag_agg = {}
-
-        for pkg in mismatch_pkgs:
-            wid = str(pkg["walletId"])
-            return_nav_ps  = pkg.get("returnNavPerShare", 0) or 0
-            return_contrib = pkg.get("returnContribution", 0) or 0
-            # `pkg.get("formerNav")` is stale when a prior package was trashed
-            # or regenerated after this one was computed. _find_former_nav
-            # already resolved the live value into former_nav_map — use it.
-            former_nav     = former_nav_map.get(wid)
-
-            gap_pct  = return_nav_ps - return_contrib
-            gap_cash = round(gap_pct * former_nav, 2) if former_nav is not None else None
-
-            if gap_cash is None or abs(gap_pct) <= 1e-10:
-                continue
-
-            current_secs = all_positions.get(wid, [])
-            former_map   = all_former.get(wid, {})
-            txns_map     = all_txns.get(wid, {})
-            prov_map     = all_provs.get(wid, {})
-            prov_lc      = all_prov_lifecycle.get(wid, set())
-
-            # Event txns by security
-            event_txns_by_sec = {}
-            for sid, txn_list in txns_map.items():
-                for t in txn_list:
-                    if t["type"] in _EVENT_TYPES and t["securityId"]:
-                        event_txns_by_sec.setdefault(t["securityId"], []).append(t)
-
-            for sec in current_secs:
-                sid  = str(sec.get("securityId", ""))
-                pu   = sec.get("pu")
-                qty  = sec.get("quantity")
-                f    = former_map.get(sid, {})
-                f_pu = f.get("pu")
-                f_qty = f.get("quantity")
-                f_bal = round(f_pu * f_qty, 6) if (f_pu is not None and f_qty is not None) else None
-                amt_diff = round(qty - (f_qty or 0), 6) if qty is not None else None
-
-                exec_price = sec.get("executionPrice")
-                total_c    = sec.get("totalContribution")
-
-                try:
-                    ret_pu = round(pu / f_pu - 1, 8) if (pu and f_pu) else None
-                except (TypeError, ZeroDivisionError):
-                    ret_pu = None
-                try:
-                    ret_c = round(total_c / f_bal, 8) if (total_c is not None and f_bal) else None
-                except (TypeError, ZeroDivisionError):
-                    ret_c = None
-                diff_rent = round(ret_pu - ret_c, 8) if (ret_pu is not None and ret_c is not None) else None
-
-                sec_txns = txns_map.get(sid, [])
-
-                # Step 2 elimination
-                cond_a = amt_diff is not None and amt_diff == 0
-                cond_b = not sec_txns
-                cond_c = sid not in prov_lc
-                cond_d = diff_rent is not None and diff_rent == 0
-
-                if not cond_d and diff_rent and f_bal:
-                    ev_txns = event_txns_by_sec.get(sid, [])
-                    if ev_txns:
-                        ev_total = round(sum(float(t.get("balance", 0) or 0) for t in ev_txns), 2)
-                        expected_event_cash = round(-diff_rent * f_bal, 2)
-                        if _approx(ev_total, expected_event_cash):
-                            cond_d = True
-                            non_event_txns = [t for t in sec_txns if t["type"] not in _EVENT_TYPES]
-                            cond_b = not non_event_txns
-
-                if cond_a and cond_b and cond_c and cond_d:
-                    continue  # eliminated
-
-                # Step 3 — only collect Tier 1 flags
-                price = exec_price or pu or 0
-                info  = sec_info.get(sid, {})
-                sec_name = info.get("beehusName") or sec.get("beehusName", sid)
-                sec_type = info.get("securityType", "")
-
-                # 3.1 — Amount Difference
-                if amt_diff:
-                    settle = info.get("redemptionSettlementDays" if amt_diff < 0 else "subscriptionSettlementDays") or 0
-                    nav_d  = info.get("redemptionNavDays"        if amt_diff < 0 else "subscriptionNavDays")        or 0
-                    offset = settle - nav_d
-
-                    if offset == 0:
-                        has_buysell = any(t.get("type") == "buySell" for t in sec_txns)
-                        if not has_buysell:
-                            impact = round(abs(amt_diff) * price, 2)
-                            _agg_flag(flag_agg, sid, sec_name, sec_type, "MISSING_TRANSACTION",
-                                      impact, wid, wallet_names.get(wid, wid), gap_cash,
-                                      amt_diff, pu, exec_price, offset)
-                    else:
-                        if sid not in prov_map:
-                            impact = round(abs(amt_diff) * price, 2)
-                            _agg_flag(flag_agg, sid, sec_name, sec_type, "MISSING_PROVISION",
-                                      impact, wid, wallet_names.get(wid, wid), gap_cash,
-                                      amt_diff, pu, exec_price, offset)
-
-                # 3.2 — Rentability Difference
-                if diff_rent and f_bal and not (cond_a and cond_b and cond_c and cond_d):
-                    expected_event_cash = round(-diff_rent * f_bal, 2)
-                    ev_txns = event_txns_by_sec.get(sid, [])
-                    if ev_txns:
-                        ev_total = round(sum(float(t.get("balance", 0) or 0) for t in ev_txns), 2)
-                        if not _approx(ev_total, expected_event_cash):
-                            _agg_flag(flag_agg, sid, sec_name, sec_type, "WRONG_EVENT_BALANCE",
-                                      round(abs(ev_total - expected_event_cash), 2),
-                                      wid, wallet_names.get(wid, wid), gap_cash,
-                                      amt_diff, pu, exec_price, 0)
-                    elif sid in prov_map:
-                        if not _approx(float(prov_map[sid]), expected_event_cash):
-                            _agg_flag(flag_agg, sid, sec_name, sec_type, "WRONG_PROVISION_AMOUNT",
-                                      round(abs(float(prov_map[sid]) - expected_event_cash), 2),
-                                      wid, wallet_names.get(wid, wid), gap_cash,
-                                      amt_diff, pu, exec_price, 0)
-                    else:
-                        _agg_flag(flag_agg, sid, sec_name, sec_type, "MISSING_EVENT",
-                                  abs(expected_event_cash),
-                                  wid, wallet_names.get(wid, wid), gap_cash,
-                                  amt_diff, pu, exec_price, 0)
-
-        # Build output sorted by wallet count desc
-        securities = []
-        for (sid, flag), data in flag_agg.items():
-            si = sec_info.get(sid, {})
-            securities.append({
-                "securityId":   sid,
-                "securityName": data["securityName"],
-                "securityType": data["securityType"],
-                "flag":         flag,
-                "walletCount":  len(data["wallets"]),
-                "totalImpact":  round(sum(w["impact"] for w in data["wallets"]), 2),
-                "avgImpact":    round(sum(w["impact"] for w in data["wallets"]) / len(data["wallets"]), 2),
-                "pu":           data.get("pu"),
-                "executionPrice": data.get("executionPrice"),
-                "amountDiff":   data.get("amountDiff"),
-                "offset":       data.get("offset", 0),
-                "currencyId":   str(si.get("currency", "BRL")),
-                "wallets":      sorted(data["wallets"], key=lambda w: -abs(w["impact"])),
-            })
-
-        securities.sort(key=lambda s: -s["walletCount"])
-
-        return jsonify(_sanitize({
-            "securities": securities,
-            "date":       date,
-            "walletCount": len(pkg_wallet_ids),
-        }))
-    except Exception:
-        import logging, traceback
-        traceback.print_exc()
-        logging.getLogger(__name__).exception("conciliacao /global-analysis failed")
-        return jsonify({"error": "falha ao processar"}), 500
+    return jsonify({
+        "error": "rota não disponível — migração MongoDB em curso.",
+        "code":  "MONGO_FREE",
+    }), 503
 
 
 def _agg_flag(agg, sid, sec_name, sec_type, flag, impact, wid, wallet_name, gap_cash,
@@ -3747,198 +2956,10 @@ def _agg_flag(agg, sid, sec_name, sec_type, flag, impact, wid, wallet_name, gap_
 
 @bp.route("/api/conciliacao/global-execution-prices")
 def global_execution_prices():
-    """Cross-wallet scan for `MISSING_EXECUTION_PRICE` candidates.
-
-    For every wallet of `companyId` on `date`, evaluate each security:
-      - has `amountDifference` (qty changed since former position), AND
-      - has at least one `buySell` transaction on `liquidationDate == date`
-    The implied execution price is `−Σbalance(buySell) ÷ amountDifference`.
-    A row is surfaced as a candidate when the implied price diverges from the
-    price the system used (`executionPrice or PU`) by more than 0.5%.
-
-    The scan runs *unconditionally* on every wallet — it does not require a
-    `returnNavPerShare ≠ returnContribution` mismatch — so it doubles as a
-    "second-pass" verification: even wallets that look fine on the daily NAV
-    can have an execution-price discrepancy whose impact happens to net out
-    against another flag, but is still worth fixing.
-
-    Output mirrors the existing `/global-analysis` shape so the Painel UI can
-    reuse the bulk-send pipeline:
-        {
-          "rows": [{walletId, walletName, securityId, securityName,
-                    pu, priorExecutionPrice, executionPrice (suggested),
-                    expectedExecPrice, deltaPct, amountDiff,
-                    actualBalance, expectedValue, impact, sourceAnomalyKey}],
-          "walletCount": N, "date": "YYYY-MM-DD"
-        }
-    Rows already in the executionPrices bucket (matched by `sourceAnomalyKey`)
-    are tagged with `accepted=True` so the UI can gray them out.
-    """
-    try:
-        company_id = request.args.get("companyId", "")
-        date       = request.args.get("date", "")
-        if not company_visible(company_id):
-            return jsonify({"rows": [], "date": date, "walletCount": 0})
-
-        wallet_ids = _valid_wallet_ids()
-        wallet_names = {wid: name for wid, name in get_wallet_names().items() if wid in wallet_ids}
-
-        # Wallets of this company that have a position on this date. We scan
-        # all of them — not just those with a NAV mismatch — because a MEP
-        # divergence can exist independent of the daily gap.
-        scope_wallets = [
-            str(w["_id"])
-            for w in db.wallets.find({"companyId": company_id, "_id": {"$in": [_OID(s) for s in wallet_ids if _is_oid(s)]}}, {"_id": 1})
-        ]
-        if not scope_wallets:
-            return jsonify(_sanitize({"rows": [], "date": date, "walletCount": 0}))
-
-        # Wallets with a processedPosition on `date` (skip wallets that never
-        # got computed for this date — nothing to inspect there).
-        positions = {}
-        sec_oids  = set()
-        for doc in db.processedPosition.find(
-            {"walletId": {"$in": scope_wallets}, "positionDate": date},
-            {"walletId": 1, "securities": 1}
-        ):
-            wid = str(doc["walletId"])
-            secs = doc.get("securities", [])
-            positions[wid] = secs
-            for s in secs:
-                sid = s.get("securityId")
-                if sid:
-                    sec_oids.add(sid)
-                    try:
-                        sec_oids.add(_OID(str(sid)))
-                    except Exception:
-                        pass
-
-        if not positions:
-            return jsonify(_sanitize({"rows": [], "date": date, "walletCount": 0}))
-
-        # Former positions (most recent before `date`)
-        former = {}
-        for doc in db.processedPosition.aggregate([
-            {"$match": {"walletId": {"$in": list(positions.keys())}, "positionDate": {"$lt": date}}},
-            {"$sort": {"positionDate": -1}},
-            {"$group": {"_id": "$walletId", "securities": {"$first": "$securities"}}},
-        ]):
-            wid = str(doc["_id"])
-            former[wid] = {
-                str(s.get("securityId", "")): {"pu": s.get("pu"), "quantity": s.get("quantity")}
-                for s in (doc.get("securities") or [])
-            }
-
-        # Securities metadata (for beehusName fallback)
-        sec_info = {
-            str(s["_id"]): s
-            for s in db.securities.find(
-                {"_id": {"$in": list(sec_oids)}},
-                {"beehusName": 1, "securityType": 1}
-            )
-        }
-
-        # buySell transactions, indexed by (walletId, securityId)
-        buysell = {}
-        for doc in db.transactions.find(
-            {"walletId": {"$in": list(positions.keys())},
-             "liquidationDate": date, "beehusTransactionType": "buySell"},
-            {"walletId": 1, "securityId": 1, "balance": 1}
-        ):
-            wid = str(doc["walletId"])
-            sid = str(doc.get("securityId", "") or "")
-            if not sid:
-                continue
-            buysell.setdefault(wid, {}).setdefault(sid, []).append(float(doc.get("balance") or 0))
-
-        # Already-accepted MEP corrections for dedup. The Painel uses the same
-        # wallet-level anomaly key as the diagnose modal so the row gets the
-        # ✓ marker without re-sending.
-        accepted_keys = set()
-        for path in _iter_wallet_files(company_id, date):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    blob = json.load(f)
-            except (OSError, ValueError):
-                continue
-            for r in (blob.get("executionPrices") or []):
-                k = r.get("sourceAnomalyKey")
-                if k:
-                    accepted_keys.add(k)
-
-        rows = []
-        for wid, secs in positions.items():
-            for sec in secs:
-                sid = str(sec.get("securityId", ""))
-                if not sid:
-                    continue
-                qty   = sec.get("quantity")
-                f_qty = former.get(wid, {}).get(sid, {}).get("quantity")
-                if qty is None:
-                    continue
-                amt_diff = round(qty - (f_qty or 0), 6)
-                if amt_diff == 0:
-                    continue
-
-                txn_balances = buysell.get(wid, {}).get(sid, [])
-                if not txn_balances:
-                    continue
-                actual_bal = round(sum(txn_balances), 2)
-                if actual_bal == 0:
-                    continue
-
-                pu         = sec.get("pu")
-                exec_price = sec.get("executionPrice")
-                price_used = exec_price if (exec_price not in (None, 0)) else pu
-                if not price_used:
-                    continue
-
-                try:
-                    implied_exec = round(-actual_bal / amt_diff, 6)
-                except ZeroDivisionError:
-                    continue
-
-                delta = abs(implied_exec - price_used)
-                if delta <= abs(price_used) * 0.005:
-                    continue  # within tolerance — not a candidate
-
-                expected_value = round(-amt_diff * price_used, 2)
-                impact         = round(abs(amt_diff * (price_used - implied_exec)), 2)
-                key = f"{company_id}|{date}|{wid}|MISSING_EXECUTION_PRICE|{sid}"
-                info = sec_info.get(sid, {})
-
-                rows.append({
-                    "walletId":            wid,
-                    "walletName":          wallet_names.get(wid, wid),
-                    "securityId":          sid,
-                    "securityName":        info.get("beehusName") or sec.get("beehusName") or sid,
-                    "securityType":        info.get("securityType", ""),
-                    "pu":                  pu,
-                    "priorExecutionPrice": exec_price,
-                    "priceUsed":           price_used,
-                    "expectedExecPrice":   implied_exec,
-                    "deltaPct":            round((implied_exec - price_used) / price_used * 100, 4),
-                    "amountDiff":          amt_diff,
-                    "actualBalance":       actual_bal,
-                    "expectedValue":       expected_value,
-                    "impact":              impact,
-                    "sourceAnomalyKey":    key,
-                    "accepted":            key in accepted_keys,
-                })
-
-        # Sort by impact desc — biggest cash deltas first
-        rows.sort(key=lambda r: -r["impact"])
-
-        return jsonify(_sanitize({
-            "rows":        rows,
-            "date":        date,
-            "walletCount": len(positions),
-        }))
-    except Exception:
-        import logging, traceback
-        traceback.print_exc()
-        logging.getLogger(__name__).exception("conciliacao /global-execution-prices failed")
-        return jsonify({"error": "falha ao processar"}), 500
+    return jsonify({
+        "error": "rota não disponível — migração MongoDB em curso.",
+        "code":  "MONGO_FREE",
+    }), 503
 
 
 def _is_oid(s):
@@ -3953,202 +2974,10 @@ def _is_oid(s):
 
 @bp.route("/api/conciliacao/transaction-check")
 def transaction_check():
-    """Find buySell transactions without a matching amountDifference or provision.
-
-    For each buySell transaction on the given date:
-      - balance < 0 → subscription → offset = subscriptionSettlementDays − subscriptionNavDays
-      - balance > 0 → redemption   → offset = redemptionSettlementDays − redemptionNavDays
-      - offset = 0  → expect amountDifference on liquidationDate
-      - offset ≠ 0  → expect active provision for the security/wallet
-    """
-    try:
-        company_id = request.args.get("companyId", "")
-        date       = request.args.get("date", "")
-        if not company_visible(company_id):
-            return jsonify({"unmatched": [], "date": date, "totalTransactions": 0})
-
-        wallet_names = dict(get_wallet_names())
-
-        # Company wallets only
-        company_wallets = set()
-        for pkg in db.navPackages.find(
-            {"companyId": company_id,
-             "positionDate": date, "trashed": {"$ne": True}},
-            {"walletId": 1}
-        ):
-            company_wallets.add(str(pkg["walletId"]))
-
-        if not company_wallets:
-            return jsonify(_sanitize({"unmatched": [], "date": date, "totalTransactions": 0}))
-
-        # All buySell transactions for these wallets on this date
-        buysell_txns = list(db.transactions.find(
-            {"walletId": {"$in": list(company_wallets)}, "liquidationDate": date,
-             "beehusTransactionType": "buySell"},
-            {"walletId": 1, "securityId": 1, "balance": 1, "quantity": 1,
-             "price": 1, "description": 1, "operationDate": 1, "liquidationDate": 1}
-        ))
-
-        if not buysell_txns:
-            return jsonify(_sanitize({"unmatched": [], "date": date, "totalTransactions": 0}))
-
-        total_txns = len(buysell_txns)
-
-        # Collect all securityIds and walletIds involved
-        txn_wallet_ids = set()
-        txn_sec_ids_raw = set()
-        for txn in buysell_txns:
-            txn_wallet_ids.add(str(txn["walletId"]))
-            sid = txn.get("securityId")
-            if sid:
-                txn_sec_ids_raw.add(sid)
-                try:
-                    txn_sec_ids_raw.add(_OID(str(sid)))
-                except Exception:
-                    pass
-
-        # Pre-load security info (settlement days)
-        sec_info = {
-            str(s["_id"]): s
-            for s in db.securities.find(
-                {"_id": {"$in": list(txn_sec_ids_raw)}},
-                {"subscriptionSettlementDays": 1, "subscriptionNavDays": 1,
-                 "redemptionSettlementDays": 1, "redemptionNavDays": 1,
-                 "securityType": 1, "beehusName": 1}
-            )
-        }
-
-        # Pre-load ALL current positions in one query (replaces N find_one calls)
-        positions = {}   # {walletId: {securityId: quantity}}
-        former_pos = {}  # {walletId: {securityId: quantity}}
-        wid_list = list(txn_wallet_ids)
-
-        for doc in db.processedPosition.find(
-            {"walletId": {"$in": wid_list}, "positionDate": date},
-            {"walletId": 1, "securities": 1}
-        ):
-            wid = str(doc["walletId"])
-            positions[wid] = {
-                str(s.get("securityId", "")): s.get("quantity")
-                for s in doc.get("securities", [])
-            }
-
-        # Pre-load ALL former positions in one aggregation (replaces N find_one calls)
-        for doc in db.processedPosition.aggregate([
-            {"$match": {"walletId": {"$in": wid_list}, "positionDate": {"$lt": date}}},
-            {"$sort": {"positionDate": -1}},
-            {"$group": {"_id": "$walletId", "securities": {"$first": "$securities"}}},
-        ]):
-            wid = str(doc["_id"])
-            former_pos[wid] = {
-                str(s.get("securityId", "")): s.get("quantity")
-                for s in (doc.get("securities") or [])
-            }
-
-        # Pre-load active provisions: {(walletId, securityId): total}
-        active_provs = {}
-        for doc in db.provisions.aggregate([
-            {"$match": {"walletId": {"$in": list(txn_wallet_ids)},
-                        "initialDate": {"$lte": date}, "liquidationDate": {"$gt": date},
-                        "securityId": {"$ne": None}}},
-            {"$group": {"_id": {"w": "$walletId", "s": "$securityId"},
-                        "total": {"$sum": {"$ifNull": ["$balance", {"$ifNull": ["$amount", 0]}]}}}},
-        ]):
-            wid = str(doc["_id"]["w"])
-            sid = str(doc["_id"]["s"])
-            active_provs[(wid, sid)] = doc["total"]
-
-        # Merge in pending provisions accepted via /correcoes whose active
-        # window covers `date`. Without this, a buySell already paired with a
-        # provision via the "Aceitar" button still flags as unmatched.
-        all_pending_provs = load_all_pending_provisions_by_wallet(company_id)
-        for wid, provs in all_pending_provs.items():
-            if wid not in txn_wallet_ids:
-                continue
-            for cp in provs:
-                sid = str(cp.get("securityId", "") or "")
-                if not sid:
-                    continue
-                init = cp.get("initialDate")
-                liq  = cp.get("liquidationDate")
-                if (init or "") <= date and (liq or "") > date:
-                    bal = float(cp.get("balance") or cp.get("amount") or 0)
-                    active_provs[(wid, sid)] = active_provs.get((wid, sid), 0) + bal
-
-        # Check each buySell transaction
-        unmatched = []
-        for txn in buysell_txns:
-            wid = str(txn["walletId"])
-            sid = str(txn.get("securityId", "") or "")
-            balance = txn.get("balance") or 0
-
-            if not sid:
-                continue
-
-            info = sec_info.get(sid, {})
-            sec_name = info.get("beehusName", sid)
-            sec_type = info.get("securityType", "")
-
-            # Determine subscription vs redemption
-            if balance < 0:
-                # Subscription (buying)
-                settle = info.get("subscriptionSettlementDays") or 0
-                nav_d  = info.get("subscriptionNavDays") or 0
-                direction = "subscription"
-            else:
-                # Redemption (selling)
-                settle = info.get("redemptionSettlementDays") or 0
-                nav_d  = info.get("redemptionNavDays") or 0
-                direction = "redemption"
-
-            offset = settle - nav_d
-
-            # Check based on offset
-            if offset == 0:
-                # Expect amountDifference on this date
-                curr_qty = positions.get(wid, {}).get(sid)
-                frmr_qty = former_pos.get(wid, {}).get(sid)
-                amt_diff = round((curr_qty or 0) - (frmr_qty or 0), 6) if curr_qty is not None else None
-
-                if amt_diff is not None and amt_diff != 0:
-                    continue  # matched — position changed
-                problem = "Sem amountDifference na posição"
-            else:
-                # Expect active provision
-                if (wid, sid) in active_provs:
-                    continue  # matched — provision exists
-                problem = f"Sem provisão ativa (offset={offset})"
-
-            unmatched.append({
-                "walletId":       wid,
-                "walletName":     wallet_names.get(wid, wid),
-                "securityId":     sid,
-                "securityName":   sec_name,
-                "securityType":   sec_type,
-                "balance":        balance,
-                "quantity":       txn.get("quantity"),
-                "price":          txn.get("price"),
-                "direction":      direction,
-                "offset":         offset,
-                "operationDate":  str(txn.get("operationDate", "") or "")[:10],
-                "liquidationDate": str(txn.get("liquidationDate", "") or "")[:10],
-                "description":    txn.get("description", ""),
-                "problem":        problem,
-            })
-
-        # Sort: by security name, then wallet
-        unmatched.sort(key=lambda u: (u["securityName"], u["walletName"]))
-
-        return jsonify(_sanitize({
-            "unmatched":         unmatched,
-            "date":              date,
-            "totalTransactions": total_txns,
-        }))
-    except Exception:
-        import logging, traceback
-        traceback.print_exc()
-        logging.getLogger(__name__).exception("conciliacao /transaction-check failed")
-        return jsonify({"error": "falha ao processar"}), 500
+    return jsonify({
+        "error": "rota não disponível — migração MongoDB em curso.",
+        "code":  "MONGO_FREE",
+    }), 503
 
 
 # ── Scenario Capture ─────────────────────────────────────────────────────────
@@ -4358,235 +3187,10 @@ def _compute_coverage(diagnose_output, bayesian_output):
 
 @bp.route("/api/conciliacao/capture-scenario", methods=["POST"])
 def capture_scenario():
-    """Snapshot the full MongoDB state for a wallet/date and save as a test scenario.
-
-    Also runs diagnose + bayesian and saves the outputs alongside the data,
-    along with a coverage analysis showing how much of the gap is explained.
-    """
-    try:
-        data      = request.get_json() or {}
-        wallet_id = data.get("walletId", "")
-        date_str  = data.get("date", "")
-        note      = data.get("note", "")
-
-        if not wallet_id or not date_str:
-            return jsonify({"error": "walletId e date são obrigatórios"}), 400
-        _, err = _require_visible_wallet(wallet_id)
-        if err: return err
-
-        # diagnose + bayesian outputs are sent by the frontend (already fetched)
-        diagnose_output  = data.get("diagnoseOutput") or {}
-        bayesian_output  = data.get("bayesianOutput") or {}
-
-        # ── Snapshot raw data ─────────────────────────────────────────────────
-        scenario_data = _capture_scenario_data(wallet_id, date_str)
-
-        # ── Coverage analysis ─────────────────────────────────────────────────
-        coverage = _compute_coverage(diagnose_output, bayesian_output)
-
-        # ── Save to disk ──────────────────────────────────────────────────────
-        scenario_num = _next_scenario_id()
-        scenario_id  = f"T{scenario_num}"
-        scenario_dir = os.path.join(_SCENARIOS_DIR, scenario_id)
-        os.makedirs(scenario_dir, exist_ok=True)
-
-        def _write(filename, obj):
-            atomic_write_json(os.path.join(scenario_dir, filename), obj)
-
-        _write("wallet.json",          scenario_data["wallet"])
-        _write("nav_packages.json",    scenario_data["nav_packages"])
-        _write("positions.json",       scenario_data["positions"])
-        _write("transactions.json",    scenario_data["transactions"])
-        _write("provisions.json",      scenario_data["provisions"])
-        _write("cash_accounts.json",   scenario_data["cash_accounts"])
-        _write("securities.json",      scenario_data["securities"])
-        _write("diagnose_output.json", _sanitize(diagnose_output))
-        _write("bayesian_output.json", _sanitize(bayesian_output))
-        _write("coverage.json",        coverage)
-
-        # Metadata file for traceability
-        metadata = {
-            "scenarioId":  scenario_id,
-            "walletId":    wallet_id,
-            "walletName":  scenario_data["wallet"].get("name", ""),
-            "date":        date_str,
-            "capturedAt":  _dt.now(timezone.utc).isoformat(),
-            "note":        note,
-            "gapCash":     (diagnose_output.get("step1") or {}).get("gapCash"),
-            "gapPct":      (diagnose_output.get("step1") or {}).get("gapPct"),
-            "coveragePct": coverage["coveragePct"],
-            "residualGap": coverage["residualGap"],
-            "flagCount":   len(coverage["flags"]),
-        }
-        _write("metadata.json", metadata)
-
-        # ── Optional: trigger /analyze-scenario via headless Claude CLI ───────
-        # Default ON; opt-out via ANALYZE_ON_CAPTURE=0. Silently skipped when
-        # the CLI is not installed/authenticated. `analysisError` is surfaced
-        # to the UI so the user can distinguish "feature disabled" from
-        # "OneDrive lock", "CLI missing", etc.
-        analysis_triggered, analysis_error = _maybe_trigger_analysis(scenario_id, scenario_dir)
-
-        return jsonify({
-            "ok":               True,
-            "scenarioId":       scenario_id,
-            "scenarioDir":      scenario_dir,
-            "coverage":         coverage,
-            "metadata":         metadata,
-            "analysisTriggered": analysis_triggered,
-            "analysisError":     analysis_error,
-        })
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        # Raw exception text may embed internal paths / Mongo URIs. Log the
-        # full traceback server-side; return a generic message to the client.
-        return jsonify({"error": "falha ao capturar cenário — ver logs do servidor"}), 500
-
-
-def _find_claude_binary():
-    """Locate the Claude Code CLI binary.
-
-    Tries PATH first (fast path), then falls back to well-known install
-    locations so the feature works even when Flask was started before the
-    PATH was refreshed (e.g., right after `winget install`). The CLAUDE_BIN
-    env var always wins for manual overrides.
-
-    Windows fallbacks derive the AppData path from LOCALAPPDATA or, when
-    empty (common under SYSTEM service accounts), from USERPROFILE. When
-    running Flask as a Windows service, prefer setting CLAUDE_BIN explicitly.
-    """
-    override = os.environ.get("CLAUDE_BIN", "").strip()
-    if override and os.path.isfile(override):
-        return override
-    found = shutil.which("claude")
-    if found:
-        return found
-    # Windows fallbacks (winget installs to %LOCALAPPDATA%\Microsoft\WinGet\...)
-    if sys.platform.startswith("win"):
-        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
-        if not local_appdata:
-            user_profile = os.environ.get("USERPROFILE", "").strip()
-            if user_profile:
-                local_appdata = os.path.join(user_profile, "AppData", "Local")
-        if local_appdata:
-            candidates = [
-                os.path.join(local_appdata, "Microsoft", "WinGet", "Links", "claude.exe"),
-            ]
-            pkg_root = os.path.join(local_appdata, "Microsoft", "WinGet", "Packages")
-            if os.path.isdir(pkg_root):
-                try:
-                    for name in os.listdir(pkg_root):
-                        if name.startswith("Anthropic.ClaudeCode"):
-                            candidates.append(os.path.join(pkg_root, name, "claude.exe"))
-                except OSError:
-                    pass
-            for c in candidates:
-                if os.path.isfile(c):
-                    return c
-    return None
-
-
-def _spawn_claude_bg(scenario_dir, slash_cmd_args, out_filename, status_filename):
-    """Shared subprocess helper for /analyze and /implement triggers.
-
-    Writes `pending` sentinel, opens `out_filename` for streaming stdout+stderr,
-    and spawns `claude -p <slash_cmd_args...>` detached from Flask. Returns
-    (ok: bool, error: str|None). Never raises.
-
-    Guarantees on failure paths:
-      - If `Popen` fails, the stdout file handle is closed in the parent
-        (subprocess never inherited it, so closing is safe and prevents
-        leaked handles on Windows and ENOSPC blast radius on OneDrive).
-      - Status sentinel is flipped to "error" and the original OSError text
-        is propagated back to the caller (not to the HTTP client).
-
-    Defense-in-depth gate: requires SWAT_ALLOW_CLAUDE_CLI=1 in the env.
-    Without that flag the helper refuses to spawn anything, even if
-    auth + scenarioId regex pass — so an HTTP path (or scenario import
-    bug) cannot ever invoke `claude --permission-mode acceptEdits`
-    against the working tree without an explicit operator opt-in.
-    """
-    if os.environ.get("SWAT_ALLOW_CLAUDE_CLI", "").strip() not in ("1", "true", "True"):
-        return False, "claude CLI desabilitado (defina SWAT_ALLOW_CLAUDE_CLI=1 para habilitar)"
-    claude_bin = _find_claude_binary()
-    if not claude_bin:
-        return False, "claude CLI not found on PATH or fallback locations"
-    status_path = os.path.join(scenario_dir, status_filename)
-    out_path    = os.path.join(scenario_dir, out_filename)
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    out = None
-    try:
-        try:
-            atomic_write_text(status_path, "pending")
-        except OSError as exc:
-            return False, f"failed to write status sentinel: {exc}"
-
-        kwargs = {}
-        if sys.platform.startswith("win"):
-            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) \
-                                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            kwargs["start_new_session"] = True
-
-        try:
-            out = open(out_path, "w", encoding="utf-8")
-        except OSError as exc:
-            return False, f"failed to open stdout file: {exc}"
-
-        try:
-            subprocess.Popen(
-                [claude_bin, "-p", *slash_cmd_args],
-                cwd=project_root,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                **kwargs,
-            )
-        except OSError as exc:
-            # Subprocess never spawned → parent still owns the fd. Close it
-            # to avoid leaking the handle (Windows in particular locks the
-            # file until GC, making retries fail with "file in use").
-            try:
-                out.close()
-            except Exception:
-                pass
-            raise
-
-        # Popen succeeded; Popen now owns the handle. Do NOT close `out` in
-        # the parent — closing would make the subprocess write into a dead fd.
-        return True, None
-    except Exception as exc:
-        try:
-            atomic_write_text(status_path, "error")
-        except Exception:
-            pass
-        return False, f"failed to spawn subprocess: {exc}"
-
-
-def _maybe_trigger_analysis(scenario_id, scenario_dir):
-    """Spawn `claude -p /analyze-scenario <id>` in background.
-
-    Default: ON. Opt out with ANALYZE_ON_CAPTURE=0 (or "false") when running
-    in CI / environments where the Claude CLI is unavailable or unauthenticated.
-
-    Writes stdout to `<scenario_dir>/analysis.md` and a status sentinel to
-    `<scenario_dir>/.analysis_status` (pending|done|error) so the frontend can
-    poll without guessing when the subprocess has finished. Never raises.
-
-    Returns (ok: bool, error: str|None). `False` with no error means the
-    feature was explicitly disabled (ANALYZE_ON_CAPTURE=0) or the CLI is
-    missing — the HTTP caller can pass this through to the UI for diagnosis.
-    """
-    if os.environ.get("ANALYZE_ON_CAPTURE", "1").strip() in ("0", "false", "False"):
-        return False, "ANALYZE_ON_CAPTURE=0 (feature desativada)"
-    return _spawn_claude_bg(
-        scenario_dir,
-        slash_cmd_args=[f"/analyze-scenario {scenario_id}"],
-        out_filename="analysis.md",
-        status_filename=".analysis_status",
-    )
-
+    return jsonify({
+        "error": "rota não disponível — migração MongoDB em curso.",
+        "code":  "MONGO_FREE",
+    }), 503
 
 @bp.route("/api/conciliacao/scenario-analysis")
 def scenario_analysis():
