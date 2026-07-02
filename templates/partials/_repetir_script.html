@@ -69,19 +69,11 @@ if (typeof Funcoes === 'undefined') {
       provs:             [],    // current Provisões tab listing
       hiddenCols:        new Set(),  // column keys hidden in the preview table
       onlyDiffs:         false,      // filter: show only rows where repetição diverge de target
-      // ── Conciliação NAV (atalho embarcado no roster) ──
-      // Estado da seção que mostra carteiras com divergência por data;
-      // clicar numa carteira dispara a prévia com:
-      //   target = data selecionada
-      //   source = formerDate da carteira (última navPackage anterior)
-      cl: {
-        companies:    [],          // [{id, name}] cache de empresas
-        companyId:    "",
-        endDate:      "",
-        threshold:    "0.01",      // em % (0.01% = 1 bp)
-        date:         "",
-        rows:         [],          // wallets-with-divergence retornadas
-      },
+      // ── Carteiras da empresa (atalho p/ rodar prévia) ──
+      // Lista as carteiras do /results na data escolhida (sem divergência) e
+      // dispara a prévia ao clicar. O único estado extra é criado sob demanda:
+      // `clInjectedWallets` (Set) — carteiras injetadas no roster por esse
+      // atalho, removidas em `closePreview`.
     },
 
     // Registry of every column in the preview table — drives the
@@ -500,9 +492,9 @@ if (typeof Funcoes === 'undefined') {
       catch (e) { console.error("_loadWalletLists failed:", e); }
       // Entrada da tela: listas nascem DESMARCADAS e o roster da rotina
       // diária NÃO é carregado automaticamente. O operador entra com o
-      // foco no bloco "Carteiras com divergência (Conciliação NAV)" — o
-      // roster só popula quando ele marca uma lista. (Antes marcávamos
-      // todas as listas e disparávamos runDaily, enchendo a tela de cara.)
+      // foco no bloco "Carteiras da empresa" — o roster só popula quando
+      // ele marca uma lista. (Antes marcávamos todas as listas e
+      // disparávamos runDaily, enchendo a tela de cara.)
       this._st.selectedLists = new Set();
       try { this._renderListPicker(); }
       catch (e) { console.error("_renderListPicker failed:", e); }
@@ -516,8 +508,8 @@ if (typeof Funcoes === 'undefined') {
 
     async _loadCompanies() {
       const sel = document.getElementById("rp-company");
-      // Selector secundário do bloco "Conciliação NAV" — populado com
-      // a mesma lista. Mantém UI consistente e evita uma segunda fetch.
+      // Selector do bloco "Carteiras da empresa" — populado com a mesma
+      // lista. Mantém UI consistente e evita uma segunda fetch.
       const cl  = document.getElementById("rp-cl-company");
       try {
         const r = await fetch("/api/repetir-posicoes/filters/companies");
@@ -888,9 +880,15 @@ if (typeof Funcoes === 'undefined') {
 
     // ── Daily routine ─────────────────────────────────────────────────
     // Roster = união dos walletIds das listas marcadas no list-picker.
-    // Quando nada está marcado, o backend devolve zero linhas. Não há
-    // mais filtro de data no nível da página — cada linha carrega seu
-    // próprio "Última posição" e "Data alvo".
+    // Quando nada está marcado, o backend devolve zero linhas.
+    // O operador informa uma "Data-fonte" (de onde repetir) no topo; o
+    // backend marca, via pre-processing, quais carteiras das listas têm
+    // posição processada nessa data (essas ficam elegíveis, com Data-fonte
+    // pré-preenchida e Data alvo = próximo dia útil). Sem Data-fonte, as
+    // linhas vêm em branco e o operador preenche a origem manualmente por
+    // carteira.
+    onDailySourceDateChange() { this.runDaily(); },
+
     async runDaily() {
       const status = document.getElementById("rp-status");
       const lists = Array.from(this._st.selectedLists);
@@ -898,6 +896,9 @@ if (typeof Funcoes === 'undefined') {
       try {
         const params = new URLSearchParams();
         if (lists.length) params.set("lists", lists.join(","));
+        const srcEl = document.getElementById("rp-daily-source-date");
+        const srcDate = srcEl ? (srcEl.value || "").trim() : "";
+        if (srcDate) params.set("date", srcDate);
         const qs = params.toString();
         const r = await fetch(`/api/repetir-posicoes/daily${qs ? "?" + qs : ""}`);
         const data = await r.json();
@@ -938,14 +939,20 @@ if (typeof Funcoes === 'undefined') {
         tbody.innerHTML = `<tr><td colspan="5" class="rp-tbl-left" style="text-align:center; color:#9ca3af; padding:14px 0">${msg}</td></tr>`;
         return;
       }
+      const srcChosen = (document.getElementById("rp-daily-source-date") || {}).value || "";
       tbody.innerHTML = this._st.daily.map(w => {
         const sourceOverride = this._st.dailySourceDate[w.walletId];
         const sourceVal = sourceOverride || w.lastDate || "";
         const eligible = !!sourceVal;
         const target = this._st.dailyTargetDate[w.walletId] || w.suggestedTarget || "";
+        // `w.lastDate` is set only when the wallet has a processed position on
+        // the chosen Data-fonte. Without it: red hint when a date is chosen but
+        // this wallet has no position on it; neutral nudge when no date yet.
         const missingHint = w.lastDate
           ? ""
-          : `<div style="font-size:9px;color:#dc2626;margin-top:2px">sem processedPosition</div>`;
+          : (srcChosen
+              ? `<div style="font-size:9px;color:#dc2626;margin-top:2px">sem posição em ${this._esc(srcChosen)}</div>`
+              : `<div style="font-size:9px;color:#9ca3af;margin-top:2px">informe a Data-fonte</div>`);
         const lastCell = `<td><input type="date" class="rp-input rp-input-date" data-wid="${this._esc(w.walletId)}" value="${this._esc(sourceVal)}" onchange="Repetir.onSourceChange(this)"/>${missingHint}</td>`;
         const targetCell = eligible
           ? `<td><input type="date" class="rp-input rp-input-date" data-wid="${this._esc(w.walletId)}" value="${this._esc(target)}" onchange="Repetir.onTargetChange(this)"/></td>`
@@ -1510,7 +1517,7 @@ if (typeof Funcoes === 'undefined') {
 
       const status = document.getElementById("rp-preview-status");
       status.textContent = `Gerando prévia para ${w.walletName}...`;
-      // Carteiras vindas do atalho Conciliação NAV (`clInjectedWallets`)
+      // Carteiras vindas do atalho "Carteiras da empresa" (`clInjectedWallets`)
       // não estão registradas em walletLists — passamos `adhoc: true`
       // pro backend pular essa checagem (mantém `company_visible`).
       const isAdhoc = !!(this._st.clInjectedWallets && this._st.clInjectedWallets.has(walletId));
@@ -1590,8 +1597,8 @@ if (typeof Funcoes === 'undefined') {
       if (cfBtn) cfBtn.disabled = true;
       const status = document.getElementById("rp-preview-status");
       if (status) status.textContent = "";
-      // Remove carteiras "fantasma" injetadas via `conciliacaoRunPreview`
-      // (atalho do bloco Conciliação NAV) — só estavam ali pra dar
+      // Remove carteiras "fantasma" injetadas via `resultsRunPreview`
+      // (atalho "Carteiras da empresa") — só estavam ali pra dar
       // suporte ao `runPreviewFor`. Sem isso, o roster ficaria com
       // entradas que o operador não selecionou conscientemente.
       if (this._st.clInjectedWallets && this._st.clInjectedWallets.size) {
@@ -1603,151 +1610,67 @@ if (typeof Funcoes === 'undefined') {
       this._renderDailyTable();    // clears the active-row highlight
     },
 
-    // ── Atalho Conciliação NAV ────────────────────────────────────────
-    // Reusa /api/conciliacao/dates e /rows pra listar (empresa × data ×
-    // carteiras-com-divergência) e dispara a prévia direto quando o
-    // operador clica numa carteira. `formerDate` (última navPackage
-    // anterior à data alvo, calculado pelo backend de conciliação) é
-    // usado como `sourceDate` da prévia. Quando o `processedPosition`
-    // dessa data não existir, a prévia continua respondendo (com
-    // `warnings: ["sem processedPosition em sourceDate"]`) — o operador
-    // vê na UI que precisa ajustar a data manualmente.
-    conciliacaoOnCompanyChange() {
-      // Limpa estado da seleção quando muda a empresa.
-      const cardsEl = document.getElementById("rp-cl-dates");
-      const wEl     = document.getElementById("rp-cl-wallets");
-      if (cardsEl) { cardsEl.innerHTML = ""; cardsEl.classList.add("hidden"); }
-      if (wEl)     { wEl.classList.add("hidden"); }
-      this._st.clSelectedDate = null;
-      this.conciliacaoLoadDates();
+    // ── Atalho "Carteiras da empresa" ─────────────────────────────────
+    // Lista as carteiras do `/results` (walletsWithNavDetailed) da empresa
+    // na data escolhida, via /api/repetir-posicoes/results-wallets. SEM
+    // conciliação/divergência: mostra TODAS as carteiras que o /results
+    // devolve. Cada uma tem posição processada na data, então clicar dispara
+    // a prévia com source = data selecionada e target = próximo dia útil
+    // (semântica nativa da Posição Projetada). Reusa `runPreviewFor`.
+    resultsOnCompanyChange() {
+      // Esconde a tabela ao trocar de empresa; recarrega se já houver data.
+      const wEl = document.getElementById("rp-cl-wallets");
+      if (wEl) wEl.classList.add("hidden");
+      this.resultsLoadWallets();
     },
 
-    async conciliacaoLoadDates() {
+    async resultsLoadWallets() {
       const cidEl = document.getElementById("rp-cl-company");
-      const endEl = document.getElementById("rp-cl-end-date");
-      const thrEl = document.getElementById("rp-cl-threshold");
-      const stEl  = document.getElementById("rp-cl-status");
-      const cards = document.getElementById("rp-cl-dates");
-      const cid = cidEl ? cidEl.value : "";
-      if (!cid) {
-        if (cards) { cards.innerHTML = ""; cards.classList.add("hidden"); }
-        if (stEl) stEl.textContent = "";
-        return;
-      }
-      const qs = new URLSearchParams({companyId: cid});
-      if (endEl && endEl.value) qs.set("endDate", endEl.value);
-      if (thrEl && thrEl.value) qs.set("threshold", thrEl.value);
-      if (stEl) stEl.textContent = "Carregando datas...";
-      try {
-        const r = await fetch(`/api/conciliacao/dates?${qs}`);
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        const list = data.cards || [];
-        if (!list.length) {
-          if (cards) { cards.innerHTML = ""; cards.classList.add("hidden"); }
-          if (stEl) stEl.textContent = "Sem datas no intervalo.";
-          return;
-        }
-        // Renderiza cards. Cada card é clicável e fica destacado quando
-        // selecionado (`rp-cl-card-active`).
-        const selDate = this._st.clSelectedDate || "";
-        cards.innerHTML = list.map(c => {
-          const isActive = c.date === selDate;
-          const cls = isActive
-            ? "border-blue-500 bg-blue-50 text-blue-700"
-            : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50";
-          const total = c.total || 0;
-          const totalCls = total ? "text-red-600 font-bold" : "text-gray-300";
-          return `
-            <button type="button" onclick="Repetir.conciliacaoSelectDate('${this._esc(c.date)}')"
-                    class="border rounded-lg p-2 text-center cursor-pointer ${cls}">
-              <div class="text-[10px]">${this._esc(c.date)}</div>
-              <div class="text-base ${totalCls}">${total}</div>
-            </button>`;
-        }).join("");
-        cards.classList.remove("hidden");
-        if (stEl) stEl.textContent = "";
-      } catch (e) {
-        if (stEl) stEl.textContent = `Erro: ${e.message}`;
-        if (cards) { cards.innerHTML = ""; cards.classList.add("hidden"); }
-      }
-    },
-
-    async conciliacaoSelectDate(date) {
-      const cidEl = document.getElementById("rp-cl-company");
-      const thrEl = document.getElementById("rp-cl-threshold");
+      const dtEl  = document.getElementById("rp-cl-date");
       const stEl  = document.getElementById("rp-cl-status");
       const wWrap = document.getElementById("rp-cl-wallets");
       const wBody = document.getElementById("rp-cl-wallets-tbody");
       const wCnt  = document.getElementById("rp-cl-wallets-count");
-      const cid = cidEl ? cidEl.value : "";
-      if (!cid || !date) return;
-      this._st.clSelectedDate = date;
-      this.conciliacaoLoadDates();  // re-renderiza cards pra atualizar destaque
-      const qs = new URLSearchParams({companyId: cid, date});
-      if (thrEl && thrEl.value) qs.set("threshold", thrEl.value);
+      const cid  = cidEl ? cidEl.value : "";
+      const date = dtEl ? (dtEl.value || "").trim() : "";
+      if (!cid || !date) {
+        if (wWrap) wWrap.classList.add("hidden");
+        if (stEl) stEl.textContent = (cid && !date) ? "Informe a data." : "";
+        return;
+      }
       if (stEl) stEl.textContent = "Carregando carteiras...";
       try {
-        const r = await fetch(`/api/conciliacao/rows?${qs}`);
+        const qs = new URLSearchParams({companyId: cid, date});
+        const r = await fetch(`/api/repetir-posicoes/results-wallets?${qs}`);
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        const rows = data.rows || [];
+        const rows = data.wallets || [];
         if (!rows.length) {
-          wBody.innerHTML = `<tr><td colspan="6" class="rp-tbl-left" style="text-align:center; color:#9ca3af; padding:12px 0">Sem divergências em ${this._esc(date)}.</td></tr>`;
+          wBody.innerHTML = `<tr><td colspan="5" class="rp-tbl-left" style="text-align:center; color:#9ca3af; padding:12px 0">Nenhuma carteira com resultado de NAV em ${this._esc(date)}.</td></tr>`;
           if (wCnt) wCnt.textContent = "(0)";
           wWrap.classList.remove("hidden");
           if (stEl) stEl.textContent = "";
           return;
         }
-        // Pré-calcula |Δ Rent.| por linha e ordena DESC. Linhas com Δ
-        // null (retorno faltando em algum lado) vão pro final. Esse
-        // critério bate com a "ferida maior primeiro" da operadora —
-        // carteiras com gap maior precisam de atenção antes.
-        const dRentOf = (r) => {
-          if (r.returnNavPerShare == null || r.returnContribution == null) return null;
-          return r.returnNavPerShare - r.returnContribution;
-        };
-        rows.sort((a, b) => {
-          const da = dRentOf(a);
-          const db = dRentOf(b);
-          if (da == null && db == null) return 0;
-          if (da == null) return 1;
-          if (db == null) return -1;
-          return Math.abs(db) - Math.abs(da);
-        });
-        // Renderiza linhas. `formerDate` vem do backend (última
-        // navPackage anterior à data alvo). Quando ausente, mostra "—"
-        // e o botão é desabilitado.
+        const target = this._nextBizDayISO(date);   // alvo = próximo dia útil
         wBody.innerHTML = rows.map(r => {
-          const fd = r.formerDate || "";
-          const dRent = dRentOf(r);
-          const dRentHTML = dRent != null
-                          ? `<span class="${dRent >= 0 ? 'rp-diff-pos' : 'rp-diff-neg'}">${(dRent * 100).toFixed(4)}%</span>`
-                          : '<span class="rp-diff-na">—</span>';
-          const newGapHTML = (r.newGapPct != null)
-                           ? `<span class="${Math.abs(r.newGapPct) < 1e-9 ? 'rp-diff-zero' : (r.newGapPct >= 0 ? 'rp-diff-pos' : 'rp-diff-neg')}">${(r.newGapPct * 100).toFixed(4)}%</span>`
-                           : '<span class="rp-diff-na">—</span>';
-          const navHTML = (r.nav != null) ? this._fmtMoney(r.nav) : '<span class="rp-diff-na">—</span>';
-          const fdHTML  = fd ? this._esc(fd) : '<span class="rp-diff-na">—</span>';
-          const disabled = fd ? "" : "disabled";
-          // Alinhamento explícito por célula pra casar com os <th> —
-          // o CSS global de `.rp-tbl` força tbody td=right e thead th=
-          // center, então sem override visual fica desalinhado.
+          const navHTML  = (r.nav         != null) ? this._fmtMoney(r.nav)        : '<span class="rp-diff-na">—</span>';
+          const cotaHTML = (r.navPerShare != null) ? this._fmtNum(r.navPerShare, 8) : '<span class="rp-diff-na">—</span>';
+          const qtyHTML  = (r.amount      != null) ? this._fmtNum(r.amount, 6)    : '<span class="rp-diff-na">—</span>';
           return `<tr>
             <td class="rp-tbl-left">${this._esc(r.walletName || r.walletId)}</td>
             <td style="text-align:right">${navHTML}</td>
-            <td style="text-align:right">${dRentHTML}</td>
-            <td style="text-align:right">${newGapHTML}</td>
-            <td class="rp-tbl-left">${fdHTML}</td>
+            <td style="text-align:right">${cotaHTML}</td>
+            <td style="text-align:right">${qtyHTML}</td>
             <td style="text-align:center">
-              <button type="button" class="rp-btn rp-btn-primary" ${disabled}
+              <button type="button" class="rp-btn rp-btn-primary"
                       data-wid="${this._esc(r.walletId)}"
                       data-wname="${this._esc(r.walletName || r.walletId)}"
-                      data-fd="${this._esc(fd)}"
-                      data-td="${this._esc(date)}"
+                      data-sd="${this._esc(date)}"
+                      data-td="${this._esc(target)}"
                       data-cid="${this._esc(cid)}"
-                      onclick="Repetir.conciliacaoRunPreview(this.dataset.wid, this.dataset.wname, this.dataset.fd, this.dataset.td, this.dataset.cid)">
-                Rodar prévia
+                      onclick="Repetir.resultsRunPreview(this.dataset.wid, this.dataset.wname, this.dataset.sd, this.dataset.td, this.dataset.cid)">
+                Gerar prévia
               </button>
             </td>
           </tr>`;
@@ -1756,18 +1679,14 @@ if (typeof Funcoes === 'undefined') {
         wWrap.classList.remove("hidden");
         if (stEl) stEl.textContent = "";
       } catch (e) {
-        wBody.innerHTML = `<tr><td colspan="6" class="rp-tbl-left" style="text-align:center; color:#dc2626; padding:12px 0">Erro: ${this._esc(e.message)}</td></tr>`;
+        wBody.innerHTML = `<tr><td colspan="5" class="rp-tbl-left" style="text-align:center; color:#dc2626; padding:12px 0">Erro: ${this._esc(e.message)}</td></tr>`;
         wWrap.classList.remove("hidden");
         if (stEl) stEl.textContent = "";
       }
     },
 
-    async conciliacaoRunPreview(walletId, walletName, sourceDate, targetDate, companyId) {
-      if (!walletId || !targetDate) return;
-      if (!sourceDate) {
-        alert("Esta carteira não tem navPackage anterior — não é possível inferir a data da posição anterior.");
-        return;
-      }
+    async resultsRunPreview(walletId, walletName, sourceDate, targetDate, companyId) {
+      if (!walletId || !sourceDate || !targetDate) return;
       // Garante que `walletsMeta` tem o `companyId` da carteira pra que
       // os blocos CRUD (transações/provisões) consigam montar as URLs.
       // Idem `daily` pra que o highlight do roster não quebre se a
@@ -1783,8 +1702,8 @@ if (typeof Funcoes === 'undefined') {
           lastDate: sourceDate, suggestedTarget: targetDate,
         }]);
         // Marcamos a injeção pra que `closePreview` remova essa linha
-        // do roster (evita "linha fantasma" da carteira da conciliação
-        // aparecer junto com as carteiras da rotina diária).
+        // do roster (evita "linha fantasma" aparecer junto com as
+        // carteiras da rotina diária).
         this._st.clInjectedWallets.add(walletId);
       }
       // Seta as datas usadas pelo runPreviewFor.
@@ -1794,175 +1713,10 @@ if (typeof Funcoes === 'undefined') {
       this._st.dailyTargetDate[walletId] = targetDate;
       // Dispara a prévia pela rotina existente — sem duplicar lógica
       // de status/render. `runPreviewFor` esconde picker/roster (e a
-      // própria seção de conciliação via `_togglePreviewMode`).
+      // própria seção via `_togglePreviewMode`).
       this.runPreviewFor(walletId);
     },
 
-    // ── Análise com IA (stateless, com follow-up) ────────────────────
-    // Manda o payload da prévia atual pro endpoint dedicado
-    // `/api/repetir-posicoes/analyze`. O backend escreve um arquivo
-    // temporário, roda `claude -p "<prompt>"` síncrono e devolve o
-    // markdown da análise. Nada é persistido — nem cenário, nem
-    // diagnose, nem bayesian.
-    //
-    // Após a análise inicial, o operador pode escrever follow-ups na
-    // textarea — cada um é enviado junto com o histórico de mensagens
-    // para que a IA continue a conversa em cima da mesma prévia.
-    // `_st.analysisChat` é a fonte da verdade do diálogo.
-    async analyzeScenario() {
-      const p = (this._st.preview || [])[0];
-      if (!p) { alert("Sem prévia ativa."); return; }
-      if (!p.walletId || !p.targetDate) { alert("Prévia sem walletId/targetDate."); return; }
-      // Análise inicial: zera o histórico de conversa antes de pedir.
-      this._st.analysisChat = [];
-      await this._runAnalysisRequest();
-    },
-
-    toggleAnalysisHistory() {
-      this._st.analysisChatExpanded = !this._st.analysisChatExpanded;
-      // O botão só aparece no estado "done", então re-renderizar nele
-      // é seguro — não vamos sobrescrever um spinner em andamento.
-      this._renderAnalysisPanel({ kind: "done" });
-    },
-
-    async sendAnalysisFollowup() {
-      const p = (this._st.preview || [])[0];
-      if (!p) return;
-      const input = document.getElementById("rp-analysis-followup-input");
-      if (!input) return;
-      const text = (input.value || "").trim();
-      if (!text) return;
-      // Garante que existe uma conversa em andamento (deve, já que a
-      // textarea só aparece no estado "done", mas é barato verificar).
-      if (!Array.isArray(this._st.analysisChat) || !this._st.analysisChat.length) {
-        await this.analyzeScenario();
-        return;
-      }
-      this._st.analysisChat.push({ role: "user", text });
-      input.value = "";
-      await this._runAnalysisRequest();
-    },
-
-    // Roda a request ao backend e renderiza o painel. Chamado tanto
-    // pela análise inicial (chat vazio → relatório estruturado) quanto
-    // pelos follow-ups (chat tem mensagens → continuação da conversa).
-    async _runAnalysisRequest() {
-      const p = (this._st.preview || [])[0];
-      if (!p) return;
-      // Cada nova rodada (inicial ou follow-up) recolhe o histórico
-      // antigo — o operador acabou de pedir algo, faz sentido focar na
-      // resposta nova. O botão "Ver N anteriores" continua visível.
-      this._st.analysisChatExpanded = false;
-      const btn = document.getElementById("rp-analyze-btn");
-      if (btn) btn.disabled = true;
-      this._renderAnalysisPanel({ kind: "pending" });
-      try {
-        const r = await fetch("/api/repetir-posicoes/analyze", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            preview: p,
-            chat: this._st.analysisChat || [],
-          }),
-        });
-        const data = await r.json();
-        if (!r.ok) {
-          const reason = data.error || `HTTP ${r.status}`;
-          const stderr = data.stderr ? `\n\nstderr:\n${data.stderr}` : "";
-          throw new Error(reason + stderr);
-        }
-        const reply = (data.analysis || "").trim();
-        if (!reply) throw new Error("Resposta vazia da IA");
-        this._st.analysisChat.push({ role: "assistant", text: reply });
-        this._renderAnalysisPanel({ kind: "done" });
-      } catch (e) {
-        this._renderAnalysisPanel({ kind: "error", errorText: e.message || String(e) });
-      } finally {
-        if (btn) btn.disabled = false;
-      }
-    },
-
-    // Renderiza o thread completo a partir de `_st.analysisChat`. Os
-    // três estados (pending/done/error) só mudam o header e o que vem
-    // depois do thread (spinner, textarea de follow-up, ou bloco de
-    // erro). Reduz a chance de bug "atualizei o estado mas o DOM ficou
-    // desincronizado" que existia antes quando cada handler montava HTML
-    // do zero.
-    _renderAnalysisPanel(state) {
-      const panel = document.getElementById("rp-analysis-panel");
-      if (!panel) return;
-      const chat = this._st.analysisChat || [];
-      // Por padrão mostra só a última mensagem; as anteriores ficam
-      // num bloco recolhido com um botão pra revelar. Reduz scroll
-      // numa conversa longa sem perder o histórico. Quando o usuário
-      // clica "Ver N anteriores", `analysisChatExpanded` vira true e
-      // o thread completo aparece.
-      const expanded = !!this._st.analysisChatExpanded;
-      const hiddenCount = chat.length > 1 && !expanded ? chat.length - 1 : 0;
-      const visibleMsgs = (chat.length > 1 && !expanded) ? [chat[chat.length - 1]] : chat;
-      let threadHTML = "";
-      if (hiddenCount > 0) {
-        threadHTML += `
-          <div class="rp-analysis-toggle">
-            <button type="button" class="rp-analysis-toggle-btn"
-                    onclick="Repetir.toggleAnalysisHistory()"
-                    title="Mostrar as mensagens recolhidas">▸ Ver ${hiddenCount} mensagem(ns) anterior(es)</button>
-          </div>`;
-      } else if (expanded && chat.length > 1) {
-        threadHTML += `
-          <div class="rp-analysis-toggle">
-            <button type="button" class="rp-analysis-toggle-btn"
-                    onclick="Repetir.toggleAnalysisHistory()"
-                    title="Recolher o histórico de novo">▾ Ocultar anteriores</button>
-          </div>`;
-      }
-      for (const msg of visibleMsgs) {
-        const isUser = msg.role === "user";
-        const cls = isUser ? "rp-analysis-msg-user" : "rp-analysis-msg-assistant";
-        const label = isUser ? "Você" : "IA";
-        threadHTML += `
-          <div class="rp-analysis-msg ${cls}">
-            <div class="rp-analysis-msg-label">${label}</div>
-            <pre class="rp-analysis-content">${this._esc(msg.text)}</pre>
-          </div>`;
-      }
-      let cardClass, headerHTML, footerHTML = "";
-      if (state.kind === "pending") {
-        cardClass = "rp-analysis-pending";
-        const pendingLabel = chat.length === 0
-          ? "Analisando com IA... (pode levar 30-90s)"
-          : "IA pensando...";
-        headerHTML = `
-          <span class="rp-analysis-spinner"></span>
-          <span class="rp-analysis-title">${pendingLabel}</span>`;
-      } else if (state.kind === "done") {
-        cardClass = "rp-analysis-done";
-        headerHTML = `
-          <span class="rp-analysis-title">Análise com IA</span>
-          <button type="button" class="rp-btn rp-btn-muted" style="margin-left:auto; font-size:10px; padding:2px 8px"
-                  onclick="Repetir.analyzeScenario()" title="Recomeçar análise do zero (descarta a conversa atual)">Recomeçar</button>`;
-        footerHTML = `
-          <div class="rp-analysis-followup">
-            <textarea id="rp-analysis-followup-input" placeholder="Pergunte algo, peça alteração ou levante uma dúvida adicional..." rows="2"
-                      onkeydown="if(event.key==='Enter' && (event.ctrlKey||event.metaKey)){event.preventDefault();Repetir.sendAnalysisFollowup();}"></textarea>
-            <button type="button" class="rp-btn" onclick="Repetir.sendAnalysisFollowup()" title="Ctrl+Enter">Enviar</button>
-          </div>`;
-      } else {
-        // erro
-        cardClass = "rp-analysis-error";
-        headerHTML = `
-          <span class="rp-analysis-title">Erro na IA</span>
-          <button type="button" class="rp-btn rp-btn-muted" style="margin-left:auto; font-size:10px; padding:2px 8px"
-                  onclick="Repetir.analyzeScenario()" title="Tentar novamente">Tentar de novo</button>`;
-        footerHTML = `<pre class="rp-analysis-content">${this._esc(state.errorText || "")}</pre>`;
-      }
-      panel.innerHTML = `
-        <div class="rp-analysis-card ${cardClass}">
-          <div class="rp-analysis-header">${headerHTML}</div>
-          ${threadHTML}
-          ${footerHTML}
-        </div>`;
-    },
 
     // ── Incluir preços B1 ─────────────────────────────────────────────
     // Iterates the current preview, builds the (securityId, targetDate)
@@ -2404,19 +2158,8 @@ if (typeof Funcoes === 'undefined') {
                       title="Temporariamente desabilitado.">
                 <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Executar
               </button>
-              ${(p.navAtual && p.navAtual.nav != null) ? `
-              <button type="button" class="fb-chip" id="rp-analyze-btn" data-kind="process"
-                      onclick="Repetir.analyzeScenario()"
-                      title="Envia a previa (anterior x atual) para a IA analisar. Stateless: nada e armazenado, so a resposta volta para a tela. Apos a analise inicial, da pra fazer follow-up.">
-                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>Análise com IA
-              </button>` : ""}
             </div>
             ${navBlockHTML}
-            <!-- Painel da analise do Claude - populado por
-                 analyzeScenario (sincrono, sem persistencia). Vazio ate
-                 o operador clicar no botao. Fica logo abaixo do bloco
-                 NAV e acima da tabela de securities. -->
-            <div id="rp-analysis-panel" class="rp-analysis-panel"></div>
             <!-- Scrollable inner area — caps the panel height so the
                  action bar (Revisar e confirmar) stays visible without
                  the operator having to scroll the whole page. -->

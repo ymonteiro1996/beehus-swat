@@ -1,10 +1,20 @@
-from pymongo import MongoClient
 from datetime import date, timedelta, datetime, timezone
 import json, os, certifi, tempfile, time, threading
+# NOTE: `pymongo` is imported LAZILY (inside the connection block below) so an
+# instance with Mongo disabled (SWAT_IDENTIFICAR=0) never loads it.
 
 # America/Sao_Paulo is UTC-3 year-round (no DST since 2019). A fixed offset
 # avoids a zoneinfo dependency that's missing on some Windows Python builds.
 _BRT = timezone(timedelta(hours=-3))
+
+
+# ── Feature flags (per-instance, via env) ────────────────────────────────────
+# Transaction/security IDENTIFICATION runs in a separate instance. Set
+# `SWAT_IDENTIFICAR=0` on instances that should NOT serve it: the guarded routes
+# short-circuit before their MongoDB reads (the last data reads in the runtime)
+# and the UI hides the identification affordances. Default ON so existing
+# deployments and the identification instance are unaffected.
+IDENTIFICAR_ENABLED = os.environ.get("SWAT_IDENTIFICAR", "1") != "0"
 
 
 def today_in_brt():
@@ -89,26 +99,23 @@ def get_windows_user():
 # ── Per-user connection storage ─────────────────────────────────────────────
 
 def load_user_connections():
+    # Read-only since the /setup UI was removed: the connection map is now
+    # populated out-of-band (manual edit / provisioning) and consumed only by
+    # the boot-time connect below for the offline Mongo-backed CLIs (e.g.
+    # `transaction_type_classifier --rebuild`).
     if not os.path.exists(USER_CONNECTIONS_FILE):
         return {}
     with open(USER_CONNECTIONS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_user_connections(conns):
-    atomic_write_json(USER_CONNECTIONS_FILE, conns)
-
-
 # ── DB proxy ─────────────────────────────────────────────────────────────────
-# A single object whose internal reference can be swapped after registration,
-# so all existing `from db import db` imports see the live database immediately.
+# A single object whose internal reference is bound once at boot (when a Mongo
+# connection is configured), so all `from db import db` imports see it.
 
 class _DbProxy:
     def __init__(self):
         self._db = None
-        # Serialises swap-the-handle reconnects from /api/setup/save-connection.
-        # Without this, two concurrent saves both build a MongoClient + probe,
-        # both call _init, and the loser's client leaks (never closed).
         self._lock = threading.Lock()
 
     def _init(self, mongo_db):
@@ -122,40 +129,53 @@ class _DbProxy:
         if name.startswith("_"):
             raise AttributeError(name)
         if self._db is None:
-            raise RuntimeError("Database not initialized – please register at /setup.")
+            raise RuntimeError(
+                "Database not initialized – no MongoDB connection configured "
+                "(set SWAT_IDENTIFICAR and a saved connection for Mongo-backed tools).")
         return getattr(self._db, name)
 
     def __getitem__(self, name):
         if self._db is None:
-            raise RuntimeError("Database not initialized – please register at /setup.")
+            raise RuntimeError(
+                "Database not initialized – no MongoDB connection configured "
+                "(set SWAT_IDENTIFICAR and a saved connection for Mongo-backed tools).")
         return self._db[name]
 
 
 db     = _DbProxy()
 client = None
-_client_swap_lock = threading.Lock()
 
 
-def swap_mongo_client(new_client, db_name):
-    """Atomically replace `client` and rebind `db`. Closes the prior client
-    so concurrent /setup saves don't leak Mongo connections."""
+def connect_for_cli(uri=None, *, db_name=DB_NAME, run_ensure_indexes=False):
+    """Explicitly connect the `db` proxy to MongoDB — for OFFLINE CLIs only.
+
+    The web app NEVER calls this: it runs fully Mongo-free (every route reads
+    the Beehus API). There is no implicit connect-at-import anymore, so the
+    dashboard never opens a Mongo socket regardless of `SWAT_IDENTIFICAR` or a
+    saved `user_connections.json` entry.
+
+    Maintenance scripts that still need raw collection access (e.g.
+    `transaction_type_classifier --rebuild`, `scripts/update_liquidation_dates`)
+    call this once at startup. URI resolution order:
+      1. explicit `uri` argument
+      2. `$SWAT_MONGO_URI`
+      3. the saved per-user connection in `user_connections.json`
+    Raises RuntimeError when none is available. Returns the live MongoClient
+    (the caller may `.close()` it)."""
     global client
-    with _client_swap_lock:
-        old = client
-        client = new_client
-        db._init(new_client[db_name])
-    if old is not None and old is not new_client:
-        try:
-            old.close()
-        except Exception:
-            pass
-
-# Try to connect for the current Windows user
-_user  = get_windows_user()
-_conns = load_user_connections()
-if _user in _conns:
-    client = MongoClient(_conns[_user], tlsCAFile=certifi.where())
-    db._init(client[DB_NAME])
+    if uri is None:
+        uri = (os.environ.get("SWAT_MONGO_URI", "").strip()
+               or load_user_connections().get(get_windows_user()))
+    if not uri:
+        raise RuntimeError(
+            "No MongoDB URI: pass one, set $SWAT_MONGO_URI, or add an entry for "
+            "this Windows user to user_connections.json.")
+    from pymongo import MongoClient
+    client = MongoClient(uri, tlsCAFile=certifi.where())
+    db._init(client[db_name])
+    if run_ensure_indexes:
+        ensure_indexes()
+    return client
 
 
 def ensure_indexes():
@@ -210,8 +230,8 @@ def ensure_indexes():
     except Exception as exc:
         import logging
         logging.warning("ensure_indexes failed (non-critical): %s", exc)
-
-ensure_indexes()
+# Not auto-run anymore: indexes are only relevant to a connected proxy, which
+# now happens exclusively inside connect_for_cli (pass run_ensure_indexes=True).
 
 
 # ── TTL cache for full-collection lookups ──────────────────────────────────
@@ -259,123 +279,90 @@ def invalidate_cache(key=None):
 
 
 def get_company_names():
-    """{company_id_str: name_str}. Cached 5 min — do not mutate."""
-    return _cached_ttl(
-        "company_names",
-        lambda: {str(c["_id"]): (c.get("name") or "")
-                 for c in db.companies.find({}, {"name": 1})},
-    )
+    """{company_id_str: name_str}. Cached 5 min — do not mutate.
+
+    Sourced from the Beehus API (`GET /beehus/partners/companies`) via
+    `beehus_catalog`, with Mongo fallback. Lazy import avoids a cycle."""
+    import beehus_catalog
+    return beehus_catalog.company_names()
 
 
 def get_entity_names():
-    """{entity_id_str: name_str}. Cached 5 min — do not mutate."""
-    return _cached_ttl(
-        "entity_names",
-        lambda: {str(e["_id"]): (e.get("name") or "")
-                 for e in db.entities.find({}, {"name": 1})},
-    )
+    """{entity_id_str: name_str}. Cached 5 min — do not mutate.
+
+    Sourced from the Beehus API (`GET /beehus/entities`) via `beehus_catalog`,
+    with Mongo fallback. Lazy import avoids a cycle."""
+    import beehus_catalog
+    return beehus_catalog.entity_names()
 
 
 def get_wallet_names():
-    """{wallet_id_str: name_str}. Cached 5 min — do not mutate."""
-    return _cached_ttl(
-        "wallet_names",
-        lambda: {str(w["_id"]): (w.get("name") or "")
-                 for w in db.wallets.find({}, {"name": 1})},
-    )
+    """{wallet_id_str: name_str}. Cached 5 min — do not mutate.
+
+    Sourced from the Beehus API (`partner_wallets` per company, índice global)
+    via `beehus_catalog`, with Mongo fallback. Lazy import avoids a cycle."""
+    import beehus_catalog
+    return beehus_catalog.wallet_names()
 
 
 def get_grouping_index():
     """Return {grouping_id_str: {"name", "companyId", "trashed", "walletIds"}}.
 
     Source of truth for the `groupings` collection. Wallet ids live inside
-    `wallets[].walletId` (not a flat `walletIds` array — that field does not
-    exist on the documents). `companyId` is stored directly on the grouping;
+    `wallets[].walletId`. `companyId` is stored directly on the grouping;
     callers should filter on it instead of joining through wallet membership.
-    Cached 5 min — do not mutate."""
-    def _load():
-        out = {}
-        cursor = db.groupings.find(
-            {},
-            {"name": 1, "companyId": 1, "trashed": 1, "wallets.walletId": 1},
-        )
-        for g in cursor:
-            out[str(g["_id"])] = {
-                "name":      (g.get("name") or ""),
-                "companyId": (g.get("companyId") or ""),
-                "trashed":   bool(g.get("trashed")),
-                "walletIds": [
-                    str(w.get("walletId"))
-                    for w in (g.get("wallets") or [])
-                    if w.get("walletId")
-                ],
-            }
-        return out
-    return _cached_ttl("grouping_index", _load)
+    Cached 5 min — do not mutate.
+
+    Sourced from the Beehus API (`list_groupings` per company, índice global)
+    via `beehus_catalog`, with Mongo fallback. Lazy import avoids a cycle."""
+    import beehus_catalog
+    return beehus_catalog.grouping_index()
 
 
 def get_wallet_currencies():
     """{wallet_id_str: currency_str} for wallets that carry a `currency`.
     Cached 5 min — do not mutate. Used to disambiguate American-format dates
     (MM/DD/YYYY) in transaction descriptions: a USD wallet signals that an
-    ambiguous date like 12/01/2034 should be read month-first."""
-    return _cached_ttl(
-        "wallet_currencies",
-        lambda: {str(w["_id"]): (w.get("currency") or "")
-                 for w in db.wallets.find(
-                     {"currency": {"$exists": True}}, {"currency": 1})},
-    )
+    ambiguous date like 12/01/2034 should be read month-first.
+
+    Sourced from the Beehus API via `beehus_catalog` (índice global de
+    carteiras), with Mongo fallback. Lazy import avoids a cycle."""
+    import beehus_catalog
+    return beehus_catalog.wallet_currencies()
 
 
 def get_security_names():
-    """{security_id_str: beehusName_str}. Cached 5 min — do not mutate."""
-    return _cached_ttl(
-        "security_names",
-        lambda: {str(s["_id"]): (s.get("beehusName") or "")
-                 for s in db.securities.find({}, {"beehusName": 1})},
-    )
+    """{security_id_str: beehusName_str}. Cached 5 min — do not mutate.
+
+    Now sourced from the Beehus API (`GET /beehus/securities`) via
+    `beehus_catalog`, which caches and falls back to a direct Mongo read if the
+    API is unavailable. Lazy import keeps `db` importable without the API layer.
+    """
+    import beehus_catalog
+    return beehus_catalog.security_names()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def valid_wallet_ids():
-    """Set of walletId strings that exist in `wallets`. Cached 5 min."""
-    return _cached_ttl(
-        "valid_wallet_ids",
-        lambda: {str(w["_id"]) for w in db.wallets.find({}, {"_id": 1})},
-    )
+    """Set of walletId strings that exist in `wallets`. Cached 5 min.
+
+    Sourced from the Beehus API via `beehus_catalog` (índice global de
+    carteiras), with Mongo fallback. Lazy import avoids a cycle."""
+    import beehus_catalog
+    return beehus_catalog.valid_wallet_ids()
 
 
 def sum_cash_by_dates(wallet_id, dates):
     """Return `{date: total_or_None}` for each entry in `dates`.
 
-    One `find` over `cashAccounts` for this wallet, grouped in Python —
-    collapses N separate aggregations. Matters because `cashAccounts` has
-    no index on `walletId` in production, so every query is a full
-    collection scan. None/empty input dates map to None; dates with no
-    matching cash values also map to None (rather than 0)."""
-    wanted = {d[:10] for d in dates if d}
-    if not wanted:
-        return {d: None for d in dates}
-    sums  = {k: 0.0  for k in wanted}
-    found = {k: False for k in wanted}
-    for doc in db.cashAccounts.find({"walletId": wallet_id}, {"values": 1}):
-        for v in doc.get("values", []) or []:
-            d_raw = v.get("date")
-            if d_raw is None:
-                continue
-            k = str(d_raw)[:10]
-            if k in wanted:
-                sums[k]  += float(v.get("value") or 0)
-                found[k] = True
-    out = {}
-    for d in dates:
-        if not d:
-            out[d] = None
-            continue
-        k = d[:10]
-        out[d] = sums[k] if found.get(k) else None
-    return out
+    Sourced from the processed-position API response (its `cashAccounts.values`
+    array, same `{date,value}` shape as Mongo) via `beehus_catalog`, with a
+    direct Mongo scan as fallback. None/empty input dates map to None; dates
+    with no matching cash values also map to None (rather than 0). Lazy import
+    avoids an import cycle (the catalog resolves companyId via resolve_wallet)."""
+    import beehus_catalog
+    return beehus_catalog.cash_sums_by_dates(wallet_id, dates)
 
 
 def sum_cash(wallet_id, pos_date):
@@ -387,24 +374,24 @@ def sum_cash(wallet_id, pos_date):
     return sum_cash_by_dates(wallet_id, [pos_date])[pos_date]
 
 
-def resolve_wallet(wallet_id, projection=None):
-    """Find a wallet by id. `_id` in `wallets` is always ObjectId; callers
-    typically pass a string, so coerce once and look up. Returns the doc
-    or None.
+def resolve_wallet(wallet_id, projection=None, company_id=None):
+    """Find a wallet by id. Returns the doc or None.
 
-    Replaces the wrong-then-retry idiom that was scattered around the codebase
-    (`find_one(string)` → falls through → retry with `ObjectId(string)`),
-    which spent one wasted DB op per call since string `_id` never matches.
+    API-only, **zero Mongo**: serve from `beehus_catalog`. Com `company_id`,
+    resolve via `partner_wallets(company_id)` (1 chamada, cacheada) em vez do
+    índice global de ~19 empresas — o caller que conhece a empresa passa o hint.
+    `projection` is accepted for call-site compatibility but ignored — the
+    indexed doc already carries every field callers project (companyId / entityId
+    / name / currency / currencyId, the last derived from the wallet's `currency`
+    code in the catalog). Returns None when the wallet isn't in the API index
+    (the dashboard simply doesn't resolve it — no Mongo fallback).
     """
     if not wallet_id:
         return None
-    from bson import ObjectId
-    from bson.errors import InvalidId
-    try:
-        oid = ObjectId(str(wallet_id))
-    except (InvalidId, TypeError):
-        return None
-    return db.wallets.find_one({"_id": oid}, projection)
+    import beehus_catalog
+    if company_id:
+        return beehus_catalog.wallet_doc_in_company(wallet_id, company_id)
+    return beehus_catalog.wallet_doc(wallet_id)
 
 
 def get_biz_dates(limit, end_date=None):
@@ -442,6 +429,26 @@ def biz_days_between(start_iso, end_iso):
         if cur.weekday() < 5:
             count += 1
     return count
+
+
+def business_days_before(date_iso, n):
+    """Return the ISO date `n` business days (Mon-Fri) before `date_iso`.
+
+    Holidays are NOT excluded — weekday-only approximation, consistent with
+    the rest of this module (`get_biz_dates`/`biz_days_between`). `n=0` returns
+    the input date unchanged. Returns "" when `date_iso` is missing/invalid.
+    Example: Mon → (1) → Fri, Mon → (2) → Thu.
+    """
+    try:
+        d = date.fromisoformat(str(date_iso)[:10])
+    except (ValueError, TypeError):
+        return ""
+    steps = 0
+    while steps < n:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            steps += 1
+    return d.isoformat()
 
 
 def load_config_full():
@@ -520,16 +527,6 @@ def company_visible(company_id):
     return (not cf) or (str(company_id) in cf)
 
 
-def wallet_filter_query(settings):
-    """Build a MongoDB filter dict based on active settings toggles."""
-    q = {}
-    if settings.get("only_daily_position"):
-        q["hasDailyPosition"] = True
-    if settings.get("only_with_consumption"):
-        q["consumptionIdentifiers"] = {"$exists": True, "$not": {"$size": 0}}
-    return q
-
-
 # ── Shared helpers (nav / other pages) ───────────────────────────────────────
 
 def biz_days_elapsed(date_str):
@@ -568,24 +565,12 @@ def wallet_cls(has_value):
 
 
 def build_wallet_map(settings=None):
-    """Returns (wallet_to_pair, pair_total) filtered by settings.
-    Cached 5 min per toggle combination (at most 4 entries)."""
-    s = settings or {}
-    key = ("wallet_map",
-           bool(s.get("only_daily_position")),
-           bool(s.get("only_with_consumption")))
+    """Returns (wallet_to_pair, pair_total). Cached 5 min.
 
-    def _loader():
-        query = wallet_filter_query(s)
-        wallet_to_pair = {}
-        pair_total     = {}
-        for w in db.wallets.find(query, {"companyId": 1, "entityId": 1}):
-            wid = str(w["_id"])
-            cid = str(w.get("companyId", ""))
-            eid = str(w.get("entityId", ""))
-            if cid and eid:
-                wallet_to_pair[wid] = (cid, eid)
-                pair_total[(cid, eid)] = pair_total.get((cid, eid), 0) + 1
-        return wallet_to_pair, pair_total
-
-    return _cached_ttl(key, _loader)
+    Served from the Beehus API via `beehus_catalog.wallet_pairs()` (global wallet
+    index). `settings` is accepted for call-site compatibility but ignored — the
+    legacy `only_daily_position` / `only_with_consumption` toggles had no live
+    consumer, and the filtered Mongo scan they triggered was removed (the API
+    wallet shape doesn't carry `hasDailyPosition`/`consumptionIdentifiers`)."""
+    import beehus_catalog
+    return _cached_ttl(("wallet_map", False, False), beehus_catalog.wallet_pairs)

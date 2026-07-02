@@ -7,13 +7,20 @@ Fluxo:
   3. Buscar candidatos em cache indexado + scoring
 """
 import re, unicodedata, json, os, logging
-from datetime import date as _date
+from datetime import datetime, date as _date
 from collections import defaultdict
+
+# Weekday-only business-day counter (Mon-Fri, no holidays) — shared with the rest
+# of the codebase so the maturity-date tolerance uses the same convention. db is a
+# leaf module (stdlib + certifi; pymongo is lazy), so this top-level import is
+# side-effect-free and circular-import-safe.
+from db import biz_days_between
 
 log = logging.getLogger(__name__)
 
 _CACHE_DIR  = os.path.join(os.path.dirname(__file__), "data")
 _CACHE_FILE = os.path.join(_CACHE_DIR, "securities_cache.json")
+_MAPPING_CACHE_FILE = os.path.join(_CACHE_DIR, "security_mappings_cache.json")
 
 # Fields loaded from MongoDB for each security
 _CACHE_FIELDS = {
@@ -56,10 +63,14 @@ _MONTH_ALL = {**_MONTH_PT, **_MONTH_EN}
 
 # ── Date extraction helpers ────────────────────────────────────────────────────
 
-def _parse_date(text, prefer_mdy=False):
-    """
-    Try to extract a date from various formats found in unprocessedIds.
-    Returns ISO string (YYYY-MM-DD) or None.
+def _parse_date_ex(text, prefer_mdy=False):
+    """Parse a date from an unprocessedId. Returns ``(iso, day_known)``:
+
+      • ``iso``       — ISO string ``YYYY-MM-DD`` or ``None`` if nothing parsed.
+      • ``day_known`` — True when the text named a real day; False for the
+        month/year-only form (``NOV/2032``, where the day defaults to 01). The
+        date gate uses this to compare at the operator's precision: day-strict
+        when a day was named, month+year only otherwise.
 
     `prefer_mdy`: when a numeric date is genuinely ambiguous (both parts ≤ 12,
     e.g. 12/01/2034), interpret it as American MM/DD/YYYY instead of the
@@ -72,7 +83,7 @@ def _parse_date(text, prefer_mdy=False):
     # YYYY-MM-DD
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
     if m:
-        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}", True
 
     # DD/MM/YYYY (or MM/DD/YYYY — auto-detect by checking if day > 12)
     m = re.search(r"(\d{2})/(\d{2})/(\d{4})", text)
@@ -80,16 +91,16 @@ def _parse_date(text, prefer_mdy=False):
         a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
         if a > 12 and 1 <= b <= 12:
             # a is day, b is month (DD/MM/YYYY)
-            return f"{y}-{b:02d}-{a:02d}"
+            return f"{y}-{b:02d}-{a:02d}", True
         elif b > 12 and 1 <= a <= 12:
             # a is month, b is day (MM/DD/YYYY — US format)
-            return f"{y}-{a:02d}-{b:02d}"
+            return f"{y}-{a:02d}-{b:02d}", True
         elif prefer_mdy:
             # Ambiguous + American context → MM/DD/YYYY (a=month, b=day)
-            return f"{y}-{m.group(1)}-{m.group(2)}"
+            return f"{y}-{m.group(1)}-{m.group(2)}", True
         else:
             # Ambiguous — default to DD/MM/YYYY (BR standard)
-            return f"{y}-{m.group(2)}-{m.group(1)}"
+            return f"{y}-{m.group(2)}-{m.group(1)}", True
 
     # DD/MMM/YYYY  (e.g. 13/NOV/2032)
     m = re.search(r"(\d{1,2})/([A-Za-z]{3})/(\d{4})", text)
@@ -97,7 +108,7 @@ def _parse_date(text, prefer_mdy=False):
         d, mo_str, y = int(m.group(1)), m.group(2).lower(), m.group(3)
         mo = _MONTH_ALL.get(mo_str)
         if mo:
-            return f"{y}-{mo:02d}-{d:02d}"
+            return f"{y}-{mo:02d}-{d:02d}", True
 
     # MMM/YYYY  (e.g. NOV/2032 — day unknown, use 01)
     m = re.search(r"([A-Za-z]{3})/(\d{4})", text)
@@ -105,7 +116,7 @@ def _parse_date(text, prefer_mdy=False):
         mo_str, y = m.group(1).lower(), m.group(2)
         mo = _MONTH_ALL.get(mo_str)
         if mo:
-            return f"{y}-{mo:02d}-01"
+            return f"{y}-{mo:02d}-01", False  # day not named
 
     # DD/Mon/YYYY in text like "02/Jan/2029"
     m = re.search(r"(\d{1,2})/([A-Za-z]{3})/(\d{4})", text)
@@ -113,17 +124,42 @@ def _parse_date(text, prefer_mdy=False):
         d, mo_str, y = int(m.group(1)), m.group(2).lower()[:3], m.group(3)
         mo = _MONTH_ALL.get(mo_str)
         if mo:
-            return f"{y}-{mo:02d}-{d:02d}"
+            return f"{y}-{mo:02d}-{d:02d}", True
 
-    # MM/DD/YY (US format, common in options like 04/17/26)
+    # DD/MM/YY or MM/DD/YY (2-digit year) — disambiguate by value like the
+    # 4-digit branch, then prefer_mdy, then default to DD/MM (BR). BR maturities
+    # (CRA/CRI/debênture) write 17/07/28; US options write 04/17/26.
     m = re.search(r"(\d{2})/(\d{2})/(\d{2})(?!\d)", text)
     if m:
-        mo, d, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if 1 <= mo <= 12 and 1 <= d <= 31:
-            y = 2000 + y2 if y2 < 80 else 1900 + y2
-            return f"{y}-{mo:02d}-{d:02d}"
+        a, b, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        y = 2000 + y2 if y2 < 80 else 1900 + y2
+        if a > 12 and 1 <= b <= 12:
+            return f"{y}-{b:02d}-{a:02d}", True       # DD/MM/YY (BR)
+        elif b > 12 and 1 <= a <= 12:
+            return f"{y}-{a:02d}-{b:02d}", True       # MM/DD/YY (US)
+        elif prefer_mdy and 1 <= a <= 12 and 1 <= b <= 31:
+            return f"{y}-{a:02d}-{b:02d}", True       # ambiguous + American → MM/DD
+        elif 1 <= a <= 31 and 1 <= b <= 12:
+            return f"{y}-{b:02d}-{a:02d}", True       # ambiguous default → DD/MM (BR)
 
-    return None
+    return None, False
+
+
+def _parse_date(text, prefer_mdy=False):
+    """Backward-compatible wrapper: returns only the ISO string (or None).
+    Use `_parse_date_ex` when the caller needs day-precision."""
+    return _parse_date_ex(text, prefer_mdy)[0]
+
+
+def _set_maturity(features, uid, prefer_mdy=False):
+    """Set ``maturity_date`` (and ``maturity_day_specified`` when the text named
+    a real day) on ``features``. Centralises the parse+flag so the date gate can
+    compare day-strict whenever the operator actually wrote a day."""
+    iso, day_known = _parse_date_ex(uid, prefer_mdy)
+    if iso:
+        features["maturity_date"] = iso
+        if day_known:
+            features["maturity_day_specified"] = True
 
 
 def _extract_all_dates(text, prefer_mdy=False):
@@ -145,6 +181,19 @@ def _extract_all_dates(text, prefer_mdy=False):
             dates.append(f"{y}-{m.group(1)}-{m.group(2)}")  # MM/DD (American)
         else:
             dates.append(f"{y}-{m.group(2)}-{m.group(1)}")  # DD/MM (BR)
+    # DD/MM/YY or MM/DD/YY (2-digit year) — disambiguate by value, then
+    # prefer_mdy, then default DD/MM (BR). Mirrors _parse_date.
+    for m in re.finditer(r"(\d{2})/(\d{2})/(\d{2})(?!\d)", text):
+        a, b, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        y = 2000 + y2 if y2 < 80 else 1900 + y2
+        if a > 12 and 1 <= b <= 12:
+            dates.append(f"{y}-{b:02d}-{a:02d}")        # DD/MM/YY (BR)
+        elif b > 12 and 1 <= a <= 12:
+            dates.append(f"{y}-{a:02d}-{b:02d}")        # MM/DD/YY (US)
+        elif prefer_mdy and 1 <= a <= 12 and 1 <= b <= 31:
+            dates.append(f"{y}-{a:02d}-{b:02d}")        # ambiguous + American
+        elif 1 <= a <= 31 and 1 <= b <= 12:
+            dates.append(f"{y}-{b:02d}-{a:02d}")        # ambiguous default → DD/MM
     # DD/MMM/YYYY
     for m in re.finditer(r"(\d{1,2})/([A-Za-z]{3})/(\d{4})", text):
         d, mo_str, y = int(m.group(1)), m.group(2).lower(), m.group(3)
@@ -174,16 +223,30 @@ def _extract_brazilian_fund(uid):
         if m:
             features["fund_code"] = m.group(1)
 
-    # CNPJ: XX.XXX.XXX/XXXX-XX
+    # CNPJ: XX.XXX.XXX/XXXX-XX (pontuado) OU 14 dígitos crus (ex.:
+    # "30934757000113 - BTG ...", comum quando o upstream tira a pontuação).
+    # As duas formas são o CNPJ do fundo — o identificador canônico; o
+    # `_exact_identifier_match` compara só os dígitos contra taxId E mainId
+    # (o mainId de fundo brasileiro É o CNPJ).
     m = re.search(r"(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", uid)
     if m:
         features["cnpj"] = m.group(1)
+    else:
+        m = re.search(r"(?<!\d)(\d{14})(?!\d)", uid)
+        if m:
+            features["cnpj"] = m.group(1)
+
+    # ISIN (when the upstream includes the ISIN in the fund description)
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m:
+        features["isin"] = m.group(1)
 
     # Name: text between code and separator
     name = uid
     name = re.sub(r"\(\d{4,6}\)\s*", "", name)      # remove (code)
     name = re.sub(r"\s*-\s*\d{4,6}(?:\s*-.*)?$", "", name)  # remove trailing code
     name = re.sub(r"\s*-\s*\d{2}\.\d{3}\..*$", "", name)    # remove CNPJ part
+    name = re.sub(r"(?<!\d)\d{14}(?!\d)\s*-?\s*", "", name)  # remove CNPJ cru
     name = name.strip(" -")
     if name:
         features["name"] = name
@@ -214,15 +277,32 @@ def _extract_stock_etf(uid):
     if name:
         features["name"] = name
 
+    # ISIN (present when stock/ETF is identified by its ISIN in the upstream system)
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m:
+        features["isin"] = m.group(1)
+
     return features
+
+
+_BOND_INSTRUMENT_RE = re.compile(
+    r"\b(DEBENTURE|CDCA|FIDC|LFSN|LFS|DEB|CRI|CRA|LCA|LCI|LCD|CDB|CCB|LF|LIG|FND)\b",
+    re.IGNORECASE)
 
 
 def _extract_bond(uid):
     features = {}
-    # Instrument type
-    m = re.search(r"\b(DEB|CRI|CRA|LCA|LCI|CDB|CCB|LF|LIG|FIDC|FND)\b", uid, re.IGNORECASE)
+    # Instrument type. Longest-first so LFSN/LFS/CDCA win over LF/CRA (the \b
+    # already guards, but keep the order explicit).
+    m = _BOND_INSTRUMENT_RE.search(uid)
     if m:
         features["instrument"] = m.group(1).upper()
+        # 2+ DISTINCT vehicles named (e.g. the combined "CRI/CRA" label the
+        # upstream emits when unsure) → no definitive vehicle; flag so the
+        # vehicle gate in `_score_candidate` doesn't reject against either one.
+        veh = {_canon_vehicle(x) for x in _BOND_INSTRUMENT_RE.findall(uid)} - {""}
+        if len(veh) >= 2:
+            features["vehicle_ambiguous"] = True
 
     # CETIP code
     m = re.search(r"CETIP_([A-Z0-9]+)", uid)
@@ -239,6 +319,11 @@ def _extract_bond(uid):
         m = re.search(r"\b(\d{2,4}[A-Z]\d{5,})\b", uid)
         if m:
             features["internal_code"] = m.group(1)
+
+    # ISIN (bonds are sometimes identified by their ISIN in the upstream system)
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m and m.group(1) not in (features.get("instrument"), features.get("internal_code")):
+        features["isin"] = m.group(1)
 
     # Issuer name (multiple heuristics)
     instrument = features.get("instrument", "")
@@ -280,22 +365,28 @@ def _extract_bond(uid):
                 break
 
     # Maturity date
-    date = _parse_date(uid)
-    if date:
-        features["maturity_date"] = date
+    _set_maturity(features, uid)
 
     # Rate/yield
     rates = re.findall(r"(\d+[,\.]\d+)\s*%", uid)
     if rates:
         features["rate"] = rates[-1].replace(",", ".")  # last rate is usually the yield
 
-    # Indexer
-    m = re.search(r"\b(CDI|IPCA|SELIC|PRE|IGPM|IPC-A|IPCADP)\b", uid, re.IGNORECASE)
-    if m:
-        idx = m.group(1).upper()
-        if idx == "IPC-A" or idx == "IPCADP":
-            idx = "IPCA"
-        features["indexer"] = idx
+    # Indexer / regime — the leftmost ACTIVE regime is the PRIMARY (and feeds the
+    # rate-regime gate in `_score_candidate`). `_scan_regimes` is coefficient-
+    # aware, so the BR formula "0%CDI+12,05%aa" (a pré-fixado bond) yields PRE,
+    # not the zero-weighted CDI; structure words (PRÉ-PAGAMENTO/EMBARQUE) don't
+    # shadow the real indexer; and a parenthetical benchmark ("Pré-fixado (110%
+    # CDI)") keeps PRE as primary (written first).
+    ordered = _scan_regimes(uid)
+    if ordered:
+        features["indexer"] = ordered[0]
+
+    # Canonical bank issuers named in the description (for the issuer gate). Kept
+    # as a sorted, JSON-safe list separate from the heuristic `issuer` string.
+    iss = _issuers_in(uid)
+    if iss:
+        features["issuers"] = sorted(iss)
 
     return features
 
@@ -322,9 +413,7 @@ def _extract_gov_bond(uid):
             features["selic_code"] = code
 
     # Maturity date
-    date = _parse_date(uid)
-    if date:
-        features["maturity_date"] = date
+    _set_maturity(features, uid)
 
     # Indexer
     m = re.search(r"\b(SELIC|IPCA|IPC-A|PRE)\b", uid, re.IGNORECASE)
@@ -333,6 +422,11 @@ def _extract_gov_bond(uid):
         if idx == "IPC-A":
             idx = "IPCA"
         features["indexer"] = idx
+
+    # ISIN (government bonds in the DB always have isIn populated)
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m:
+        features["isin"] = m.group(1)
 
     return features
 
@@ -387,9 +481,7 @@ def _extract_futures(uid):
             features["ticker"] = m.group(1) + m.group(2)
 
     # Maturity date
-    date = _parse_date(uid)
-    if date:
-        features["maturity_date"] = date
+    _set_maturity(features, uid)
 
     return features
 
@@ -422,10 +514,16 @@ def _extract_options(uid):
         if m:
             features["strike"] = m.group(1)
 
-    # Expiry date
-    date = _parse_date(uid)
+    # Expiry date — options are American: an ambiguous 2-digit numeric date
+    # (e.g. 04/05/26) is MM/DD, not the BR DD/MM default.
+    date = _parse_date(uid, prefer_mdy=True)
     if date:
         features["expiry"] = date
+
+    # ISIN
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m:
+        features["isin"] = m.group(1)
 
     # External code
     m = re.search(r"-\s*([A-Z0-9]{8,12})\s*$", uid)
@@ -453,15 +551,18 @@ def _extract_otc(uid):
     if m:
         features["external_code"] = m.group(1)
 
+    # ISIN (OTC instruments can be identified by ISIN when present in the description)
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m:
+        features["isin"] = m.group(1)
+
     # Name after "Ativo Generico -"
     m = re.search(r"Ativo\s+Gen[eé]rico\s*-\s*(.+?)(?:\s*$)", uid, re.IGNORECASE)
     if m:
         features["name"] = m.group(1).strip()
 
     # Maturity date
-    date = _parse_date(uid)
-    if date:
-        features["maturity_date"] = date
+    _set_maturity(features, uid)
 
     return features
 
@@ -469,9 +570,7 @@ def _extract_otc(uid):
 def _extract_brazilian_repo(uid):
     features = {}
     # Maturity date
-    date = _parse_date(uid)
-    if date:
-        features["maturity_date"] = date
+    _set_maturity(features, uid)
 
     # Indexer
     m = re.search(r"\b(CDI|IPCA|SELIC)\b", uid, re.IGNORECASE)
@@ -515,9 +614,7 @@ def _extract_sovereign_bonds(uid):
             features["issuer"] = issuer
 
     # Maturity date
-    date = _parse_date(uid)
-    if date:
-        features["maturity_date"] = date
+    _set_maturity(features, uid)
 
     return features
 
@@ -855,13 +952,14 @@ def _build_token_df(docs):
 #
 # The additive path in `_score_candidate` is UNCAPPED, and its bonuses can
 # co-occur. Worst case: partial-id 50 + structured-option 50 (a SEPARATE `if`,
-# stacks with the partial-id) + exact date 50 + indexer 10 + name 15 + rare-name
-# 30 + type 12 = 217. The Painel de Controle's price-agreement then adds up to
-# +30 (→ 247), while an exact match can itself absorb a −25 price penalty
-# (→ _EXACT_SCORE − 25). 300 keeps an exact id strictly above any heuristic
-# combination (300 − 25 = 275 > 247). The downstream numeric confidence is
-# clamped to 1.0 (classifier) and the Match badge to 100%, so the >100 raw
-# score surfaces only in the score-breakdown tooltip and the ranking.
+# stacks with the partial-id) + exact date 30 + indexer 10 + name 15 + rare-name
+# 30 + name-equiv 50 + type 12 = 247. The Painel de Controle's price-agreement
+# then adds up to +30 (→ 277), while an exact match can itself absorb a −25 price
+# penalty (→ _EXACT_SCORE − 25). 300 keeps an exact id strictly above any
+# heuristic combination (300 − 25 = 275 ≈ 277 — close, so revisit 300 if more
+# additive weight is added). The downstream numeric confidence is clamped to 1.0
+# (classifier) and the Match badge to 100%, so the >100 raw score surfaces only
+# in the score-breakdown tooltip and the ranking.
 _EXACT_SCORE = 300
 
 # Instrument / government-bond type agreement (NTN-B, LFT, CDB, CRI…). Added
@@ -872,12 +970,319 @@ _EXACT_SCORE = 300
 # kinds (the NTN-B beats a corporate bond maturing the same day).
 _TYPE_AGREE_BONUS = 12
 
+# ── Fixed-income vehicle / lastro gate (hard reject on conflict) ─────────────
+# The vehicle DEFINES a fixed-income security's identity: a CRA is not an LCA, a
+# CRI is not a CRA, an LCA is not an LCI. Same issuer + same indexer + same
+# maturity but a different vehicle = a DIFFERENT security. Without this, a CRA
+# description vs an LCA candidate scored ~83% (date +50, issuer name, mainId
+# name) because nothing penalised the vehicle mismatch — the `_TYPE_AGREE_BONUS`
+# only *rewards* agreement, it never *rejects* disagreement.
+#
+# `_score_candidate` (securityType == "bond") rejects (score 0) when the
+# description names one of these vehicles AND the candidate clearly is a
+# DIFFERENT one — read from the candidate's beehusName (word-boundary) and its
+# compacted mainId prefix. Naturally scoped to bonds: `instrument` is only
+# extracted by `_extract_bond`, and an exact id (Rule 1) already won before here.
+# Conservative on BOTH sides: no reject when the description names no vehicle, or
+# when the candidate's vehicle can't be determined.
+_VEHICLE_CANON = {            # alias → canonical vehicle token
+    "DEBENTURE": "DEB", "DEBENTURES": "DEB", "DEB": "DEB",
+    "CRA": "CRA", "CRI": "CRI", "CDCA": "CDCA",
+    "LCA": "LCA", "LCI": "LCI", "LCD": "LCD", "LIG": "LIG",
+    "CDB": "CDB", "CCB": "CCB",
+    "LF": "LF", "LFS": "LFS", "LFSN": "LFS",   # LFS/LFSN = subordinada (≠ LF comum)
+    "FIDC": "FIDC",
+}
+_VEHICLE_SET = frozenset(_VEHICLE_CANON.values())
+# Word-boundary detector for the candidate's beehusName (accent-stripped, upper).
+# Longest-first so LFSN/LFS win over LF and CDCA over CDB/CRA (the \b also guards,
+# but keep the order explicit).
+_VEHICLE_WORD_RE = re.compile(
+    r"\b(DEBENTURES|DEBENTURE|DEB|CDCA|FIDC|LFSN|LFS|LF|LCA|LCI|LCD|LIG|CRA|CRI|CDB|CCB)\b")
+# Prefix order for the compacted mainId (longest-first so LFSN beats LFS beats LF).
+_VEHICLE_PREFIXES = ("DEBENTURE", "CDCA", "FIDC", "LFSN", "LFS", "DEB",
+                     "LCA", "LCI", "LCD", "LIG", "CRA", "CRI",
+                     "CDB", "CCB", "LF")
+
+
+def _canon_vehicle(tok):
+    """Canonical vehicle token (DEBENTURE→DEB, upper) or '' if not a vehicle."""
+    return _VEHICLE_CANON.get(str(tok or "").strip().upper(), "")
+
+
+def _candidate_vehicles(sec):
+    """Set of fixed-income vehicles the candidate exposes — from beehusName
+    words AND the compacted mainId prefix. Memoised on the security dict under
+    `_vehicles` (constant per security; the gate runs once per transaction)."""
+    cached = sec.get("_vehicles")
+    if cached is not None:
+        return cached
+    name_u = _strip_accents(str(sec.get("beehusName", "") or "")).upper()
+    vs = {_canon_vehicle(m) for m in _VEHICLE_WORD_RE.findall(name_u)}
+    vs.discard("")
+    main_u = re.sub(r"[^A-Z0-9]", "", _strip_accents(str(sec.get("mainId", "") or "")).upper())
+    for p in _VEHICLE_PREFIXES:
+        if main_u.startswith(p):
+            # Trust the prefix only when a DIGIT (a security code) follows — real
+            # compacted mainIds pack the vehicle token then a numeric code
+            # (CRA00123, LF0020003KK). An issuer name continuing in LETTERS
+            # (LIGHT→LIG, CRISTAL→CRI, DEBORA→DEB) is NOT a vehicle; the real
+            # vehicle word, when present, is recovered from the beehusName above.
+            rest = main_u[len(p):]
+            if rest == "" or rest[0].isdigit():
+                vs.add(_canon_vehicle(p))
+            break
+    frozen = frozenset(vs)
+    sec["_vehicles"] = frozen
+    return frozen
+
+
+# ── Rate-regime / indexer gate (hard reject on conflict) ────────────────────
+# The remuneration REGIME is part of a fixed-income security's identity. A
+# pós-fixado / inflation bond (CDI/IPCA/SELIC/IGPM) is NOT the same asset as a
+# "Pré-fixado" one. Without this gate, "CRA RAIZEN IPCA+6,40% 17/10/33" matched
+# "CRA Raizen Pré-fixado 17/Out/2033" at a high score (same vehicle, issuer,
+# date) because the +10 indexer bonus only *rewards* agreement — never *rejects*.
+#
+# The gate works on COARSE BUCKETS — `PRE` (pré-fixado) vs `POS` (pós-fixado /
+# inflation: CDI/IPCA/SELIC/IGPM) — NOT on fine indexers. This matches the
+# requirement ("CDI, IPCA é pós-fixado, mas a security diz Pré-fixado → não é o
+# mesmo") and avoids false-rejects from CDI↔IPCA data inconsistencies in the
+# catalog (the structured `indexer` field disagrees with the name on ~0.4% of
+# bonds). Among pós candidates the +10 indexer bonus still ranks the exact
+# indexer match higher (soft signal), so "IPCA é palavra forte" survives.
+#
+# `_score_candidate` (securityType == "bond") rejects (score 0) when the
+# description's PRIMARY bucket and the candidate's bucket(s) are both known and
+# don't intersect. Conservative: unknown bucket on either side → no reject.
+_POS_REGIMES = frozenset({"CDI", "IPCA", "SELIC", "IGPM"})
+
+# A zero coefficient immediately before an index ("0%CDI", "0,00% CDI"): the
+# index carries NO weight, so it is not that regime. The BR broker formula
+# "0%CDI+12,05%aa" ("0% of CDI + 12.05% per annum") is a PRÉ-FIXADO bond — the
+# leftmost "CDI" must NOT be read as the regime. "100%CDI" / "108%CDI" are real.
+_ZERO_COEF_RE = re.compile(r"(?:^|[^\d.,])0+(?:[.,]0+)?\s*%\s*$")
+_POS_REGIME_PATS = (
+    ("CDI",   r"CDI"),
+    ("IPCA",  r"IPCA(?:DP)?|IPC-A"),
+    ("SELIC", r"SELIC"),
+    ("IGPM",  r"IGP-?M"),
+)
+
+
+def _scan_regimes(text):
+    """Ordered (left-to-right) list of remuneration regimes named in `text`,
+    coefficient-aware. PRE comes from a pré-fix* spelling (Prefixado/Pré-fix/Pré
+    fixados…), the English "Fixed", or a BARE "Pré" that is NOT a structure word
+    (pré-pagamento/embarque/pago/operacional). A POS index with a ZERO
+    coefficient ("0%CDI") is dropped; if every index is zeroed (a pré-fixado
+    "0%CDI+NN%aa" formula) the regime is PRE."""
+    t = _strip_accents(str(text or "")).upper()
+    found = []  # (pos, regime)
+    for m in re.finditer(r"\bPRE[\s-]?FIX[A-Z]*\b", t):          # pré-fixado spellings
+        found.append((m.start(), "PRE"))
+    for m in re.finditer(r"\bFIXED\b", t):                       # English field value
+        found.append((m.start(), "PRE"))
+    for m in re.finditer(                                        # bare "Pré", not a structure word
+            r"\bPRE\b(?![\s./-]*(?:PAGAMENTO|EMBARQUE|PAGO|OPERACIONAL))", t):
+        found.append((m.start(), "PRE"))
+    has_active_pos = False
+    has_zeroed = False
+    for reg, pat in _POS_REGIME_PATS:
+        for m in re.finditer(r"\b(?:%s)\b" % pat, t):
+            if _ZERO_COEF_RE.search(t[:m.start()]):
+                has_zeroed = True
+            else:
+                found.append((m.start(), reg))
+                has_active_pos = True
+    found.sort()
+    regs = [r for _, r in found]
+    if has_zeroed and not has_active_pos and "PRE" not in regs:
+        regs.append("PRE")          # 0%-coef formula with no active index = pré-fixado
+    return regs
+
+
+def _regimes_in(text):
+    """Set of remuneration regimes named in `text` (coefficient-aware)."""
+    return set(_scan_regimes(text))
+
+
+def _regime_bucket(reg):
+    """Coarse bucket of a fine regime: 'PRE' vs 'POS' (CDI/IPCA/SELIC/IGPM), or
+    None if `reg` is not a recognised regime."""
+    if reg == "PRE":
+        return "PRE"
+    if reg in _POS_REGIMES:
+        return "POS"
+    return None
+
+
+def _candidate_regimes(sec):
+    """Set of remuneration regimes the candidate exposes — from its structured
+    `indexer` field AND its `beehusName`. Memoised on the security dict under
+    `_regimes` (constant per security; the gate runs once per transaction)."""
+    cached = sec.get("_regimes")
+    if cached is not None:
+        return cached
+    text = f"{sec.get('beehusName', '') or ''} {sec.get('indexer', '') or ''}"
+    frozen = frozenset(_regimes_in(text))
+    sec["_regimes"] = frozen
+    return frozen
+
+
+def _candidate_buckets(sec):
+    """Coarse regime buckets the candidate exposes: {'PRE'}, {'POS'}, both, or
+    empty. Memoised on the security dict under `_regbuckets`."""
+    cached = sec.get("_regbuckets")
+    if cached is not None:
+        return cached
+    regs = _candidate_regimes(sec)
+    b = set()
+    if "PRE" in regs:
+        b.add("PRE")
+    if regs & _POS_REGIMES:
+        b.add("POS")
+    frozen = frozenset(b)
+    sec["_regbuckets"] = frozen
+    return frozen
+
+
+# ── Issuer / bank gate (hard reject on conflict) ────────────────────────────
+# A fixed-income BANK instrument's issuer = the issuing bank, and it is named
+# unambiguously (e.g. "CDB BTG Pactual …", "LCA Banco ABC …"). Two clearly
+# DIFFERENT bank issuers = a different security, even with the same vehicle,
+# regime, rate and maturity. Without this, a "CDB Santander …06/Ago/2027" matched
+# a "CDB BTG …06/Ago/2027" at 52 (date+indexer+type, name overlap 0) and showed
+# as identified. The issuer is already rewarded by name overlap, so this gate adds
+# only the INVALIDATE side (the missing one) — no confirm bonus (that would
+# double-count the name signals).
+#
+# Restricted to BANK vehicles (issuer = bank, unambiguous). Securitized
+# CRI/CRA/CDCA are EXCLUDED — there the name carries the securitizadora OR the
+# lastro/devedor interchangeably (same asset, two valid names). Debentures (DEB)
+# are out too: corporate long-tail issuers the bank dictionary doesn't cover.
+# Dictionary is data/issuers.json (canonical → alias tokens), editable; if the
+# file is missing the gate is simply inert.
+_BANK_VEHICLES = frozenset({"CDB", "RDB", "LF", "LFS", "LCI", "LCA", "LCD", "LIG"})
+
+
+def _load_issuer_aliases():
+    """Build {alias_token → canonical} from data/issuers.json. Multiword canonicals
+    (e.g. 'JOHN DEERE') contribute only their single-token aliases ('DEERE'); the
+    canonical string is still the resolved value. Missing/broken file → {} (gate
+    inert)."""
+    path = os.path.join(_CACHE_DIR, "issuers.json")
+    alias = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            issuers = (json.load(f).get("issuers") or {})
+        for canon, toks in issuers.items():
+            for t in [canon] + list(toks or []):
+                tt = _strip_accents(str(t)).upper()
+                if re.fullmatch(r"[A-Z0-9]+", tt):   # single usable token
+                    alias[tt] = canon
+    except FileNotFoundError:
+        log.info("issuer dict: data/issuers.json not found — issuer gate inert")
+    except Exception as exc:
+        log.warning("issuer dict: failed to load (%s) — issuer gate inert", exc)
+    return alias
+
+
+_ISSUER_ALIAS = _load_issuer_aliases()
+
+
+def _issuers_in(text):
+    """Set of canonical bank issuers named in `text`. Token-exact against the
+    dictionary (so short/digit issuer tokens like XP/BV/C6 match, but rate/date/
+    code tokens never do)."""
+    if not _ISSUER_ALIAS:
+        return set()
+    t = _strip_accents(str(text or "")).upper()
+    return {_ISSUER_ALIAS[tok] for tok in re.split(r"[^A-Z0-9]+", t) if tok in _ISSUER_ALIAS}
+
+
+def _candidate_issuers(sec):
+    """Canonical bank issuers the candidate's beehusName exposes. Memoised on the
+    security dict under `_issuers`."""
+    cached = sec.get("_issuers")
+    if cached is not None:
+        return cached
+    frozen = frozenset(_issuers_in(sec.get("beehusName", "")))
+    sec["_issuers"] = frozen
+    return frozen
+
+
+# Compressed-name match against mainId (a mainId often packs the asset name with
+# spaces/punctuation stripped — "CRA Usina Coruripe" → CRAUSINACORURIPE…). Each
+# distinctive description token found inside the compacted mainId adds points,
+# capped so it stays a supporting signal (never rivals an exact id or a date).
+_MAINID_NAME_PER_HIT = 8
+_MAINID_NAME_CAP = 20
+
+# Name-equivalence bonus. A flat overlap score (`ratio * 15`) can't tell a FULL
+# name match ("Kayros FIM CP IE" == "Kayros FIM CP IE") from a partial one, so a
+# correct identification by name alone tops out at ~45 (15 overlap + 30 rarity)
+# and reads as low confidence. When the distinctive token sets agree BOTH ways
+# (the candidate has no extra distinctive tokens — guards against a description
+# that is a subset of a more-specific asset), add this so an evident name match
+# reaches confident territory. Requires ≥2 overlapping tokens.
+_NAME_EQUIV_BONUS = 50
+_NAME_EQUIV_COVERAGE = 0.8
+
+# brazilianFund share-class / series / seniority discriminators. Two fund names
+# can be near-identical yet denote DIFFERENT securities when one of these differs.
+# Mapped from real catalog patterns (1.7k funds). Two categories, treated
+# differently (see `_fund_discriminator_sig`):
+#   • TRANCHE words (seniority/subordination) — a difference EITHER WAY means a
+#     different security ("… XI" vs "… XI Senior").
+#   • CLASS VALUES (bare letter / series number / roman) — only a CONFLICT (both
+#     sides name a value and they differ) means a different security. An
+#     asymmetry (one side omits it) is NOT penalised: an unprocessedId may carry
+#     an extra "Classe A" the (single, class-less) security name doesn't repeat.
+# The class-LABEL words ("classe"/"cl"/"série") are deliberately NOT signals on
+# their own — the letter/number after them carries the class.
+_FUND_TRANCHE_WORDS = frozenset({
+    "senior", "sr", "sub", "subordinada", "subordinado", "mezanino", "mez",
+})
+_FUND_DISCR_PENALTY = 25   # sibling with a conflicting class/series/tranche
+_FUND_CLASS_CONFIRM = 8    # exact class/tranche match — ranks above an asymmetric sibling
+
+
+def _compact(text):
+    """Lowercase, accent-stripped, alphanumeric-only form — for matching against
+    compressed mainIds (e.g. 'CRA Usina Coruripe' → 'crausinacoruripe')."""
+    return re.sub(r"[^a-z0-9]", "", _strip_accents(str(text)).lower())
+
+
+def _fund_discriminator_sig(name):
+    """Return ``(tranche, values)`` for a fund name — the discriminators the
+    plain token overlap misses (the tokenizer drops single letters/digits).
+      • tranche: seniority/subordination words (Senior/Sub/Mezanino…).
+      • values:  single class letters (A/B/C/O), series romans (i/iv/xv) and
+        numbers (2/14)."""
+    tranche, values = set(), set()
+    for raw in re.split(r"[\s\-_/,\*\.\(\)%]", name or ""):
+        s = _strip_accents(raw).lower()
+        if not s:
+            continue
+        if s in _FUND_TRANCHE_WORDS:
+            tranche.add(s)
+        elif re.fullmatch(r"[ivxl]{1,4}", s):    # roman series (i, iv, xv, xix…)
+            values.add(s)
+        elif len(s) == 1 and s.isalpha():         # single class letter (A/B/C/O…)
+            values.add(s)
+        elif s.isdigit():                          # series / vintage number
+            values.add(s)
+    return tranche, values
+
 
 def _exact_identifier_match(sec, features):
     """Return a label if an exact, unique identifier matches, else None.
 
     "Exact" means strict equality (not substring/adjacency): ticker (incl. the
-    FUT-prefixed variant), taxId/CNPJ, ISIN, SELIC code, OR an extracted code
+    FUT-prefixed variant), taxId/CNPJ (compared digits-only against the
+    candidate's taxId AND its mainId — a brazilianFund mainId IS the bare-digit
+    CNPJ), ISIN, SELIC code, OR an extracted code
     (cetip/internal/external/fund) that equals the candidate's `mainId` in FULL.
     A full-equality code identifies the asset as decisively as a ticker/ISIN, so
     it is promoted out of the additive path. Only SUBSTRING/adjacency code
@@ -895,15 +1300,24 @@ def _exact_identifier_match(sec, features):
         if sec_ticker == fut or sec_main_id == fut:
             return "ticker/FUT"
     feat_cnpj = features.get("cnpj")
-    sec_taxid = sec.get("taxId")
-    if feat_cnpj and sec_taxid:
+    if feat_cnpj:
         # Punctuation-insensitive: compare digits only so a bare 14-digit CNPJ
         # in the text matches a punctuated taxId. Treated as an exact unique
         # identifier, same weight as ticker/isin. The ≥11-digit guard avoids
         # matching on a stray short number.
         fd = _digits_only(feat_cnpj)
-        if len(fd) >= 11 and fd == _digits_only(sec_taxid):
-            return "taxId"
+        if len(fd) >= 11:
+            sec_taxid = sec.get("taxId")
+            if sec_taxid and fd == _digits_only(sec_taxid):
+                return "taxId"
+            # brazilianFund mainIds ARE the CNPJ (digits-only). A CNPJ in the
+            # description whose digits equal the candidate's mainId digits
+            # identifies the fund as decisively as its taxId — same exact weight.
+            # (`cnpj` is only extracted for brazilianFund, so this is naturally
+            # scoped to funds.) Ex.: "30934757000113 - BTG ..." == mainId
+            # "30934757000113".
+            if sec_main_id and fd == _digits_only(sec_main_id):
+                return "mainId/cnpj"
     if features.get("isin") and sec.get("isIn") and sec.get("isIn") == features["isin"]:
         return "isIn"
     if features.get("selic_code") and sec.get("selicCode") and sec.get("selicCode") == features["selic_code"]:
@@ -973,13 +1387,54 @@ def _candidate_name_tokens(sec):
     return toks
 
 
+# Business-day tolerance for the maturity-date gate. A maturity rolled by a
+# business-day/holiday adjustment is the SAME asset, so when the operator named a
+# day we agree within ±this many BUSINESS days (Mon-Fri, weekday-only — same
+# convention as `db.biz_days_between`, holidays NOT excluded) instead of demanding
+# an exact match. Wide-apart dates (different month/year, or a distinct same-month
+# maturity) still fail. Tune here if real data shows over- or under-rejection.
+_DATE_TOLERANCE_BIZ_DAYS = 2
+# 2 business days span at most 4 calendar days (Thu→Mon / Fri→Tue over a weekend),
+# so a calendar gap > 4 is always > 2 biz days — guard with it to skip the
+# day-by-day `biz_days_between` loop for the common far-apart candidate.
+_DATE_TOLERANCE_CAL_GUARD = 4
+
+
+def _iso_to_date(s):
+    """Parse a 'YYYY-MM-DD...' string to a date, or None if unparseable."""
+    try:
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
 def _date_agrees(feat_date, cand_dates, day_known):
     """True if the operator's date matches at least one candidate date at the
-    precision the operator supplied: full day when a day was named, otherwise
-    year+month only (so 'SET/2029', whose day `_parse_date` defaults to 01,
-    isn't false-rejected against a day-precise maturityDate in the same month)."""
+    precision the operator supplied.
+
+      • day named → agree within ±`_DATE_TOLERANCE_BIZ_DAYS` BUSINESS days of a
+        candidate date (tolerates business-day/holiday rolls; a far-apart date
+        still fails);
+      • month/year only ('SET/2029', day defaults to 01) → compare year+month
+        only, so it isn't false-rejected against a day-precise maturityDate in
+        the same month."""
     if day_known:
-        return feat_date in cand_dates
+        fd = _iso_to_date(feat_date)
+        if fd is None:
+            return feat_date in cand_dates
+        for d in cand_dates:
+            cd = _iso_to_date(d)
+            if cd is None:
+                continue
+            cal = abs((cd - fd).days)
+            if cal == 0:
+                return True
+            # Calendar-gap guard keeps the biz-day count off the hot path for the
+            # vast majority of (far-apart) candidate dates.
+            if cal <= _DATE_TOLERANCE_CAL_GUARD and \
+                    biz_days_between(feat_date, d) <= _DATE_TOLERANCE_BIZ_DAYS:
+                return True
+        return False
     fym = feat_date[:7]
     return any(d[:7] == fym for d in cand_dates)
 
@@ -987,18 +1442,29 @@ def _date_agrees(feat_date, cand_dates, day_known):
 def _score_candidate(sec, features, security_type):
     """Score a candidate security against extracted features.
 
-    Two hard rules dominate the additive signals:
+    Three hard rules dominate the additive signals:
 
       • Exact unique identifier (ticker / taxId / isIn / selicCode / a code that
         equals the whole mainId) → top score (`_EXACT_SCORE`, above the heuristic
         ceiling so it always outranks a partial pile-up). Short-circuits and
         IGNORES the date gate: an exact id identifies the asset on its own.
 
+      • Fixed-income vehicle conflict (bond): the description names a vehicle
+        (CRA/LCA/CRI/CDB/…) and the candidate clearly is a DIFFERENT one →
+        score 0. The vehicle/lastro defines the asset's identity.
+
+      • Rate-regime conflict (bond): the description states an indexer
+        (IPCA/CDI/SELIC/IGPM/Pré) and the candidate clearly is a DIFFERENT
+        regime (e.g. IPCA description vs a "Pré-fixado" candidate) → score 0.
+
+      • Issuer conflict (bond, BANK vehicle only): description and candidate name
+        DIFFERENT known bank issuers (e.g. CDB Santander vs CDB BTG) → score 0.
+
       • Otherwise, if the operator named a maturity/expiry date AND the
         candidate exposes a date (maturityDate field OR a date in beehusName)
         that does NOT agree → score 0. A different date means a different asset.
 
-    When neither hard rule fires, the score is the sum of the partial signals
+    When no hard rule fires, the score is the sum of the partial signals
     (substring id, structured-option pattern, agreeing date, indexer, name
     token overlap), on a ~0–100 scale.
     """
@@ -1008,6 +1474,47 @@ def _score_candidate(sec, features, security_type):
         return _EXACT_SCORE, [exact, "exact"]
 
     sec_main_id = str(sec.get("mainId", ""))
+
+    # ── Rule 1b: fixed-income vehicle gate (hard reject on conflict) ───────
+    # A CRA is not an LCA, a CRI is not a CRA. When the description names a
+    # vehicle AND the candidate is unambiguously a different one (beehusName word
+    # or compacted mainId prefix), reject — no matter how well the issuer /
+    # indexer / maturity agree (they would otherwise reach ~83%). Conservative:
+    # only when BOTH sides name a vehicle and they don't overlap.
+    if security_type == "bond" and not features.get("vehicle_ambiguous"):
+        feat_veh = _canon_vehicle(features.get("instrument"))
+        if feat_veh in _VEHICLE_SET:
+            cand_vehs = _candidate_vehicles(sec)
+            if cand_vehs and feat_veh not in cand_vehs:
+                return 0, [f"vehicle≠({feat_veh})"]
+
+    # ── Rule 1c: rate-regime gate, PRE vs POS buckets (hard reject) ────────
+    # Pré-fixado ≠ pós-fixado/inflation. The description's PRIMARY bucket
+    # (from the leftmost active regime) must intersect the candidate's bucket(s);
+    # reject when both are known and disjoint. Coarse buckets (not CDI≠IPCA) so a
+    # "0%CDI+NN%aa" pré-fixado description (→ PRE) matches its Pré candidate, and
+    # CDI↔IPCA catalog inconsistencies don't cause false-rejects. Conservative:
+    # unknown bucket on either side → no reject.
+    if security_type == "bond":
+        desc_bucket = _regime_bucket(features.get("indexer") or "")
+        if desc_bucket:
+            cand_buckets = _candidate_buckets(sec)
+            if cand_buckets and desc_bucket not in cand_buckets:
+                return 0, [f"indexer≠({desc_bucket})"]
+
+    # ── Rule 1d: issuer gate, BANK vehicles only (hard reject on conflict) ──
+    # CDB Santander ≠ CDB BTG. Only fires when the description's vehicle is a bank
+    # instrument AND both sides resolve to KNOWN, DIFFERENT bank issuers
+    # (data/issuers.json). Excludes securitized CRI/CRA/CDCA (securitizadora ×
+    # lastro ambiguity) and corporate DEB. Conservative: unknown issuer on either
+    # side → no reject.
+    if (security_type == "bond" and not features.get("vehicle_ambiguous")
+            and _canon_vehicle(features.get("instrument")) in _BANK_VEHICLES):
+        desc_iss = set(features.get("issuers") or ())
+        if desc_iss:
+            cand_iss = _candidate_issuers(sec)
+            if cand_iss and desc_iss.isdisjoint(cand_iss):
+                return 0, [f"issuer≠({'/'.join(sorted(cand_iss))})"]
 
     # ── Rule 2: maturity-date gate (hard reject on disagreement) ───────────
     feat_date = features.get("maturity_date") or features.get("expiry") or ""
@@ -1019,10 +1526,9 @@ def _score_candidate(sec, features, security_type):
         if cand_dates:
             if _date_agrees(feat_date, cand_dates, day_known):
                 date_agreed = True
-                # When the day was named AND it agreed, the match was on the
-                # full YYYY-MM-DD (the gate requires feat_date in cand_dates),
-                # so this is an exact day/month/year coincidence.
-                date_agreed_exact = day_known
+                # +50 only on an EXACT day/month/year hit; a within-tolerance
+                # (rolled by a few days) or month/year-only agreement stays +25.
+                date_agreed_exact = day_known and (feat_date in cand_dates)
             else:
                 return 0, ["maturityDate≠"]
 
@@ -1030,7 +1536,21 @@ def _score_candidate(sec, features, security_type):
     matched_on = []
 
     # ── Partial identifier matches (substring / adjacency — not decisive) ──
-    if "cetip_code" in features and features["cetip_code"].lower() in sec_main_id.lower():
+    # A ticker / ISIN embedded INSIDE a longer mainId is strong evidence — same
+    # nature as the CETIP-substring signal. The whole-mainId == id case already
+    # returned a decisive exact match upstream; here the id is a substring of a
+    # bigger mainId. Length-guarded so a short ticker can't match by coincidence
+    # (ticker ≥ 4, ISIN ≥ 8). Case-insensitive.
+    sec_main_lower = sec_main_id.lower()
+    feat_tkr  = features.get("ticker") or ""
+    feat_isin = features.get("isin") or ""
+    if len(feat_tkr) >= 4 and feat_tkr.lower() in sec_main_lower:
+        score += 50
+        matched_on.append("mainId/ticker")
+    elif len(feat_isin) >= 8 and feat_isin.lower() in sec_main_lower:
+        score += 50
+        matched_on.append("mainId/isin")
+    elif "cetip_code" in features and features["cetip_code"].lower() in sec_main_id.lower():
         score += 50
         matched_on.append("mainId/cetip")
     elif "internal_code" in features and features["internal_code"].lower() in sec_main_id.lower():
@@ -1062,20 +1582,26 @@ def _score_candidate(sec, features, security_type):
             score += 50
             matched_on.append("mainId/structured")
 
-    # Agreeing maturity date confirms a non-exact candidate. An exact
-    # day/month/year coincidence is strong evidence (+50, reaches the
-    # "confident" threshold); a month+year-only agreement stays at +25.
+    # Agreeing maturity date CONFIRMS a non-exact candidate, but does not
+    # dominate. The date is already a hard GATE above (a disagreeing date → 0),
+    # so every candidate reaching here shares the date; the additive bonus must
+    # not, on its own, lift a same-issuer/same-date sibling to "identified". Kept
+    # deliberately BELOW the 50 already-registered threshold (+30 exact / +15
+    # month-year) so name/id signals decide. Exact day/month/year > month-only.
     if date_agreed_exact:
-        score += 50
+        score += 30
         matched_on.append("maturityDate=")
     elif date_agreed:
-        score += 25
+        score += 15
         matched_on.append("maturityDate")
 
-    # Indexer match (+10)
-    if "indexer" in features:
+    # Indexer match (+10). Both sides must be non-empty: an empty candidate
+    # `indexer` would make `"" in "IPCA"` True and grant a spurious bonus to
+    # every indexer-less security (which the rate-regime gate above can't reject,
+    # since an unknown candidate regime is left alone).
+    if features.get("indexer"):
         sec_idx = str(sec.get("indexer", "")).upper()
-        if features["indexer"] in sec_idx or sec_idx in features["indexer"]:
+        if sec_idx and (features["indexer"] in sec_idx or sec_idx in features["indexer"]):
             score += 10
             matched_on.append("indexer")
 
@@ -1116,6 +1642,66 @@ def _score_candidate(sec, features, security_type):
                         score += rare_points
                         matched_on.append(f"name~rare({n_rare})")
 
+            cov_feat = len(overlap) / len(feat_tokens)
+            cov_sec  = len(overlap) / len(sec_tokens)
+            base_names_align = min(cov_feat, cov_sec) >= _NAME_EQUIV_COVERAGE
+
+            # Fund share-class / series discriminator check (brazilianFund only).
+            # A TRANCHE difference either way, or a CLASS-VALUE conflict (both
+            # sides name a value and they differ), means a sibling — a different
+            # security. A class-value asymmetry (one side omits it) is left alone
+            # so an extra "Classe A" in the description doesn't sink a correct,
+            # class-less security. An exact match earns a small confirm bonus.
+            discr_penalize = False
+            class_confirm = False
+            if security_type == "brazilianFund":
+                tr_f, val_f = _fund_discriminator_sig(name_feature)
+                tr_c, val_c = _fund_discriminator_sig(sec.get("beehusName", ""))
+                tranche_diff   = tr_f != tr_c
+                value_conflict = bool(val_f) and bool(val_c) and val_f != val_c
+                discr_penalize = tranche_diff or value_conflict
+                class_confirm = not discr_penalize and (
+                    (bool(val_f) and val_f == val_c) or (bool(tr_f) and tr_f == tr_c))
+
+            # Name-equivalence bonus: distinctive token sets agree BOTH ways
+            # (high coverage on the description AND the candidate), so the names
+            # are essentially the same — not just a partial overlap. Date-gated
+            # like the other name signals; ≥2 overlapping tokens so a single
+            # shared word can't trigger it; blocked when fund discriminators differ.
+            if (len(overlap) >= 2 and base_names_align and not discr_penalize
+                    and (date_agreed or not feat_date)):
+                score += _NAME_EQUIV_BONUS
+                matched_on.append("name~equiv")
+
+            # Discriminator penalty: the base name lines up but the fund's
+            # class/series/seniority conflicts → a sibling, not the same security.
+            if discr_penalize and base_names_align:
+                score -= _FUND_DISCR_PENALTY
+                matched_on.append("fund~discr≠")
+            # Confirm bonus: same base name AND same class/tranche — ranks the
+            # exact class above an asymmetric sibling (Bogari A vs the base class).
+            elif class_confirm and base_names_align:
+                score += _FUND_CLASS_CONFIRM
+                matched_on.append("fund~class=")
+
+        # Compressed-name match against the candidate's mainId. Many mainIds pack
+        # the asset name with spaces/punctuation stripped (CRA Usina Coruripe →
+        # CRAUSINACORURIPE…), which the beehusName-token overlap above misses.
+        # Test the description's distinctive tokens against the compacted mainId.
+        # DATE-GATED: only when the operator's date agreed (or none was given) —
+        # so a name that is a prefix of a longer, MORE-specific mainId (a
+        # different asset) can't score on the name when the dates disagree (that
+        # path already returned 0). Fires even when beehusName tokens were sparse.
+        if feat_tokens and (date_agreed or not feat_date):
+            main_compact = _compact(sec_main_id)
+            if main_compact:
+                hits = sorted({t for t in feat_tokens
+                               if len(_compact(t)) >= 4 and _compact(t) in main_compact})
+                if hits:
+                    pts = min(_MAINID_NAME_CAP, _MAINID_NAME_PER_HIT * len(hits))
+                    score += pts
+                    matched_on.append(f"mainId/name({len(hits)})")
+
     # Type-agreement tie-breaker. Applied LAST and only when the candidate is
     # already plausible (score > 0 from date/name/id) — never alone, so a bare
     # "CDB"/"CRI" can't lift every same-type security off zero. Matches the
@@ -1130,7 +1716,9 @@ def _score_candidate(sec, features, security_type):
                 score += _TYPE_AGREE_BONUS
                 matched_on.append(f"type={bt}")
 
-    return score, matched_on
+    # Floor at 0 — the discriminator penalty is the only signal that can push the
+    # additive score negative, and a negative score has no meaning downstream.
+    return max(0, score), matched_on
 
 
 # ── Score breakdown (display-only) ──────────────────────────────────────────
@@ -1142,20 +1730,24 @@ def _score_candidate(sec, features, security_type):
 # folded into a residual entry, so the listed parts ALWAYS sum to the real
 # score and the tooltip can never misreport the total.
 _BREAKDOWN_LABELS = {
+    "mainId/ticker":     (50, "Ticker encontrado no mainId"),
+    "mainId/isin":       (50, "ISIN encontrado no mainId"),
     "mainId/cetip":      (50, "Código CETIP encontrado no mainId"),
     "mainId/code":       (45, "Código interno encontrado no mainId"),
     "mainId/external":   (40, "Código externo encontrado no mainId"),
     "mainId/fund_code":  (35, "Código do fundo encontrado no mainId"),
     "selicCode~":        (40, "Código SELIC adjacente (±1)"),
     "mainId/structured": (50, "Padrão estruturado de opção no mainId/ticker"),
-    "maturityDate=":     (50, "Vencimento exato (dia/mês/ano)"),
-    "maturityDate":      (25, "Vencimento (mês/ano)"),
+    "maturityDate=":     (30, "Vencimento exato (dia/mês/ano)"),
+    "maturityDate":      (15, "Vencimento (mês/ano)"),
     "indexer":           (10, "Indexador bate (CDI/IPCA/SELIC/…)"),
+    "name~equiv":        (_NAME_EQUIV_BONUS, "Nome equivalente (mesmos tokens distintivos)"),
 }
 _EXACT_ID_LABELS = {
     "ticker":              "ticker",
     "ticker/FUT":          "ticker (futuro)",
     "taxId":               "CNPJ",
+    "mainId/cnpj":         "CNPJ = mainId",
     "isIn":                "ISIN",
     "selicCode":           "código SELIC",
     "mainId/cetip=":       "código CETIP = mainId (exato)",
@@ -1207,6 +1799,16 @@ def _score_breakdown(reasons, total_score):
             comps.append({"code": r, "points": pts,
                           "label": f"Sobreposição de nome ({o} de {t} tokens)"})
             explained += pts
+        elif r.startswith("mainId/name("):
+            # mainId/name(N) → min(cap, per_hit * N)  (compacted-name in mainId)
+            try:
+                n = int(r[r.index("(") + 1:r.index(")")])
+            except (ValueError, IndexError):
+                n = 0
+            pts = min(_MAINID_NAME_CAP, _MAINID_NAME_PER_HIT * n) if n else 0
+            comps.append({"code": r, "points": pts,
+                          "label": f"Nome no mainId comprimido ({n} token(s))"})
+            explained += pts
         elif r.startswith("name~rare"):
             # Rarity bonus = min(30, round(rare_w*30)); not recoverable from the
             # code alone, so it takes the residual (computed after the loop).
@@ -1225,9 +1827,26 @@ def _score_breakdown(reasons, total_score):
             comps.append({"code": r, "points": 25,
                           "label": "mainId (comprimido) é substring da descrição"})
             explained += 25
+        elif r == "fund~discr≠":
+            comps.append({"code": r, "points": -_FUND_DISCR_PENALTY,
+                          "label": "Classe/série/tranche do fundo difere — penalidade"})
+            explained += -_FUND_DISCR_PENALTY
+        elif r == "fund~class=":
+            comps.append({"code": r, "points": _FUND_CLASS_CONFIRM,
+                          "label": "Classe/tranche do fundo confere"})
+            explained += _FUND_CLASS_CONFIRM
         elif r == "maturityDate≠":
             comps.append({"code": r, "points": 0,
                           "label": "Vencimento diverge — candidato rejeitado"})
+        elif r.startswith("vehicle≠"):
+            comps.append({"code": r, "points": 0,
+                          "label": "Veículo/lastro diverge (CRA≠LCA, CRI≠CRA, …) — candidato rejeitado"})
+        elif r.startswith("indexer≠"):
+            comps.append({"code": r, "points": 0,
+                          "label": "Indexador/regime diverge (IPCA/CDI ≠ Pré-fixado, …) — candidato rejeitado"})
+        elif r.startswith("issuer≠"):
+            comps.append({"code": r, "points": 0,
+                          "label": "Emissor bancário diverge (ex.: Santander ≠ BTG) — candidato rejeitado"})
         else:
             comps.append({"code": r, "points": 0, "label": r})
 
@@ -1283,10 +1902,13 @@ class SecurityCache:
     def count(self):
         return self._count
 
-    def load_from_db(self, db):
-        """Fetch all securities from MongoDB and rebuild indexes."""
+    def load_from_db(self, db=None):
+        """Rebuild indexes from the securities catalog (API-backed via
+        beehus_catalog, with Mongo fallback). `db` is accepted for backward
+        compatibility but no longer used."""
+        import beehus_catalog
         docs = []
-        for sec in db.securities.find({}, _CACHE_FIELDS):
+        for sec in beehus_catalog.all_securities():
             row = {"_id": str(sec["_id"])}
             for k in _CACHE_FIELDS:
                 v = sec.get(k)
@@ -1297,7 +1919,10 @@ class SecurityCache:
 
         today = str(_date.today())
         self._build(docs, today)
-        self._save(docs, today)
+        if docs:
+            self._save(docs, today)
+        else:
+            log.warning("SecurityCache: all_securities() returned 0 docs — skipping file save.")
         log.info("SecurityCache: loaded %d securities from DB", len(docs))
 
     def load_from_file(self):
@@ -1310,7 +1935,11 @@ class SecurityCache:
             loaded_date = data.get("date", "")
             if loaded_date != str(_date.today()):
                 return False
-            self._build(data.get("securities", []), loaded_date)
+            securities = data.get("securities", [])
+            if not securities:
+                log.warning("SecurityCache: file for today has 0 securities — ignoring.")
+                return False
+            self._build(securities, loaded_date)
             log.info("SecurityCache: loaded %d securities from file (date=%s)",
                      self._count, loaded_date)
             return True
@@ -1408,11 +2037,20 @@ class SecurityCache:
 
         candidates = {}  # _id → sec (dedup)
 
+        # brazilianFund CNPJ → both taxId and mainId (the fund's mainId IS the
+        # bare-digit CNPJ). Looking up mainId by the digits-only form pulls in
+        # the right fund even when the description carries the CNPJ unpunctuated
+        # and the name tokens don't overlap.
+        feat_cnpj = features.get("cnpj")
+        feat_cnpj_digits = _digits_only(feat_cnpj) if feat_cnpj else ""
+        feat_cnpj_digits = feat_cnpj_digits if len(feat_cnpj_digits) >= 11 else None
+
         # Phase 1: exact index lookups (fast)
         _exact_search = [
             ("ticker",    features.get("ticker")),
             ("ticker",    "FUT" + features["ticker"] if "ticker" in features else None),
             ("taxId",     features.get("cnpj")),
+            ("mainId",    feat_cnpj_digits),
             ("isIn",      features.get("isin")),
             ("selicCode", features.get("selic_code")),
             ("mainId",    features.get("external_code")),
@@ -1523,6 +2161,120 @@ _cache = SecurityCache()
 def get_cache():
     """Return the module-level SecurityCache singleton."""
     return _cache
+
+
+class MappingCache:
+    """In-memory cache of every securityMappings `from→to` pair
+    (unprocessedId → securityId) across all companies.
+
+    Loaded once per day from the Beehus API
+    (`beehus_catalog.all_security_mappings()`, GET
+    /beehus/financial/security-mappings), saved to
+    data/security_mappings_cache.json. Mirrors `SecurityCache`'s lifecycle
+    (file-of-today → API → persist, daily staleness).
+
+    Replaces the all-company `db.unprocessedSecurityPositions` scan that
+    `security_type_classifier.rebuild_mapping` used only to enumerate the
+    distinct unprocessedIds — those are exactly the mapping `from` values, so
+    the catalog gives them directly and no Mongo read is needed.
+    """
+
+    def __init__(self):
+        self._mapping = {}        # {unprocessedId_str: securityId_str}
+        self._loaded_date = None  # date string "YYYY-MM-DD"
+        self._count = 0
+
+    @property
+    def is_loaded(self):
+        return self._count > 0
+
+    @property
+    def is_stale(self):
+        """True if cache wasn't loaded today."""
+        return self._loaded_date != str(_date.today())
+
+    @property
+    def loaded_date(self):
+        return self._loaded_date
+
+    @property
+    def count(self):
+        return self._count
+
+    def as_dict(self):
+        """Copy of the `{unprocessedId: securityId}` map (safe to iterate)."""
+        return dict(self._mapping)
+
+    def load_from_api(self):
+        """Rebuild the map from the security-mappings catalog (API-backed via
+        beehus_catalog). Last-write-wins on a `from` shared across companies —
+        same as the previous in-place `mapping[from] = to` build."""
+        import beehus_catalog
+        mapping = {}
+        for doc in beehus_catalog.all_security_mappings():
+            for m in (doc.get("mappings") or []):
+                f, t = m.get("from"), m.get("to")
+                if f and t:
+                    mapping[str(f)] = str(t)
+        today = str(_date.today())
+        self._build(mapping, today)
+        self._save(mapping, today)
+        log.info("MappingCache: loaded %d unprocessedId->securityId pairs from API", len(mapping))
+
+    def load_from_file(self):
+        """Load from the JSON cache file if it exists and is from today."""
+        if not os.path.exists(_MAPPING_CACHE_FILE):
+            return False
+        try:
+            with open(_MAPPING_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            loaded_date = data.get("date", "")
+            if loaded_date != str(_date.today()):
+                return False
+            self._build(data.get("mappings", {}), loaded_date)
+            log.info("MappingCache: loaded %d pairs from file (date=%s)",
+                     self._count, loaded_date)
+            return True
+        except Exception as exc:
+            log.warning("MappingCache: failed to load file: %s", exc)
+            return False
+
+    def ensure_loaded(self):
+        """Load from today's file if present, otherwise from the API.
+        Returns True if the API had to be hit."""
+        if self.is_loaded and not self.is_stale:
+            return False
+        if self.load_from_file():
+            return False
+        self.load_from_api()
+        return True
+
+    def refresh(self):
+        """Force-reload from the API."""
+        self.load_from_api()
+
+    def _build(self, mapping, loaded_date):
+        self._mapping = dict(mapping)
+        self._count = len(self._mapping)
+        self._loaded_date = loaded_date
+
+    def _save(self, mapping, loaded_date):
+        try:
+            from db import atomic_write_json
+            atomic_write_json(_MAPPING_CACHE_FILE,
+                              {"date": loaded_date, "mappings": mapping},
+                              indent=None)
+        except Exception as exc:
+            log.warning("MappingCache: failed to save file: %s", exc)
+
+
+# Module-level cache singleton
+_mapping_cache = MappingCache()
+
+
+def get_mapping_cache():
+    """Return the module-level MappingCache singleton."""
+    return _mapping_cache
 
 
 # ── Main matcher class ─────────────────────────────────────────────────────────

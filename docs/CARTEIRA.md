@@ -21,6 +21,22 @@ data específica e enviar uma nova carga `unprocessedSecurityPositions`
 para o sistema — usa-se o mesmo endpoint multipart que o
 [Repetir Posições](REPETIR_POSICOES.md) e [Exceções](EXCECOES.md).
 
+### Fonte de dados (uma chamada por data)
+
+O bloco principal vem de **uma** resposta de `processed-position` por data
+(`beehus_catalog.carteira_position_bundle`). O envelope dessa resposta já traz,
+por carteira, três blocos — `position` (securities), `cashAccounts` e
+`provisions` —, então securities, a linha **Caixa** (saldo + `unprocessedId`) e
+a linha **Provisões** saem todos da mesma chamada, sem reads adicionais. Em
+particular, o bloco `provisions` do envelope contém **exatamente as provisões
+ativas naquela data** (`initialDate <= data < liquidationDate`), inclusive
+provisões longas iniciadas antes do período — por isso não há chamada separada a
+`/beehus/provisions` (que filtra por `initialDate`-na-janela e exigiria varrer
+desde 2000). A coluna `unprocessedSecurityId` usa uma segunda chamada,
+`unprocessedSecurityPositions`, em lote para todas as carteiras, pegando o
+snapshot mais recente **com `positionDate` ≤ data final** (on-or-before, não
+restrita à janela — ver Colunas).
+
 ---
 
 ## Colunas
@@ -28,30 +44,51 @@ para o sistema — usa-se o mesmo endpoint multipart que o
 | Coluna                     | Origem                                                        |
 |----------------------------|---------------------------------------------------------------|
 | Security                   | `processedPosition.securities[].securityId` (nome via `securities.beehusName`) |
-| **unprocessedSecurityId**  | `securityMappings.mappings[].from`, desambiguado pelo snapshot mais recente `unprocessedSecurityPositions` da carteira ≤ data final |
+| **unprocessedSecurityId**  | `unprocessedSecurityPositions.securities[].preProcessingData.securityId` → `.unprocessedId` (par autoritativo lido direto do snapshot bruto da carteira) |
 | Qtd / PU / Saldo           | `processedPosition.securities[].quantity / pu / balance`      |
 | Contribuição (opcional)    | `processedPosition.securities[].totalContribution`            |
 
-A coluna `unprocessedSecurityId` resolve-se uma vez por carteira no
-backend (`_unprocessed_id_maps`) — um `find_one` em
-`unprocessedSecurityPositions` mais recente da carteira (sort desc por
-`positionDate`), cruzado com `securityMappings.mappings` para inverter
-`from → to` em `to → from`. A resolução por security segue três regras:
+A coluna `unprocessedSecurityId` resolve-se no backend
+(`_unprocessed_id_maps`) com **uma** chamada em lote
+(`unprocessed_sid_uid_map`) para todas as carteiras. Cada item de
+`securities[]` do snapshot bruto carrega o par AUTORITATIVO
+`preProcessingData.securityId → unprocessedId` daquela carteira; varre-se os
+snapshots **do mais novo p/ o mais antigo** e, por `securityId`, fica-se com o
+`unprocessedId` do snapshot mais recente que contém o ativo (o rótulo `Ativo`
+vigente). Olha-se **todos** os snapshots ≤ data final, não só o último — cada
+upload traz só parte da posição, então a união maximiza a cobertura.
 
-1. Se o `from` do mapping está no snapshot mais recente, usa-o — o
-   snapshot desambigua um `securityId` que carrega mais de um `from`
-   histórico (renomeações upstream, revisão de taxa, variação de
-   formatação com/sem hífen — ~6% dos mappings na prática).
-2. Senão, se o `securityId` tem **exatamente um** `from` nos mappings da
-   empresa, cai nesse valor. Isso mantém a security **editável** quando
-   ela saiu do snapshot mais recente — caso típico: **venceu na data
-   final**. Nesse dia ela ainda aparece no `processedPosition`, mas o
-   upstream já parou de emiti-la em `unprocessedSecurityPositions` (o
-   último snapshot com ela é o dia útil anterior). Sem esse fallback a
-   célula renderizava "—" e o modo de edição rejeitava a linha como "sem
-   unprocessedId".
-3. Um `securityId` com vários `from` e nenhum no snapshot fica **não
-   resolvido** ("—") — não se adivinha qual `Ativo` enviar upstream.
+> **Por que `preProcessingData`, e não o cruzamento com `securityMappings`.**
+> O mapa company-level `securityMappings` (`from → to`) **colide**: um
+> `securityId` costuma ter vários `from` históricos (renomeações upstream,
+> revisão de taxa, variação de formatação com/sem hífen — **~38%** do catálogo
+> em produção, não ~6%). Cruzar isso com o snapshot tentava desambiguar, mas
+> qualquer ativo cujo sid tinha múltiplos candidatos e não estava fixado pelo
+> snapshot caía em "—". Ler `preProcessingData.securityId` direto do snapshot
+> pega o par EXATO que a carteira de fato carregou, sem chutar. Validado
+> (empresa 23313334000110, 1 carteira): **superconjunto estrito** do
+> cruzamento antigo — 0 regressões, 0 divergências no uid escolhido, +7 ativos
+> resolvidos.
+
+Um `securityId` presente na posição processada mas em **nenhum** snapshot bruto
+da carteira (ex.: componentes de look-through / linhas criadas por evento) fica
+**não resolvido** ("—") — não há rótulo de upload bruto a anexar, por
+construção.
+
+### Erro no arquivo bruto (unprocessed vazio/ausente)
+
+As linhas de securities vêm do snapshot **bruto** (`unprocessed-security-positions`)
+da **data exata** (cada linha carrega seu `unprocessedId` editável). Quando, numa
+data, a carteira **tem posição processada** (logo, deveria ter posição) mas o
+snapshot bruto daquela data está **vazio (0 ativos) ou ausente**, o backend marca
+`unprocessedErrorByDate[data] = true` e **não faz fallback**: nenhum ativo é exibido
+para a data e a UI mostra um **aviso vermelho** ("Erro no arquivo de posição bruta")
++ marca o cabeçalho da data com ⚠. Decisão de produto: **informar o erro do arquivo
+e não fazer nada** (não recompor da processada). A data com erro **sobrevive ao corte
+de colunas** (senão o aviso sumiria) e entra no gate `any_data` (a carteira aparece
+mesmo que só tenha o erro). Correção é operacional: **reenviar o upload bruto** correto
+daquela data. Caso real: carteira *MML PF BTG BRL* em **2026-05-29** (bruto com 0
+ativos, processada com 12) — resolvido quando o snapshot bruto foi recriado.
 
 ---
 

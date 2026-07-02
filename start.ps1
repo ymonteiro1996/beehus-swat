@@ -41,6 +41,20 @@ Remove-Item -Path $outLog, $errLog -ErrorAction SilentlyContinue
 # Setado no escopo do processo PowerShell ($env:...) — o `Start-Process`
 # abaixo herda automaticamente todas as env vars do parent.
 $env:SWAT_ALLOW_CLAUDE_CLI = "1"
+
+# Chave Mongo POR MÁQUINA (não versionada, não sincronizada): se existir o
+# arquivo %USERPROFILE%\.swat\no-mongo nesta máquina, o dashboard sobe SEM Mongo
+# (SWAT_IDENTIFICAR=0 → sem conexão, sem carregar pymongo; só a feature
+# "Identificar / Posições da carteira" do Painel some). A instância de
+# identificação NÃO cria esse arquivo, então continua com Mongo ligado.
+# Mora em ~/.swat (junto do token) de propósito: NÃO sincroniza via OneDrive
+# para a outra instância e o `git pull` do iniciar.bat nunca o sobrescreve.
+$noMongoMarker = Join-Path $env:USERPROFILE ".swat\no-mongo"
+if (Test-Path $noMongoMarker) {
+    $env:SWAT_IDENTIFICAR = "0"
+    Write-Host "[SWAT] .swat\no-mongo presente -> SWAT_IDENTIFICAR=0 (Mongo desligado nesta instancia)"
+}
+
 Write-Host "[SWAT] Iniciando servidor em http://127.0.0.1:$port ..."
 $proc = Start-Process -FilePath "python" -ArgumentList "app.py" -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog

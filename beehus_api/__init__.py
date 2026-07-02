@@ -10,16 +10,23 @@ Usage from any blueprint:
 The bearer token lives server-side in process memory (see client.py).
 Lost on restart by design — user re-pastes it daily on the /beehus page.
 """
-from .client import set_token, get_token, clear_token, token_status
+from .client import set_token, get_token, clear_token, token_status, verify_token
 from .exceptions import BeehusAPIError, BeehusAuthError
-from .transactions import create_transaction, delete_transaction, update_transaction
+from .transactions import (create_transaction, delete_transaction,
+                           update_transaction, list_transactions)
+from .partner import partner_wallets, list_companies, list_entities
 from .positions import (
     process_processed_position,
     delete_processed_position,
     upload_unprocessed_security_positions_file,
+    get_processed_position,
+    get_unprocessed_security_positions,
+    get_preprocessing_status,
 )
-from .provisions import create_provision, delete_provision, update_provision
-from .execution_prices import create_execution_price
+from .provisions import (create_provision, delete_provision, update_provision,
+                         list_provisions)
+from .execution_prices import (create_execution_price, list_execution_prices,
+                               update_execution_price)
 from .consolidation import (
     calculate_nav_wallets,
     calculate_nav_groupings,
@@ -27,31 +34,54 @@ from .consolidation import (
     publish_nav,
     unpublish_nav,
     run_heuristics,
+    get_nav_contribution,
+    get_nav_results,
 )
-from .security_mappings import update_security_mappings
+from .grouping import list_groupings
+from .security_mappings import update_security_mappings, get_security_mappings
+from .securities import create_security, list_securities, filtered_security_price, security_events
 
 __all__ = [
     "set_token",
     "get_token",
     "clear_token",
     "token_status",
+    "verify_token",
     "BeehusAPIError",
     "BeehusAuthError",
     "create_transaction",
     "delete_transaction",
     "update_transaction",
+    "list_transactions",
+    "partner_wallets",
+    "list_companies",
+    "list_entities",
     "process_processed_position",
     "delete_processed_position",
     "upload_unprocessed_security_positions_file",
+    "get_processed_position",
+    "get_unprocessed_security_positions",
+    "get_preprocessing_status",
     "create_provision",
     "delete_provision",
     "update_provision",
+    "list_provisions",
     "create_execution_price",
+    "list_execution_prices",
+    "update_execution_price",
     "calculate_nav_wallets",
     "calculate_nav_groupings",
     "proportion_explosion",
     "publish_nav",
     "unpublish_nav",
     "run_heuristics",
+    "get_nav_contribution",
+    "get_nav_results",
+    "list_groupings",
     "update_security_mappings",
+    "get_security_mappings",
+    "create_security",
+    "list_securities",
+    "filtered_security_price",
+    "security_events",
 ]

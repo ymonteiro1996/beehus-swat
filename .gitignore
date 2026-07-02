@@ -9,6 +9,7 @@ user_connections.json
 # Local runtime data / caches (may contain real customer data)
 data/config.json
 data/securities_cache.json
+data/security_mappings_cache.json
 data/unprocessed_security_types.json
 data/rentability_thresholds.json
 data/saved_reports.json

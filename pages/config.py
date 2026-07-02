@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, jsonify, request
 from db import (db, load_config, load_config_delays, load_config_methods, load_config_responsible,
                 load_settings, CONFIG_FILE, SETTINGS_FILE, atomic_write_json,
                 get_company_names, get_entity_names)
+import beehus_catalog
 import os
 
 bp = Blueprint("config", __name__)
@@ -13,9 +14,9 @@ def _build_company_entity_list(selected, delays, methods, responsible):
     entity_names  = get_entity_names()
 
     company_map = {}
-    for w in db.wallets.find({}, {"companyId": 1, "entityId": 1}):
-        cid = str(w.get("companyId", ""))
-        eid = str(w.get("entityId", ""))
+    for w in beehus_catalog.wallets_index().values():
+        cid = beehus_catalog.id_str(w.get("companyId", "")) or ""
+        eid = beehus_catalog.id_str(w.get("entityId", "")) or ""
         if cid and eid:
             company_map.setdefault(cid, set()).add(eid)
 

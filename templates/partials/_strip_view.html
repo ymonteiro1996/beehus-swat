@@ -43,32 +43,9 @@
         </div>
       </div>
 
-      <!-- Date filter — popover with checkboxes, mirroring the
-           company filter above. Lists the unique Data Base values
-           currently shown in the listing (rows narrowed by the
-           company filter only — the date filter doesn't feed back
-           into its own option set). Selection narrows visible rows
-           to those whose Data Base is in the set; it never mutates
-           row data. Empty selection ⇒ show everything (default). -->
-      <div class="relative" id="sp-filter-dates-wrap">
-        <button type="button" id="sp-filter-dates-btn"
-          onclick="Strip.toggleDateFilter()"
-          class="border rounded px-3 py-1.5 text-xs text-gray-700 bg-white hover:bg-gray-50 flex items-center gap-1">
-          <span>Datas:</span>
-          <span id="sp-filter-dates-label" class="font-semibold">todas</span>
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
-        </button>
-        <div id="sp-filter-dates-panel"
-          class="hidden absolute z-30 mt-1 left-0 bg-white border rounded shadow-lg p-2 text-xs min-w-[220px] max-h-72 overflow-auto">
-          <div class="flex items-center justify-between gap-2 pb-2 border-b mb-2">
-            <button type="button" onclick="Strip.setDateFilterAll(true)"
-              class="text-[11px] text-blue-700 hover:underline">Marcar todas</button>
-            <button type="button" onclick="Strip.setDateFilterAll(false)"
-              class="text-[11px] text-gray-500 hover:underline">Limpar</button>
-          </div>
-          <div id="sp-filter-dates-list" class="space-y-1"></div>
-        </div>
-      </div>
+      <!-- Filtro "Datas" removido: a coluna Data Base saiu da lista. A data
+           agora é escolhida no momento de aplicar (single: painel de Aplicar;
+           bulk: seletor único no modal de confirmação). -->
 
       <button id="sp-bulk-apply-btn" onclick="Strip.openBulkConfirm()" disabled
         class="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded px-4 py-1.5 text-xs font-semibold">
@@ -90,7 +67,6 @@
               <th class="px-3 py-2.5 text-left min-w-[180px]">Carteira (origem)</th>
               <th class="px-3 py-2.5 text-left min-w-[200px]" title="Position Stripping: carteiras de saída. Fatiar carteira: carteira de destino + percentual.">Saídas / Destino</th>
               <th class="px-3 py-2.5 text-right min-w-[60px]">Regras / %</th>
-              <th class="px-3 py-2.5 text-left min-w-[160px]" title="Última processedPosition.positionDate encontrada para a carteira de origem — referência para o stripping. Editável.">Data Base</th>
               <th class="px-3 py-2.5 text-left min-w-[140px]">Última aplicação</th>
               <th class="px-3 py-2.5 text-center min-w-[220px]">Ações</th>
             </tr>
@@ -332,6 +308,15 @@
       </div>
 
       <div class="sp-modal-body px-6 py-4 space-y-3">
+        <!-- Data base do lote: uma única data aplicada a TODAS as exceções
+             selecionadas (substitui a antiga coluna Data Base por-linha).
+             Alterar re-roda as pré-visualizações. -->
+        <div class="flex items-center gap-2 text-xs">
+          <label for="sp-confirm-date" class="text-gray-600 font-medium">Data base:</label>
+          <input type="date" id="sp-confirm-date" onchange="Strip.onBulkDateChange()"
+            class="border rounded px-2 py-1 text-xs bg-white text-gray-700" />
+          <span class="text-[10px] text-gray-400">aplicada a todas as exceções selecionadas</span>
+        </div>
         <div id="sp-confirm-overview" class="flex items-center gap-2 flex-wrap text-[11px]"></div>
         <div class="border rounded overflow-hidden">
           <table class="w-full text-xs">
@@ -407,17 +392,11 @@
                 onchange="Strip.onSetupKindChange(this.value)" />
               <span>Stripping por classe</span>
             </label>
-            <label class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer border rounded px-3 py-1.5">
-              <input type="radio" name="sp-setup-kind" value="managed_portfolio"
-                onchange="Strip.onSetupKindChange(this.value)" />
-              <span>Carteira gerencial</span>
-            </label>
           </div>
           <p class="text-[10px] text-gray-400 mt-1">
             <strong>Position Stripping</strong>: transfere ativos individuais entre carteiras.
             <strong>Fatiar carteira</strong>: envia uma fração % da carteira (securities + cashAccount + provisions + transactions) para outra carteira.
             <strong>Stripping por classe</strong>: lista de carteiras de origem; cada classe (<code>variable1</code>) vai para uma carteira destino, incluindo provisões/transações relacionadas e ajustes de <em>amountDifference</em>.
-            <strong>Carteira gerencial</strong>: lista de carteiras de origem + data + seleção de ativos (par wallet → security); produz análise impressa em A4 (sem alterações na Beehus).
           </p>
         </div>
 
@@ -711,73 +690,6 @@
 
         </div>
 
-        <!-- ════ Carteira gerencial–only step 4 ════
-             Reuses the class_strip groupings + wallets pickers (steps 2/3)
-             above — the kind switch flips visibility but keeps the shared
-             pane DOM intact. Step 4 here adds the date picker + "abrir
-             carteiras" button that opens the securities picker modal. -->
-        <div id="sp-setup-managed-only" class="space-y-5 hidden">
-
-          <!-- Optional benchmark for the comparison line on the A4 report.
-               Source: securities.securityType = "benchmark" for the
-               selected company. -->
-          <div>
-            <p class="text-xs font-semibold text-gray-700 mb-2"><span class="sp-step-num">4</span>Benchmark de comparação (opcional)</p>
-            <select id="sp-setup-managed-benchmark"
-              onchange="Strip.onManagedBenchmarkChange(this.value)"
-              class="w-full md:w-2/3 border rounded px-3 py-1.5 text-xs bg-white text-gray-700">
-              <option value="">— sem benchmark —</option>
-            </select>
-            <p class="text-[10px] text-gray-400 mt-1">
-              Quando informado, o gráfico de linha do relatório A4 ganha
-              uma segunda série com a rentabilidade acumulada do benchmark
-              no mesmo intervalo.
-            </p>
-          </div>
-
-          <div>
-            <p class="text-xs font-semibold text-gray-700 mb-2"><span class="sp-step-num">5</span>Data e seleção de ativos</p>
-            <p class="text-[10px] text-gray-400 mb-2">
-              Escolha a data e clique em <strong>Abrir carteiras</strong> — o sistema lista os ativos das wallets selecionadas no Step 3 e você marca os pares (carteira → ativo) que farão parte da análise.
-            </p>
-            <div class="flex flex-wrap items-center gap-3">
-              <div>
-                <label class="block text-[11px] text-gray-500 mb-1">Data base</label>
-                <input id="sp-setup-managed-date" type="date"
-                  class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700"
-                  onchange="Strip.onManagedDateChange(this.value)" />
-              </div>
-              <button type="button"
-                onclick="Strip.openManagedPicker()"
-                id="sp-setup-managed-open-btn"
-                class="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded px-3 py-1.5 text-xs font-semibold">
-                Abrir carteiras
-              </button>
-              <span id="sp-setup-managed-status" class="text-[11px] text-gray-500"></span>
-            </div>
-
-            <!-- Summary of currently selected (walletId, securityId) pairs.
-                 Rendered inline so the operator can see what's about to be
-                 saved without re-opening the modal. -->
-            <div class="mt-3 border rounded bg-gray-50 max-h-44 overflow-y-auto">
-              <table class="w-full text-[11px]">
-                <thead class="bg-gray-100 text-gray-500 uppercase">
-                  <tr>
-                    <th class="px-2 py-1.5 text-left min-w-[200px]">Carteira</th>
-                    <th class="px-2 py-1.5 text-left min-w-[260px]">Ativo</th>
-                    <th class="px-2 py-1.5 text-right w-16"></th>
-                  </tr>
-                </thead>
-                <tbody id="sp-setup-managed-pairs-tbody"></tbody>
-              </table>
-              <p id="sp-setup-managed-pairs-msg" class="text-center text-gray-400 text-xs py-3">
-                Nenhum ativo selecionado.
-              </p>
-            </div>
-          </div>
-
-        </div>
-
       </div>
 
       <div class="flex items-center justify-between px-6 py-3 border-t shrink-0">
@@ -793,93 +705,6 @@
         </div>
       </div>
 
-    </div>
-  </div>
-
-  <!-- ════ Managed-portfolio: securities picker modal ═══════════════════════
-       Opens from setup step 4. Shows every security held by the selected
-       source wallets on the chosen date, with a dual-pane transfer between
-       "Disponíveis" and "Selecionadas". The "Selecionadas" pane is the
-       authoritative list — when the operator confirms it, the pairs are
-       written back to `Strip.managedPairs` and the summary table in the
-       setup re-renders. Layout mirrors the class_strip pickers
-       (`sp-pick-*`) plus a left-side wallet filter. -->
-  <div id="sp-managed-picker" class="fixed inset-0 z-[80] hidden bg-black/50 items-center justify-center p-4">
-    <div class="bg-white rounded-lg w-full max-w-6xl flex flex-col" style="max-height:92vh;">
-      <div class="flex items-center justify-between px-6 py-3 border-b shrink-0">
-        <div>
-          <h3 class="text-base font-semibold text-gray-800">Ativos das carteiras</h3>
-          <p class="text-[11px] text-gray-500">
-            Data base <span id="sp-managed-picker-date" class="font-medium">—</span> ·
-            <span id="sp-managed-picker-wallet-count">0</span> carteira(s) ·
-            <span id="sp-managed-picker-available-count">0</span> ativo(s) disponíveis ·
-            <span id="sp-managed-picker-selected-count">0</span> selecionado(s)
-          </p>
-        </div>
-        <button onclick="Strip.closeManagedPicker()"
-          class="text-gray-400 hover:text-gray-700 text-2xl leading-none">&times;</button>
-      </div>
-
-      <div class="sp-modal-body p-4 space-y-3">
-        <!-- Filter row: wallet narrowing + free-text search -->
-        <div class="flex flex-wrap gap-2 items-center">
-          <select id="sp-managed-picker-wallet-filter"
-            onchange="Strip.onManagedPickerFilterChange()"
-            class="border rounded px-2 py-1 text-[11px] bg-white text-gray-700">
-            <option value="">Todas as carteiras</option>
-          </select>
-          <input id="sp-managed-picker-search" type="search" placeholder="Filtrar por nome do ativo ou ID..."
-            class="border rounded px-2 py-1 text-[11px] bg-white text-gray-700 flex-1 min-w-[200px]"
-            oninput="Strip.onManagedPickerFilterChange()" />
-          <span id="sp-managed-picker-status" class="text-[11px] text-gray-500"></span>
-        </div>
-
-        <div class="sp-pick-transfer">
-          <div class="sp-pick-pane">
-            <div class="sp-pick-pane-header">
-              <span class="font-medium text-gray-700">Disponíveis</span>
-              <span class="text-gray-500">
-                <span id="sp-managed-picker-avail-shown">0</span>
-              </span>
-            </div>
-            <select id="sp-managed-picker-available" class="sp-pick-list" multiple
-              ondblclick="Strip.onManagedPickerAddSelected()"></select>
-          </div>
-          <div class="sp-pick-actions">
-            <button type="button" class="border rounded text-[11px] text-gray-700 bg-white hover:bg-gray-100"
-                    title="Adicionar destacados"
-                    onclick="Strip.onManagedPickerAddSelected()">→</button>
-            <button type="button" class="border rounded text-[11px] text-gray-700 bg-white hover:bg-gray-100"
-                    title="Adicionar todos os visíveis"
-                    onclick="Strip.onManagedPickerAddAll()">»</button>
-            <button type="button" class="border rounded text-[11px] text-gray-700 bg-white hover:bg-gray-100"
-                    title="Remover destacados"
-                    onclick="Strip.onManagedPickerRemoveSelected()">←</button>
-            <button type="button" class="border rounded text-[11px] text-gray-500 bg-white hover:bg-gray-100"
-                    title="Limpar selecionados"
-                    onclick="Strip.onManagedPickerRemoveAll()">«</button>
-          </div>
-          <div class="sp-pick-pane">
-            <div class="sp-pick-pane-header">
-              <span class="font-medium text-gray-700">Selecionados</span>
-              <span class="text-gray-500"><span id="sp-managed-picker-sel-shown">0</span></span>
-            </div>
-            <select id="sp-managed-picker-selected" class="sp-pick-list" multiple
-              ondblclick="Strip.onManagedPickerRemoveSelected()"></select>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 px-6 py-3 border-t shrink-0">
-        <button onclick="Strip.closeManagedPicker()"
-          class="border rounded px-4 py-1.5 text-xs text-gray-700 hover:bg-gray-100">
-          Cancelar
-        </button>
-        <button onclick="Strip.confirmManagedPicker()"
-          class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-4 py-1.5 text-xs font-semibold">
-          Confirmar seleção
-        </button>
-      </div>
     </div>
   </div>
 
@@ -926,8 +751,7 @@
        Processar" date UI: single date / range toggle + an optional
        "Selecionar datas específicas" list (month-end filter + Excel
        upload + dual-pane transfer). One date → keeps the rich inline
-       preview panel; many dates → sequential apply (no per-date preview).
-       managed_portfolio keeps its own date-range prompt below. -->
+       preview panel; many dates → sequential apply (no per-date preview). -->
   <div id="sp-apply-dates" class="fixed inset-0 z-[80] hidden bg-black/50 items-start justify-center overflow-auto p-4">
     <div class="bg-white rounded-lg w-full max-w-3xl flex flex-col" style="max-height:92vh">
       <div class="flex items-center justify-between px-6 py-3 border-b shrink-0">
@@ -1050,91 +874,6 @@
             Continuar
           </button>
         </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ════ Managed-portfolio: date-range prompt ════════════════════════════
-       Opens when the operator clicks "Aplicar" on a managed_portfolio row.
-       Replaces the inline preview/upload flow used by the other kinds —
-       this one is read-only (analysis only), so we just ask for the
-       analysis window and call /apply directly. -->
-  <div id="sp-managed-daterange" class="fixed inset-0 z-[80] hidden bg-black/50 items-center justify-center p-4">
-    <div class="bg-white rounded-lg w-full max-w-md flex flex-col">
-      <div class="flex items-center justify-between px-6 py-3 border-b shrink-0">
-        <h3 class="text-base font-semibold text-gray-800">Análise — Carteira gerencial</h3>
-        <button onclick="Strip.closeManagedDateRange()"
-          class="text-gray-400 hover:text-gray-700 text-2xl leading-none">&times;</button>
-      </div>
-      <div class="p-6 space-y-3">
-        <p class="text-[11px] text-gray-500">
-          Defina a janela de análise. Os cálculos cobrem todos os dias com
-          documento em <code>publishedPositionSecurities</code> dentro do
-          intervalo.
-        </p>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[11px] text-gray-500 mb-1">Data inicial</label>
-            <input id="sp-managed-daterange-ini" type="date"
-              class="w-full border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
-          </div>
-          <div>
-            <label class="block text-[11px] text-gray-500 mb-1">Data final</label>
-            <input id="sp-managed-daterange-fin" type="date"
-              class="w-full border rounded px-3 py-1.5 text-xs bg-white text-gray-700" />
-          </div>
-        </div>
-        <p id="sp-managed-daterange-status" class="text-[11px] text-red-600 min-h-[1em]"></p>
-      </div>
-      <div class="flex items-center justify-end gap-2 px-6 py-3 border-t shrink-0">
-        <button onclick="Strip.closeManagedDateRange()"
-          class="border rounded px-4 py-1.5 text-xs text-gray-700 hover:bg-gray-100">
-          Cancelar
-        </button>
-        <button onclick="Strip.runManagedAnalysis()"
-          id="sp-managed-daterange-go"
-          class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-1.5 text-xs font-semibold">
-          Gerar análise
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ════ Managed-portfolio: A4 analysis modal ══════════════════════════════
-       Opens from the daily-routine "Aplicar" button on a managed_portfolio
-       row. Renders the analysis on a fixed-width A4 canvas so the
-       browser's "Imprimir → Salvar como PDF" produces a faithful copy.
-       The body is intentionally minimal right now — the operator will
-       spec the calculations and we'll populate it then. -->
-  <div id="sp-managed-report" class="fixed inset-0 z-[80] hidden bg-black/50 items-start justify-center overflow-auto p-4">
-    <div class="bg-white rounded-lg shadow-xl flex flex-col"
-         style="width:21cm; max-width:100%;">
-      <!-- Header (kept outside the printable A4 area via @media print rules). -->
-      <div class="flex items-center justify-between px-6 py-3 border-b shrink-0 no-print">
-        <div>
-          <h3 class="text-base font-semibold text-gray-800">Análise — Carteira gerencial</h3>
-          <p class="text-[11px] text-gray-500">A4 retrato · use Ctrl+P / ⌘P para imprimir ou salvar em PDF.</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <button onclick="window.print()"
-            class="bg-blue-600 hover:bg-blue-700 text-white rounded px-3 py-1.5 text-xs font-semibold">
-            Imprimir
-          </button>
-          <button onclick="Strip.closeManagedReport()"
-            class="text-gray-400 hover:text-gray-700 text-2xl leading-none">&times;</button>
-        </div>
-      </div>
-
-      <!-- A4 printable area. Everything inside `.sp-a4` becomes the page
-           body when printing; the modal chrome above is hidden by
-           `.no-print` rules in _strip_styles.html. Padding/margins live
-           in `.sp-a4` itself so they match the printed page (Tailwind's
-           p-8 was double-counting against @page margin). -->
-      <div class="sp-a4 space-y-4" id="sp-managed-report-body">
-        <!-- Filled by `Strip._renderManagedReport()` after the apply
-             returns. The first render injects the canvases below;
-             Chart.js paints them once the DOM is in place. -->
-        <p class="text-xs text-gray-400">Aguardando dados…</p>
       </div>
     </div>
   </div>

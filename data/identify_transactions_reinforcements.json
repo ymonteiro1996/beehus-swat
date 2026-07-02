@@ -1272,6 +1272,47 @@
       "addedAt": "2026-06-12T14:18:06Z",
       "lastSeenAt": "2026-06-12T14:18:06Z",
       "hits": 1
+    },
+    "AQUISICAO DE COTAS NO FUNDO TESOURO SEL FIRF PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "54996629000162",
+      "lastDescriptionRaw": "AQUISICAO DE COTAS NO FUNDO TESOURO SEL FIRF PCO",
+      "addedAt": "2026-06-16T13:53:12Z",
+      "lastSeenAt": "2026-06-16T13:53:12Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO CDB PLUS FIRF CP PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b26d",
+      "securityName": "Btg Pactual CDB Plus FI RF CP",
+      "securityMainId": "27.717.359/0001-30",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO CDB PLUS FIRF CP PCO",
+      "addedAt": "2026-06-25T19:44:27Z",
+      "lastSeenAt": "2026-06-25T19:44:27Z",
+      "hits": 1
+    },
+    "FUNDO - 09.215.250/0001-13 - BTG PACTUAL DI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "",
+      "lastDescriptionRaw": "fundo - 09.215.250/0001-13 - BTG PACTUAL DI",
+      "addedAt": "2026-06-30T19:44:46Z",
+      "lastSeenAt": "2026-06-30T19:44:46Z",
+      "hits": 1
+    },
+    "GANHO RENDIMENTO - - - DEVOLUCAO_TX -": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Ganho Rendimento - - - Devolucao_tx -",
+      "addedAt": "2026-07-01T23:10:06Z",
+      "lastSeenAt": "2026-07-01T23:10:06Z",
+      "hits": 1,
+      "noSecurity": true
     }
   }
 }

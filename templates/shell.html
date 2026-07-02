@@ -5,14 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Operações - Beehus</title>
 
-  <!-- Restore dark mode before first paint -->
-  <script>if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark');</script>
-
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = { darkMode: 'class' }</script>
 
   <style>
-    html.dark body { background-color: #111827; }
     .nav-link[data-active="true"] { background: rgba(255,255,255,0.1); color: white; font-weight: 500; }
 
     /* ── Sidebar collapse (rail pattern) ──────────────────────────────────
@@ -73,6 +68,8 @@
 </head>
 <body class="bg-gray-100 min-h-screen font-sans text-sm flex">
 
+  {% include 'partials/_token_banner.html' %}
+
   <!-- ── Sidebar toggle ────────────────────────────────────────────────────
        Always-visible floating chevron. Lives outside the sidebar so it stays
        reachable when the sidebar slides off-screen. -->
@@ -112,6 +109,13 @@
           <span class="nav-text">Posição Projetada</span>
         </a>
 
+        <a href="#excecoes/day-trade" data-page="excecoes" onclick="navigateToDeep('excecoes', 'day-trade'); return false;"
+           title="Day-trade — zerar posição de buy/sell intraday (Ajustes day-trade)"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+          <span class="nav-text">Day-trade</span>
+        </a>
+
         <a href="#precificacao" data-page="precificacao" onclick="navigateTo('precificacao'); return false;"
            title="Preços na Curva"
            class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
@@ -124,18 +128,18 @@
       <div class="space-y-1">
         <div class="nav-section-label px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Validações</div>
 
-        <a href="#conciliacao" data-page="conciliacao" onclick="navigateTo('conciliacao'); return false;"
-           title="Conciliação"
+        <a href="#conciliacao_unprocessed" data-page="conciliacao_unprocessed" onclick="navigateTo('conciliacao_unprocessed'); return false;"
+           title="Conciliação (Não Processado)"
            class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
-          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-          <span class="nav-text">Conciliação</span>
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3M9 12h.01M9 16h.01"/></svg>
+          <span class="nav-text">Conciliação (Não Proc.)</span>
         </a>
 
-        <a href="#caixa" data-page="caixa" onclick="navigateTo('caixa'); return false;"
-           title="Validação Caixa"
+        <a href="#conciliacao_mov" data-page="conciliacao_mov" onclick="navigateTo('conciliacao_mov'); return false;"
+           title="Conciliação (Movimentação)"
            class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
-          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-          <span class="nav-text">Validação Caixa</span>
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+          <span class="nav-text">Conciliação (Mov.)</span>
         </a>
       </div>
 
@@ -148,12 +152,23 @@
     </nav>
     <div class="nav-bottom px-3 py-4 border-t border-white/10 space-y-1">
 
-      <a href="#setup" data-page="setup" onclick="navigateTo('setup'); return false;"
-         title="Conexao DB"
-         class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10M8 7v10M4 12h4M12 5v14M16 7v10M20 7v10M16 12h4"/></svg>
-        <span class="nav-text">Conexao DB</span>
-      </a>
+      <!-- Bearer Token — global. O token é process-global no servidor
+           (/api/beehus/token), então este botão único do sidebar substitui os
+           botões "Token" que existiam dentro de cada tela. -->
+      <button type="button" id="btn-token" onclick="Token.open()"
+         title="Configurar Bearer Token Beehus (compartilhado por todas as telas)"
+         class="nav-link w-full text-left flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+        <span class="nav-text flex-1">Token</span>
+        <span id="shell-token-badge" class="nav-text text-[10px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-100" title="Nenhum token carregado.">—</span>
+      </button>
+
+      <button type="button" id="btn-refresh-cache" onclick="Cache.open()"
+         title="Atualizar cache — escolha uma empresa ou todas"
+         class="nav-link w-full text-left flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+        <svg id="icon-refresh-cache" class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <span class="nav-text flex-1">Atualizar</span>
+      </button>
 
     </div>
   </aside>
@@ -163,12 +178,79 @@
        it cleanly via a transition. -->
   <div id="frame-container" style="position:fixed;top:0;right:0;bottom:0;left:14rem;overflow:hidden;"></div>
 
+  <!-- ── Modal: Bearer Token ──────────────────────────────────────────────────
+       O shell gerencia o token diretamente via /api/beehus/token (process-global
+       no servidor), então funciona em qualquer tela hospedada no iframe. -->
+  <div id="token-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4"
+       onclick="if(event.target===this) Token.close()">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md text-gray-800" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+        <h3 class="font-semibold text-sm text-gray-700">Bearer Token (diário)</h3>
+        <button type="button" onclick="Token.close()" class="text-gray-600 text-xs font-semibold px-3 py-1 rounded hover:bg-gray-100">Fechar</button>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <p class="text-xs text-gray-500">Cole o Bearer Token do dia. Ele é compartilhado por todas as telas (Painel, Conciliação, Funções, etc.).</p>
+        <input id="token-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..."
+               class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300" />
+        <div class="flex items-center gap-2">
+          <button type="button" onclick="Token.save()"  class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded">Salvar</button>
+          <button type="button" onclick="Token.clear()" class="text-gray-700 text-sm font-semibold px-4 py-2 rounded hover:bg-gray-100">Limpar</button>
+        </div>
+        <div id="token-status" class="text-xs text-gray-500"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal: Atualizar cache ─────────────────────────────────────────────────
+       Invalida o cache em processo (instantâneo): referência (securities /
+       mapeamentos / empresas) e/ou o cache NAV de uma empresa ou de todas. O
+       re-carregamento é preguiçoso na próxima leitura. As telas consolidadas
+       leem NAV ao vivo via /results, então só dependem do cache de referência. -->
+  <div id="cache-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4"
+       onclick="if(event.target===this) Cache.close()">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md text-gray-800" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+        <h3 class="font-semibold text-sm text-gray-700">Atualizar cache</h3>
+        <button type="button" onclick="Cache.close()" class="text-gray-600 text-xs font-semibold px-3 py-1 rounded hover:bg-gray-100">Fechar</button>
+      </div>
+      <div class="px-5 py-4 space-y-4">
+        <!-- Empresa específica -->
+        <div class="space-y-2">
+          <label class="text-xs font-semibold text-gray-600">Atualizar uma empresa</label>
+          <div class="flex items-center gap-2">
+            <select id="cache-company" class="flex-1 border border-gray-300 rounded px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+              <option value="">Carregando empresas…</option>
+            </select>
+            <button type="button" id="cache-btn-company" onclick="Cache.refreshCompany()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-3 py-2 rounded whitespace-nowrap">Atualizar</button>
+          </div>
+          <p class="text-[11px] text-gray-400">Invalida o cache (referência + NAV) dessa empresa; a próxima leitura recarrega via API.</p>
+        </div>
+
+        <div class="border-t border-gray-100"></div>
+
+        <!-- Tudo -->
+        <div class="space-y-2">
+          <button type="button" id="cache-btn-all" onclick="Cache.refreshAll()"
+                  class="w-full bg-gray-800 hover:bg-black text-white text-sm font-semibold px-4 py-2 rounded">
+            Atualizar todas as empresas
+          </button>
+          <p class="text-[11px] text-gray-400">Limpa o cache de referência (securities / mapeamentos / empresas) e o cache NAV de todas as empresas. Instantâneo.</p>
+          <button type="button" onclick="Cache.refreshReference()"
+                  class="text-[11px] text-blue-600 hover:underline">Atualizar só dados de referência</button>
+        </div>
+
+        <div id="cache-msg" class="hidden text-[11px] text-emerald-600 pt-1"></div>
+      </div>
+    </div>
+  </div>
+
   <script>
     /* ── Page registry ────────────────────────────────────────────────────────── */
     const PAGES = {
       controlpanel:             '/controlpanel',
-      conciliacao:              '/conciliacao',
-      caixa:                    '/caixa',
+      conciliacao_unprocessed:  '/conciliacao-unprocessed',
+      conciliacao_mov:          '/conciliacao-mov',
       // `stripping` é o novo entry-point oficial do sidebar (Position
       // Stripping + Fatiar carteira) — usa os mesmos partials que o chip
       // "Stripping" do Painel de Controle. `excecoes` segue mapeado para
@@ -180,7 +262,6 @@
       precificacao:             '/precificacao',
       beehus:                   '/beehus',
       settings:                 '/settings',
-      setup:                    '/setup',
     };
 
     const PATH_TO_KEY = {};
@@ -227,7 +308,6 @@
         const iframe = document.createElement('iframe');
         iframe.src = url;
         iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
-        iframe.addEventListener('load', () => syncDarkToFrame(iframe));
         document.getElementById('frame-container').appendChild(iframe);
         _iframes[key] = iframe;
       } else if (extraParams) {
@@ -242,6 +322,23 @@
       updateSidebar(key);
     }
 
+    // Navigate to a page at a specific deep view (e.g. the "Day-trade" sidebar
+    // entry → /excecoes#day-trade). Inline onclick handlers can't see the
+    // script-scoped `_lastDeep`/`_iframes`, so this function declaration (global)
+    // wraps the deep-seeding the `navigate` postMessage handler already does:
+    // pre-seed _lastDeep and, if the iframe already exists, reload it at the new
+    // deep so the destination view actually activates.
+    function navigateToDeep(key, deep) {
+      if (deep) {
+        _lastDeep[key] = deep;
+        if (_iframes[key]) {
+          const base = PAGES[key] + '?_frame=1';
+          _iframes[key].src = `${base}#${deep}`;
+        }
+      }
+      navigateTo(key);
+    }
+
     /* ── Sidebar highlight ────────────────────────────────────────────────────── */
     function updateSidebar(key) {
       document.querySelectorAll('.nav-link').forEach(el => {
@@ -249,21 +346,11 @@
       });
     }
 
-    /* ── Dark mode ────────────────────────────────────────────────────────────── */
-    /* The sidebar toggle button was removed. The persisted theme is still
-       restored pre-paint from localStorage (see <head>) and propagated into
-       each iframe on load via syncDarkToFrame(). */
-    function syncDarkToFrame(iframe, isDark) {
-      isDark = isDark ?? document.documentElement.classList.contains('dark');
-      try { iframe.contentDocument.documentElement.classList.toggle('dark', isDark); } catch (e) {}
-    }
-
-    /* ── Beehus Token / Log sidebar buttons ──────────────────────────────────
-       The visible buttons live in this shell; the modals live inside the
-       active iframe (templates/controlpanel.html or templates/beehus_console.html).
-       Clicks postMessage the iframe to open the right modal; the iframe
-       postMessages back with state changes so the badge text + count stay
-       in sync. */
+    /* ── Beehus Log sidebar button ───────────────────────────────────────────
+       O Log ainda vive no iframe ativo (controlpanel/beehus_console): o clique
+       faz postMessage para abrir o modal lá, e o iframe devolve a contagem. O
+       Token, por outro lado, é gerenciado direto pelo shell (ver bloco abaixo),
+       porque o estado é process-global no servidor. */
     function _activeFrame() {
       return _activePage && _iframes[_activePage] || null;
     }
@@ -271,25 +358,160 @@
       const f = _activeFrame();
       if (f && f.contentWindow) f.contentWindow.postMessage(msg, '*');
     }
-    function openBeehusToken() { _postToActive({type: 'beehus-shell-cmd', cmd: 'open-token'}); }
     function openBeehusLog()   { _postToActive({type: 'beehus-shell-cmd', cmd: 'open-log'}); }
+
+    /* ── Bearer Token (global) ───────────────────────────────────────────────────
+       Migrado para o sidebar: o token é process-global no servidor
+       (/api/beehus/token), então o shell o gerencia diretamente e o botão vale
+       para qualquer tela hospedada no iframe. As telas que tinham botão próprio
+       agora só o exibem quando abertas fora do shell. */
+    function _renderTokenBadge(loaded, ageMin, rejected) {
+      const badge = document.getElementById('shell-token-badge');
+      if (!badge) return;
+      if (rejected) {
+        // Loaded but the API rejected it (401) — red, like a missing token.
+        badge.textContent = '!';
+        badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-100';
+        badge.title = 'Token inválido: a API rejeitou (401).';
+      } else if (loaded) {
+        badge.textContent = `${ageMin || 0}m`;
+        badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-100';
+        badge.title = `Token ativo há ${ageMin || 0} minuto(s).`;
+      } else {
+        badge.textContent = '—';
+        badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-100';
+        badge.title = 'Nenhum token carregado.';
+      }
+    }
+
+    const Token = {
+      open() {
+        const m = document.getElementById('token-modal');
+        m.classList.remove('hidden');
+        m.classList.add('flex');
+        this.refresh();
+        setTimeout(() => document.getElementById('token-input')?.focus(), 0);
+      },
+      close() {
+        const m = document.getElementById('token-modal');
+        m.classList.add('hidden');
+        m.classList.remove('flex');
+      },
+      async refresh() {
+        let s = {};
+        try {
+          const r = await fetch('/api/beehus/token');
+          s = await r.json();
+        } catch (e) {}
+        const loaded   = !!s.loaded;
+        const rejected = !!s.rejected;
+        const mins     = Math.floor((s.age_seconds || 0) / 60);
+        _renderTokenBadge(loaded, mins, rejected);
+        const status = document.getElementById('token-status');
+        if (status) {
+          status.textContent = rejected
+            ? 'Token inválido — a API rejeitou (401). Cole o token de hoje novamente.'
+            : loaded
+              ? `Token ativo há ${mins} minuto(s).`
+              : 'Nenhum token carregado. As chamadas à API Beehus irão falhar até você salvar um.';
+        }
+        // Keep the global red banner in sync immediately (don't wait for its poll).
+        if (window.refreshBeehusTokenBanner) window.refreshBeehusTokenBanner();
+      },
+      async save() {
+        const input = document.getElementById('token-input');
+        const token = (input.value || '').trim();
+        if (!token) return;
+        try {
+          const r = await fetch('/api/beehus/token', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({token}),
+          });
+          if (!r.ok) {
+            const b = await r.json().catch(() => ({}));
+            alert('Erro ao salvar token: ' + (b.error || r.status));
+            await this.refresh();  // reflect the rejected state (red badge/banner)
+            return;
+          }
+        } catch (e) { alert('Falha ao salvar token: ' + e); return; }
+        input.value = '';
+        await this.refresh();
+        this.close();
+      },
+      async clear() {
+        try { await fetch('/api/beehus/token', {method: 'DELETE'}); } catch (e) {}
+        await this.refresh();
+      },
+    };
+
+    // Back-compat: alguns chamadores antigos abriam o token via postMessage.
+    function openBeehusToken() { Token.open(); }
+
+    /* ── Atualizar cache: modal com seleção de empresa ───────────────────────────
+       O botão abre um modal. As ações apenas INVALIDAM o cache em processo no
+       servidor (instantâneo) — o re-carregamento é preguiçoso na próxima leitura.
+       Após invalidar, recarrega o iframe ativo para refletir os dados frescos. */
+    const Cache = {
+      open() {
+        const m = document.getElementById('cache-modal');
+        m.classList.remove('hidden'); m.classList.add('flex');
+        this._msg('');
+        this.loadCompanies();
+      },
+      close() {
+        const m = document.getElementById('cache-modal');
+        m.classList.add('hidden'); m.classList.remove('flex');
+      },
+      _msg(text) {
+        const el = document.getElementById('cache-msg');
+        if (!el) return;
+        el.textContent = text || '';
+        el.classList.toggle('hidden', !text);
+      },
+      async loadCompanies() {
+        const sel = document.getElementById('cache-company');
+        try {
+          const j = await (await fetch('/api/cache/companies')).json();
+          const list = j.companies || [];
+          sel.innerHTML = list.length
+            ? list.map(c => `<option value="${c.id}">${c.name}</option>`).join('')
+            : '<option value="">(nenhuma empresa)</option>';
+        } catch (e) {
+          sel.innerHTML = '<option value="">(erro ao carregar)</option>';
+        }
+      },
+      async _post(payload, doneText) {
+        this._msg('Atualizando…');
+        try {
+          await fetch('/api/cache/refresh', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+          });
+        } catch (e) {}
+        this._msg(doneText || 'Cache atualizado.');
+        const f = _activeFrame(); if (f && f.src) f.src = f.src;
+      },
+      refreshAll()     { this._post({scope: 'all'}, 'Cache de todas as empresas atualizado.'); },
+      refreshCompany() {
+        const cid = document.getElementById('cache-company').value;
+        if (!cid) return;
+        this._post({scope: 'company', companyId: cid}, 'Cache da empresa atualizado.');
+      },
+      refreshReference() { this._post({scope: 'reference'}, 'Dados de referência atualizados.'); },
+    };
+
+    // Fecha os modais no Escape.
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { Cache.close(); Token.close(); }
+    });
 
     /* ── Cross-frame messaging ────────────────────────────────────────────────── */
     window.addEventListener('message', e => {
-      // Token state mirror from active iframe.
+      // Token state mirror from active iframe (ex.: tela atualiza o badge após
+      // um 401 ou no boot). O shell mantém a mesma renderização.
       if (e.data?.type === 'beehus-token-state') {
-        const badge = document.getElementById('shell-token-badge');
-        if (badge) {
-          if (e.data.loaded) {
-            badge.textContent = `${e.data.ageMin || 0}m`;
-            badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-100';
-            badge.title = `Token ativo há ${e.data.ageMin || 0} minuto(s).`;
-          } else {
-            badge.textContent = '—';
-            badge.className = 'nav-text text-[10px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-100';
-            badge.title = 'Nenhum token carregado.';
-          }
-        }
+        _renderTokenBadge(!!e.data.loaded, e.data.ageMin || 0, !!e.data.rejected);
         return;
       }
       // Log count mirror.
@@ -354,6 +576,13 @@
     /* ── Browser back / forward ───────────────────────────────────────────────── */
     window.addEventListener('hashchange', () => {
       const {key, deep} = _parseHash();
+      // `#token` is a virtual route: open the token modal over the current page
+      // and restore the hash to the active page (don't treat it as a page).
+      if (key === 'token') {
+        Token.open();
+        _writeHash(_activePage || 'controlpanel', _lastDeep[_activePage] || '');
+        return;
+      }
       const target = key || 'controlpanel';
       if (deep) _lastDeep[target] = deep;
       if (target !== _activePage && target in PAGES) navigateTo(target);
@@ -376,10 +605,20 @@
     // Load the first page from URL hash (defaults to controlpanel).
     {
       const _init = _parseHash();
-      const _initKey = _init.key || 'controlpanel';
-      if (_init.deep) _lastDeep[_initKey] = _init.deep;
-      navigateTo(_initKey);
+      // `#token` (e.g. from the global banner on a non-shell page): load the
+      // default page and pop the token modal over it.
+      if (_init.key === 'token') {
+        navigateTo('controlpanel');
+        Token.open();
+      } else {
+        const _initKey = _init.key || 'controlpanel';
+        if (_init.deep) _lastDeep[_initKey] = _init.deep;
+        navigateTo(_initKey);
+      }
     }
+
+    // Initial token state for the sidebar badge.
+    Token.refresh();
   </script>
 
 </body>

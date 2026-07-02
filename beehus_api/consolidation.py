@@ -5,6 +5,63 @@ Reusable from any blueprint — does not depend on Flask.
 from .client import request
 
 
+def get_nav_contribution(
+    *,
+    entity_id: str,
+    company_id: str,
+    scope: str,
+    initial_date: str = "2000-01-01",
+    final_date: str,
+    timeout: int = 60,
+) -> list:
+    """GET /beehus/consolidation/nav-contribution-calculation — READ da série.
+
+    Devolve a lista de pacotes NAV (um por `positionDate`) de uma carteira
+    (`scope='wallet'`, `entity_id`=walletId) ou agrupamento (`scope='grouping'`,
+    `entity_id`=groupingId). Mesmos campos do navPackage (nav, navPerShare,
+    amount, formerAmount, inAndOutFlows, returnNavPerShare, returnContribution,
+    published, trashed, positionDate). Não vem ordenado.
+    """
+    out = request(
+        "GET",
+        "/beehus/consolidation/nav-contribution-calculation",
+        params={"id": entity_id, "companyId": company_id, "type": scope,
+                "initialDate": initial_date, "finalDate": final_date},
+        timeout=timeout,
+    )
+    return out if isinstance(out, list) else []
+
+
+def get_nav_results(
+    *,
+    company_id: str,
+    position_date: str,
+    timeout: int = 60,
+) -> dict:
+    """GET /beehus/consolidation/nav-contribution-calculation/results — CONSOLIDADO
+    por empresa+data, numa única chamada.
+
+    Devolve um dict com (validado 1:1 contra navPackages):
+      - `walletsWithNav` (int), `totalGroupings` (int), `publishedGroupings` (int)
+      - `walletsWithNavDetailed`: [{walletId, walletName, groupingId, groupingName,
+            nav, navPerShare, amount, returnNavPerShare, returnContribution,
+            returnDifference (= |rnps-rc|), financialValueReturnDifference}]
+      - `groupingsDetailed`: idem por agrupamento + `published`, `publishedAt`.
+
+    Substitui o aquecimento por-entidade (N chamadas) para as telas consolidadas
+    (Painel, Conciliação grade, Console publicação): 1 chamada por empresa+data,
+    ao vivo (sem cache → sempre fresco). `returnDifference` e a divergência são
+    pré-calculadas no servidor.
+    """
+    out = request(
+        "GET",
+        "/beehus/consolidation/nav-contribution-calculation/results",
+        params={"positionDate": position_date, "companyId": company_id},
+        timeout=timeout,
+    )
+    return out if isinstance(out, dict) else {}
+
+
 def calculate_nav_wallets(
     *,
     company_id: str,

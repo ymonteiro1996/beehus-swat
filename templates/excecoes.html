@@ -1919,9 +1919,9 @@
 
   // ── Init ──────────────────────────────────────────────────────────────────
   loadList();
-  // Deep-link: `#day-trade` opens straight into the Ajustes day-trade view —
-  // when another screen links here with #day-trade, the operator lands
-  // directly on the intraday screen without an extra click.
+  // Deep-link: `#day-trade` opens straight into the Ajustes day-trade view.
+  // Used by the workflow helper on /painel so step 3 lands the operator on
+  // the intraday screen without an extra click.
   if (location.hash === "#day-trade") {
     showIntradayView();
   }

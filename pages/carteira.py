@@ -7,11 +7,13 @@ each wallet's block carries three summary rows:
 
     1. Contribuição total — sum of `securities[].totalContribution` from
        `processedPosition` for that (walletId, positionDate).
-    2. Provisões         — sum of `db.provisions.balance` whose
-       `[initialDate, liquidationDate)` interval covers each business day.
-    3. Caixa             — `cashAccounts.values[].value` totalled per
-       wallet+date via the same helper used by `/caixa` and
-       `/conciliacao`.
+    2. Provisões         — sum of the processed-position envelope's
+       `provisions[].balance` for each (walletId, positionDate). The envelope
+       already carries exactly the provisions active on that date
+       (`initialDate <= date < liquidationDate`), so no separate
+       `/beehus/provisions` read is needed.
+    3. Caixa             — `cashAccounts.values[].value` from the same
+       processed-position envelope, totalled per wallet+date.
 
 The wallet-resolution flow mirrors `_intraday_resolve_wallets` in
 `pages/excecoes.py` and the favourites-bar filter endpoints under
@@ -36,6 +38,7 @@ from bson.errors import InvalidId
 from flask import Blueprint, jsonify, render_template, request
 from openpyxl import Workbook
 
+import beehus_catalog
 from beehus_api import (
     BeehusAPIError,
     BeehusAuthError,
@@ -47,7 +50,7 @@ from db import (
     get_grouping_index,
     get_security_names,
     get_wallet_names,
-    sum_cash_by_dates,
+    resolve_wallet,
 )
 
 bp = Blueprint("carteira", __name__)
@@ -107,15 +110,11 @@ def _resolve_wallets(company_id, grouping_ids, wallet_ids):
     Defensive `companyId` re-check on the wallets `find` closes the
     cross-company leak a stale grouping cache could otherwise create."""
     if wallet_ids:
-        oids = _to_oids(wallet_ids)
-        if not oids:
+        wids = [beehus_catalog.id_str(w) for w in wallet_ids if w]
+        if not wids:
             return []
-        return [
-            str(w["_id"])
-            for w in db.wallets.find(
-                {"_id": {"$in": oids}, "companyId": company_id}, {"_id": 1}
-            )
-        ]
+        cmap = beehus_catalog.wallet_company_map(wids)
+        return [wid for wid in wids if cmap.get(wid) == company_id]
 
     if grouping_ids:
         wanted = set()
@@ -129,101 +128,47 @@ def _resolve_wallets(company_id, grouping_ids, wallet_ids):
             wanted.update(g.get("walletIds", []))
         if not wanted:
             return []
-        oids = _to_oids(wanted)
-        return [
-            str(w["_id"])
-            for w in db.wallets.find(
-                {"_id": {"$in": oids}, "companyId": company_id}, {"_id": 1}
-            )
-        ]
+        wids = [beehus_catalog.id_str(w) for w in wanted if w]
+        if not wids:
+            return []
+        cmap = beehus_catalog.wallet_company_map(wids)
+        return [wid for wid in wids if cmap.get(wid) == company_id]
 
-    return [
-        str(w["_id"])
-        for w in db.wallets.find({"companyId": company_id}, {"_id": 1})
-    ]
+    return list(beehus_catalog.wallets_for_company(company_id).keys())
 
 
-def _unprocessed_id_maps(company_id, wallet_ids, end_date):
-    """Return `{walletId: {securityId: unprocessedId}}` for each wallet's
-    most-recent `unprocessedSecurityPositions` snapshot ≤ `end_date`.
+def _unprocessed_id_maps(company_id, wallet_ids, dates):
+    """Return `{walletId: {securityId: unprocessedId}}` for each wallet, read
+    DIRECTLY from the wallet's raw `unprocessed-security-positions` snapshots:
+    every `securities[]` entry carries the authoritative pair
+    `preProcessingData.securityId → unprocessedId` for that wallet. We take, per
+    securityId, the `unprocessedId` from the most-recent snapshot ON OR BEFORE
+    the window's last date that holds the security (the current `Ativo` label).
+    ONE batched fetch covers every wallet (the B endpoint accepts a range +
+    plural walletIds).
 
-    Mirrors the lookup used by `pages/repetir_posicoes._unprocessed_id_map`
-    so the carteira edit flow shares the same `securityId → unprocessedId`
-    contract as the Repetir flow. One `find_one` per wallet (sorted desc
-    by `positionDate`) — fine for the modest wallet counts on this page,
-    and the alternative ($group with $max) would still need a second pass
-    to pull the snapshot's `securities[]`.
+    This supersedes the previous approach (the company `securityMappings`
+    `from→to` map disambiguated by the snapshot): that map COLLIDES — ~38% of
+    this company's securityIds carry several historical `from` labels — so any
+    held security whose sid had multiple candidates and wasn't pinned by the
+    snapshot rendered "—". Reading `preProcessingData.securityId` straight from
+    the snapshot is the exact pair the wallet actually held: a strict superset of
+    the old logic (never loses a security it resolved, picks the SAME uid,
+    resolves more). Validated against company 23313334000110 / a single wallet:
+    0 regressions, 0 uid disagreements, +7 securities resolved.
 
-    Resolution per security:
-      - If the mapping's `from` is in the wallet's latest snapshot, use it.
-        The snapshot disambiguates a `securityId` that carries more than
-        one historical `from` label (upstream renames, yield revisions,
-        dash-format drift — ~6% of mappings in practice).
-      - Otherwise, if the `securityId` has exactly one `from` across the
-        company mappings, fall back to it. This keeps a security editable
-        when it aged out of the latest snapshot — most commonly when it
-        matured on `end_date`: still present in that day's
-        `processedPosition`, but already dropped from
-        `unprocessedSecurityPositions` (the upstream stops emitting a
-        matured asset on its maturity date). Without this fallback the row
-        rendered "—" and the edit flow rejected it as "sem unprocessedId".
-      - A `securityId` with several `from` labels and none in the snapshot
-        stays unresolved (renders "—") — we never guess which `Ativo` to
-        ship upstream.
+    A security held in the processed position but present in NO raw snapshot of
+    the wallet (e.g. look-through components / event-created lines) has no
+    `unprocessedId` and stays unresolved (renders "—") — there is no raw upload
+    label to attach, by construction.
     """
-    if not company_id or not wallet_ids:
+    if not company_id or not wallet_ids or not dates:
         return {}
-
-    # securityMappings is per-company, so one find_one feeds every wallet
-    # in the batch.
-    mapping_doc = db.securityMappings.find_one(
-        {"companyId": company_id}, {"mappings": 1}
-    ) or {}
-
-    # Company-level `securityId -> [from-uid, ...]`. Most securityIds map to a
-    # single `from`; a handful carry several (the collisions the snapshot
-    # below disambiguates). Built once, reused for every wallet in the batch.
-    sid_to_uids = {}
-    for m in (mapping_doc.get("mappings") or []):
-        uid = m.get("from")
-        sid = m.get("to")
-        if uid and sid:
-            sid_to_uids.setdefault(str(sid), []).append(uid)
-
-    out = {}
-    for wid in wallet_ids:
-        query = {"walletId": wid}
-        if end_date:
-            query["positionDate"] = {"$lte": end_date}
-        doc = db.unprocessedSecurityPositions.find_one(
-            query,
-            {"securities.unprocessedId": 1},
-            sort=[("positionDate", -1)],
-        )
-        uids_in_doc = {
-            s.get("unprocessedId")
-            for s in ((doc or {}).get("securities") or [])
-            if s.get("unprocessedId")
-        }
-        sid_to_uid = {}
-        for sid, uids in sid_to_uids.items():
-            in_snap = [u for u in uids if u in uids_in_doc]
-            if in_snap:
-                # Snapshot pins the uid actually held by this wallet — the
-                # right disambiguator when a sid has multiple `from` labels.
-                sid_to_uid[sid] = in_snap[-1]
-            elif len(uids) == 1:
-                # Unambiguous mapping, but the security aged out of the
-                # latest snapshot (e.g. matured on `end_date`). Fall back to
-                # the lone canonical uid so the row stays editable.
-                sid_to_uid[sid] = uids[0]
-            # else: multiple candidates AND none in the snapshot → genuinely
-            # ambiguous; leave unresolved so we never ship a wrong `Ativo`.
-        out[wid] = sid_to_uid
-    return out
+    return beehus_catalog.unprocessed_sid_uid_map(
+        company_id, wallet_ids, max(dates))
 
 
-def _cash_unprocessed_ids(wallet_ids):
+def _cash_unprocessed_ids(wallet_ids, company_id=None, date=None):
     """Return `{walletId: unprocessedId}` from `cashAccounts` for each
     wallet — drives both the Caixa row label and the `Ativo` value of the
     cash line in the xlsx upload. Filters out `trashed=True` docs and
@@ -235,58 +180,7 @@ def _cash_unprocessed_ids(wallet_ids):
     """
     if not wallet_ids:
         return {}
-    out = {}
-    for doc in db.cashAccounts.find(
-        {"walletId": {"$in": list(wallet_ids)}, "trashed": {"$ne": True}},
-        {"walletId": 1, "unprocessedId": 1},
-    ):
-        wid = str(doc.get("walletId") or "")
-        uid = (doc.get("unprocessedId") or "").strip()
-        if wid and uid and wid not in out:
-            out[wid] = uid
-    return out
-
-
-def _provisions_by_wallet_date(company_id, wallet_ids, dates):
-    """Sum `db.provisions.balance` per `(walletId, date)` for every date
-    where the provision's `[initialDate, liquidationDate)` window covers
-    that date. One scan over the overlap window, grouped in Python — the
-    collection has no per-(wallet,date) index for the overlap query."""
-    out = {}
-    if not wallet_ids or not dates:
-        return out
-    ini = dates[0]
-    fin = dates[-1]
-    cursor = db.provisions.find(
-        {
-            "companyId":       company_id,
-            "walletId":        {"$in": wallet_ids},
-            "initialDate":     {"$lte": fin},
-            "liquidationDate": {"$gte": ini},
-            "trashed":         {"$ne": True},
-        },
-        {"walletId": 1, "balance": 1,
-         "initialDate": 1, "liquidationDate": 1},
-    )
-    for d in cursor:
-        wid = str(d.get("walletId") or "")
-        if not wid:
-            continue
-        bal = d.get("balance")
-        if bal is None:
-            continue
-        try:
-            bal = float(bal)
-        except (TypeError, ValueError):
-            continue
-        prov_ini = str(d.get("initialDate") or "")[:10]
-        prov_liq = str(d.get("liquidationDate") or "")[:10]
-        if not (prov_ini and prov_liq):
-            continue
-        for dt in dates:
-            if prov_ini <= dt < prov_liq:
-                out[(wid, dt)] = out.get((wid, dt), 0.0) + bal
-    return out
+    return beehus_catalog.cash_unprocessed_ids(wallet_ids, company_id, date)
 
 
 @bp.route("/carteira")
@@ -336,9 +230,8 @@ def list_wallets():
         return jsonify([])
     wallet_names = get_wallet_names()
     items = []
-    for w in db.wallets.find({"companyId": company_id}, {"name": 1}):
-        wid = str(w["_id"])
-        items.append({"id": wid, "name": w.get("name") or wallet_names.get(wid, wid)})
+    for wid, nm in beehus_catalog.wallets_for_company(company_id).items():
+        items.append({"id": wid, "name": nm or wallet_names.get(wid, wid)})
     items.sort(key=lambda x: (x["name"] or "").lower())
     return jsonify(items)
 
@@ -346,10 +239,12 @@ def list_wallets():
 @bp.route("/api/carteira/data", methods=["POST"])
 def get_data():
     """Build the per-wallet position matrix. See module docstring for the
-    response shape. Performs three reads:
-      - processedPosition for {walletId ∈ targets, positionDate ∈ range}
-      - provisions overlapping the range, summed per (wallet, date)
-      - cashAccounts via `sum_cash_by_dates` (one scan per wallet)
+    response shape. The securities rows come from the RAW
+    `unprocessed-security-positions` snapshot of each date (one batched read) so
+    every line carries its own editable `unprocessedId`. The processed-position
+    envelope (`carteira_position_bundle`) is still read per date for cash
+    (balance + unprocessedId), the active provisions, and to enrich each line's
+    `totalContribution` (+ the wallet's contribution total per date).
     """
     body = request.get_json(silent=True) or {}
     company_id = (body.get("companyId") or "").strip()
@@ -380,98 +275,131 @@ def get_data():
     wallet_names = get_wallet_names()
     sec_names    = get_security_names()
 
-    # ── processedPosition (per-security qty / pu / contribution) ────────────
-    # Keyed by (walletId, positionDate). `pos_map` holds the raw securities
-    # array; per-date derived fields are computed below.
-    pos_map = {}
-    for doc in db.processedPosition.find(
-        {"walletId": {"$in": wallet_ids}, "positionDate": {"$in": dates}},
-        {"walletId": 1, "positionDate": 1, "securities": 1},
-    ):
-        wid = str(doc.get("walletId") or "")
-        d   = str(doc.get("positionDate") or "")[:10]
-        if wid and d:
-            pos_map[(wid, d)] = doc.get("securities") or []
+    # ── processedPosition envelope (securities + caixa + provisões) ─────────
+    # UMA chamada processed-position por data devolve, por carteira, o envelope
+    # {position, provisions, cashAccounts}. `carteira_position_bundle` deriva
+    # tudo dele de uma vez — eliminando os 3 fetches redundantes ao MESMO
+    # endpoint (securities, caixa-saldo, caixa-unprocessedId) e a chamada
+    # separada de /beehus/provisions (com piso 2000) que existiam antes.
+    #   pos_map[(wid,date)]  = securities array (campos derivados abaixo)
+    #   cash_map[(wid,date)] = saldo de caixa na data (ou None)
+    #   cash_uid_map[wid]    = cashAccounts.unprocessedId (rótulo/Ativo da linha Caixa)
+    #   prov_map[(wid,date)] = soma das provisões ATIVAS na data (do envelope)
+    pos_map, cash_map, cash_uid_map, prov_map = (
+        beehus_catalog.carteira_position_bundle(company_id, wallet_ids, dates))
 
-    prov_map = _provisions_by_wallet_date(company_id, wallet_ids, dates)
-    cash_map = {}
-    for wid in wallet_ids:
-        # sum_cash_by_dates returns {date: total_or_None}
-        for dt, val in sum_cash_by_dates(wid, dates).items():
-            cash_map[(wid, dt)] = val
-
-    # `securityId → unprocessedId` per wallet, anchored on the wallet's
-    # most-recent `unprocessedSecurityPositions` snapshot ≤ `final`. Drives
-    # the new "unprocessedSecurityId" column and the edit/apply flow.
-    uid_maps = _unprocessed_id_maps(company_id, wallet_ids, final)
-
-    # `walletId → cashAccount.unprocessedId` drives the Caixa row label and
-    # the Ativo column of the cash line in the apply-flow xlsx.
-    cash_uid_map = _cash_unprocessed_ids(wallet_ids)
+    # Securities come from the RAW `unprocessed-security-positions` snapshot of
+    # each date: every line carries its own `unprocessedId` ("Ativo" label) and is
+    # editable/re-uploadable. We deliberately do NOT list the processed position
+    # here — it adds look-through / explosion components created during processing
+    # that have NO raw upload label, which previously rendered with a blank
+    # `unprocessedId` and couldn't be edited. `pos_map` (processed) is kept only to
+    # ENRICH each line's `totalContribution` and to compute the wallet's accurate
+    # contribution total per date (the opt-in contribution column + footer).
+    raw_docs = beehus_catalog.unprocessed_docs_map(company_id, wallet_ids, dates)
 
     # ── Per-wallet assembly ─────────────────────────────────────────────────
     wallets_out = []
     for wid in wallet_ids:
-        per_sec = {}  # sid → {date → {quantity, pu, balance, totalContribution}}
+        # Processed totalContribution: per-(date, securityId) for enrichment, plus
+        # the wallet's full per-date total (footer "Contribuição total") — summed
+        # over the WHOLE processed position so the total stays accurate even though
+        # the rows shown are the raw lines.
+        proc_tc = {}
         contribution_by_date = {dt: 0.0 for dt in dates}
         has_contribution     = {dt: False for dt in dates}
         for dt in dates:
+            tcs = {}
             for sec in pos_map.get((wid, dt), []):
-                sid = str(sec.get("securityId") or "")
-                if not sid:
-                    continue
-                pu  = sec.get("pu")
-                qty = sec.get("quantity")
-                bal = sec.get("balance")
-                if bal is None and pu is not None and qty is not None:
-                    try:
-                        bal = round(float(pu) * float(qty), 6)
-                    except (TypeError, ValueError):
-                        bal = None
                 tc = sec.get("totalContribution")
-                cell = {
-                    "quantity":          qty,
-                    "pu":                pu,
-                    "balance":           bal,
-                    "totalContribution": tc,
-                }
-                per_sec.setdefault(sid, {})[dt] = cell
+                psid = beehus_catalog.id_str(sec.get("securityId")) if sec.get("securityId") is not None else ""
+                if psid and tc is not None:
+                    tcs[psid] = tc
                 if tc is not None:
                     try:
                         contribution_by_date[dt] += float(tc)
                         has_contribution[dt] = True
                     except (TypeError, ValueError):
                         pass
+            proc_tc[dt] = tcs
 
-        # Securities list — sorted by display name, with a `quantityChanged`
-        # flag that the front-end uses to colour the row when the quantity
-        # of a security varies across the selected range (a heads-up that
-        # the operator picked a window covering an actual movement).
-        wallet_uid_map = uid_maps.get(wid) or {}
+        # One display row per `unprocessedId` (the raw upload line). securityId /
+        # name come from `preProcessingData`; a raw line not yet mapped to a
+        # securityId still shows (keyed by its unprocessedId) using its beehusName.
+        per_uid = {}
+        raw_dates_with_secs = set()   # datas cujo snapshot BRUTO trouxe ≥1 ativo utilizável
+        for dt in dates:
+            doc = raw_docs.get((wid, dt))
+            if not doc:
+                continue
+            for s in (doc.get("securities") or []):
+                if not isinstance(s, dict):
+                    continue
+                uid = (s.get("unprocessedId") or "").strip()
+                if not uid:
+                    continue
+                ppd = s.get("preProcessingData") or {}
+                sid = beehus_catalog.id_str(ppd.get("securityId")) if ppd.get("securityId") is not None else ""
+                pu  = s.get("pu")
+                qty = s.get("quantity")
+                bal = s.get("balance")
+                if bal is None and pu is not None and qty is not None:
+                    try:
+                        bal = round(float(pu) * float(qty), 6)
+                    except (TypeError, ValueError):
+                        bal = None
+                tc = proc_tc.get(dt, {}).get(sid) if sid else None
+                entry = per_uid.setdefault(uid, {
+                    "securityId":    sid,
+                    "securityName":  (sec_names.get(sid) if sid else "") or (ppd.get("beehusName") or "") or sid or uid,
+                    "unprocessedId": uid,
+                    "byDate":        {},
+                })
+                # Backfill sid/name once a snapshot reveals the mapping for a line
+                # that first appeared unmapped.
+                if not entry["securityId"] and sid:
+                    entry["securityId"]   = sid
+                    entry["securityName"] = sec_names.get(sid) or (ppd.get("beehusName") or "") or sid
+                entry["byDate"][dt] = {
+                    "quantity":          qty,
+                    "pu":                pu,
+                    "balance":           bal,
+                    "totalContribution": tc,
+                }
+                raw_dates_with_secs.add(dt)
+
+        # `quantityChanged` flags rows whose quantity varies across the selected
+        # range (the front-end colours them — a heads-up that the window covers an
+        # actual movement).
         securities_out = []
-        for sid, by_date in per_sec.items():
+        for uid, entry in per_uid.items():
             quantities = []
             for dt in dates:
-                q = (by_date.get(dt) or {}).get("quantity")
+                q = (entry["byDate"].get(dt) or {}).get("quantity")
                 if q is not None:
                     try:
                         quantities.append(float(q))
                     except (TypeError, ValueError):
                         pass
-            quantity_changed = (
+            entry["quantityChanged"] = (
                 len({round(q, 6) for q in quantities}) > 1
                 if len(quantities) >= 2 else False
             )
-            securities_out.append({
-                "securityId":      sid,
-                "securityName":    sec_names.get(sid, "") or sid,
-                "unprocessedId":   wallet_uid_map.get(sid, "") or "",
-                "byDate":          by_date,
-                "quantityChanged": quantity_changed,
-            })
+            securities_out.append(entry)
         securities_out.sort(
             key=lambda s: ((s["securityName"] or "").lower(), s["securityId"])
         )
+
+        # Erro no arquivo BRUTO por data: a carteira TEM posição PROCESSADA na data
+        # (logo, deveria ter posição), mas o snapshot `unprocessed-security-positions`
+        # daquela data veio SEM ativos (vazio) ou está AUSENTE. Não fazemos fallback —
+        # apenas sinalizamos o erro do arquivo e não exibimos ativos (decisão de produto:
+        # "informar erro no arquivo unprocessed e não fazer nada"). Caso real: carteira
+        # MML PF BTG BRL em 2026-05-29 (bruto 0 ativos, processada com 12).
+        unproc_error_by_date = {
+            dt: (bool(pos_map.get((wid, dt))) and dt not in raw_dates_with_secs)
+            for dt in dates
+        }
 
         # Skip wallets that have nothing across the entire range — keeps
         # the result focused on wallets the operator can actually act on.
@@ -480,6 +408,7 @@ def get_data():
             or any(has_contribution.values())
             or any(prov_map.get((wid, dt)) for dt in dates)
             or any(cash_map.get((wid, dt)) is not None for dt in dates)
+            or any(unproc_error_by_date.values())
         )
         if not any_data:
             continue
@@ -495,6 +424,7 @@ def get_data():
             "provisionsByDate":   {dt: prov_map.get((wid, dt), 0.0) for dt in dates},
             "cashByDate":         {dt: cash_map.get((wid, dt)) for dt in dates},
             "cashUnprocessedId":  cash_uid_map.get(wid, ""),
+            "unprocessedErrorByDate": unproc_error_by_date,
         })
 
     wallets_out.sort(key=lambda w: (w["walletName"] or "").lower())
@@ -510,6 +440,11 @@ def get_data():
         for dt, v in w["totalContributionByDate"].items():
             if v is not None:
                 non_empty.add(dt)
+        # Uma data com erro de arquivo bruto NÃO tem ativos nem, necessariamente,
+        # contribuição — mas precisa sobreviver ao corte de colunas p/ o aviso aparecer.
+        for dt, err in w["unprocessedErrorByDate"].items():
+            if err:
+                non_empty.add(dt)
     dates_kept = [d for d in dates if d in non_empty]
 
     if len(dates_kept) != len(dates):
@@ -523,6 +458,9 @@ def get_data():
             }
             w["cashByDate"] = {
                 d: w["cashByDate"].get(d) for d in dates_kept
+            }
+            w["unprocessedErrorByDate"] = {
+                d: w["unprocessedErrorByDate"].get(d, False) for d in dates_kept
             }
             for sec in w["securities"]:
                 sec["byDate"] = {
@@ -563,9 +501,7 @@ def lookup_mapping():
     if not company_visible(company_id):
         return jsonify({"error": "forbidden"}), 403
 
-    mapping_doc = db.securityMappings.find_one(
-        {"companyId": company_id}, {"mappings": 1}
-    ) or {}
+    mapping_doc = beehus_catalog.security_mappings_doc(company_id) or {}
 
     matched_uid = ""
     for m in (mapping_doc.get("mappings") or []):
@@ -576,7 +512,7 @@ def lookup_mapping():
     beehus_name = ""
     s_oid = _to_oid(security_id)
     if s_oid is not None:
-        s = db.securities.find_one({"_id": s_oid}, {"beehusName": 1})
+        s = beehus_catalog.security_doc(s_oid)
         if s:
             beehus_name = s.get("beehusName") or ""
 
@@ -716,8 +652,9 @@ def apply_edits():
     w_oid = _to_oid(wallet_id)
     if w_oid is None:
         return jsonify({"error": "invalid walletId"}), 400
-    w_doc = db.wallets.find_one(
-        {"_id": w_oid}, {"companyId": 1, "currencyId": 1, "name": 1}
+    w_doc = resolve_wallet(
+        wallet_id, {"companyId": 1, "currencyId": 1, "name": 1},
+        company_id=company_id,
     )
     if not w_doc:
         return jsonify({"error": "wallet not found"}), 404

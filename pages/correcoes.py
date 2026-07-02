@@ -48,7 +48,9 @@ import re
 import uuid
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request, send_file
+import beehus_catalog
+
+from flask import Blueprint, jsonify, render_template, request, send_file
 from openpyxl import Workbook
 
 from db import (db, get_biz_dates, get_company_filter, company_visible, get_company_names,
@@ -592,10 +594,18 @@ def _coerce_balance(v):
         return 0
 
 
-# NOTE: The dedicated /correcoes UI page (route `index` + templates/correcoes.html)
-# was removed. This blueprint now serves only the /api/correcoes/* endpoints and
-# the public helper functions that pages/conciliacao.py and the Painel/Conciliação
-# "Aceitar" flows depend on. The correction store on disk is unchanged.
+# ── Page route ────────────────────────────────────────────────────────────────
+
+@bp.route("/correcoes")
+def index():
+    companies = sorted(
+        [{"id": cid, "name": name or cid} for cid, name in get_company_names().items()],
+        key=lambda c: c["name"],
+    )
+    cf = get_company_filter()
+    if cf:
+        companies = [c for c in companies if c["id"] in cf]
+    return render_template("correcoes.html", companies=companies)
 
 
 # ── Date pills ────────────────────────────────────────────────────────────────
@@ -706,19 +716,19 @@ def list_items():
     wallet_names = {}
     wallet_currencies = {}
     wallets_by_company = {}
-    for w in db.wallets.find(
-        {"companyId": {"$in": company_ids}},
-        {"name": 1, "companyId": 1, "currency": 1, "currencyId": 1},
-    ):
-        wid = str(w["_id"])
-        wname = w.get("name", wid)
-        wcid = str(w.get("companyId", ""))
-        wallet_names[wid] = wname
-        # `currency` is the field name actually stored on wallet documents
-        # (e.g. "USD", "BRL"). `currencyId` is read as a defensive fallback
-        # only — see the note on `_wallet_currency` above.
-        wallet_currencies[wid] = str(w.get("currency") or w.get("currencyId") or "")
-        wallets_by_company.setdefault(wcid, {})[wid] = wname
+    # Sourced from the cached carteiras index (partner_wallets) instead of an
+    # inline Mongo read. The index shape exposes the authoritative `currency`
+    # string (e.g. "USD", "BRL"); the old `currencyId` was only a defensive
+    # fallback — see the note on `_wallet_currency` above — and is not part of
+    # the API shape, so dropping it preserves the value actually consumed here.
+    for cid in company_ids:
+        for w in beehus_catalog.wallets_in_company(cid):
+            wid = beehus_catalog.id_str(w.get("_id"))
+            wname = w.get("name", wid)
+            wcid = beehus_catalog.id_str(w.get("companyId")) or ""
+            wallet_names[wid] = wname
+            wallet_currencies[wid] = str(w.get("currency") or "")
+            wallets_by_company.setdefault(wcid, {})[wid] = wname
 
     transactions, provisions, deletions, execution_prices = [], [], [], []
     for cid in company_ids:

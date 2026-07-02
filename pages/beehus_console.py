@@ -31,19 +31,12 @@ Layout (one logical operation per group):
     /api/beehus/filters/groupings-by-publish-state
                                     GET ?companyId=&positionDate=&published=true|false
     /api/beehus/filters/companies   GET
-    /api/beehus/flow/latest-position-date
-                                    GET ?companyId=  — last positionDate in
-                                                       publishedPositionSecurities
     /api/beehus/filters/groupings   GET ?companyId=
     /api/beehus/filters/wallets     GET ?companyId=&groupingId=
     /api/beehus/filters/wallets-with-position
                                     GET ?companyId=&positionDate=
     /api/beehus/filters/grouping-return-deltas
                                     GET ?companyId=&positionDate=&published=
-    /api/beehus/filters/grouping-id-classify
-                                    POST {companyId, positionDate, groupingIds[]}
-                                       — per-id reason classification (used by
-                                         the Publicar Agrupamentos upload diag)
     /api/beehus/filters/entities    GET ?companyId=
     /api/beehus/filters/securities  GET
 """
@@ -55,7 +48,8 @@ from datetime import datetime
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from flask import Blueprint, render_template, jsonify, request
+import beehus_catalog
+from flask import Blueprint, render_template, jsonify, make_response, request
 
 from beehus_api import (
     BeehusAPIError,
@@ -76,10 +70,12 @@ from beehus_api import (
     set_token,
     clear_token,
     token_status,
+    verify_token,
 )
 from db import (
     atomic_write_json,
     biz_days_between,
+    business_days_before,
     db,
     company_visible,
     get_company_filter,
@@ -134,6 +130,21 @@ def token_set():
         set_token(data.get("token", ""))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    # Validate the pasted token against the API immediately (cheap authenticated
+    # GET) so an invalid/expired token is rejected here instead of failing
+    # silently on every later page read. verify_token() also sets the in-process
+    # `rejected` flag (via the 401 path), which the global banner picks up.
+    try:
+        verify_token()
+    except BeehusAuthError as e:
+        return jsonify({
+            "error": "Token rejeitado pela API (401/403). Verifique se copiou o token de hoje por completo.",
+            "upstream_status": e.status,
+        }), 401
+    except BeehusAPIError as e:
+        # Token might be fine but the API is unreachable/erroring — don't block
+        # the save on that; surface a soft warning and let the banner reflect state.
+        return jsonify({**token_status(), "warning": f"Não foi possível validar agora: {e}"})
     return jsonify(token_status())
 
 
@@ -145,46 +156,48 @@ def token_clear():
 
 # ── Filters (local Mongo) ─────────────────────────────────────────────────────
 
+def _companies_empty_reason():
+    """Por que `/filters/companies` veio vazio.
+
+    Sonda `list_companies()` direto (sem cache) — só no caminho vazio, então não
+    pesa no fluxo normal — para distinguir token ausente/expirado
+    (`BeehusAuthError`, levantado tanto sem token quanto em 401/403) de falha de
+    rede (`BeehusAPIError`) ou de uma resposta legitimamente vazia."""
+    from beehus_api import list_companies
+    try:
+        list_companies()
+    except BeehusAuthError:
+        return "Token expirado ou ausente. Cole o token atual na página /beehus."
+    except BeehusAPIError:
+        return "Falha ao consultar a API de empresas. Tente novamente em instantes."
+    except Exception:  # noqa: BLE001
+        return "Não foi possível carregar as empresas."
+    return ""  # API respondeu OK, porém sem empresas
+
+
 @bp.route("/api/beehus/filters/companies")
 def filter_companies():
     cf = get_company_filter()
-    items = []
-    for cid, name in get_company_names().items():
-        if cf and cid not in cf:
-            continue
-        items.append({"id": cid, "name": name or cid})
+    names = get_company_names()
+    items = [{"id": cid, "name": name or cid}
+             for cid, name in names.items()
+             if not cf or cid in cf]
     items.sort(key=lambda x: x["name"].lower())
-    return jsonify(items)
-
-
-@bp.route("/api/beehus/flow/latest-position-date")
-def flow_latest_position_date():
-    """Most recent positionDate with a publishedPositionSecurities row for the
-    given company. Used by the Fluxo view to auto-fill the date input when an
-    operator picks a company — landing on the last published day is almost
-    always what they want and saves a manual lookup.
-
-    Returns {"positionDate": "YYYY-MM-DD"} or {"positionDate": null} when the
-    company has no published positions yet. companyId is required and must be
-    visible to the caller (multi-tenant gating).
-    """
-    company_id = request.args.get("companyId", "").strip()
-    if not company_id:
-        return jsonify({"positionDate": None})
-    if not company_visible(company_id):
-        return jsonify({"positionDate": None}), 403
-    doc = db.publishedPositionSecurities.find_one(
-        {"companyId": company_id},
-        sort=[("positionDate", -1)],
-        projection={"positionDate": 1, "_id": 0},
+    if items:
+        return jsonify(items)
+    # Vazio: SEMPRE devolve o array (mantém compat com todos os consumidores que
+    # fazem `r.body.map(...)` — ferramentas do beehus_console). O MOTIVO vai num
+    # header, lido apenas pelo dropdown que quer mostrá-lo (Painel → Day-trade).
+    reason = (
+        # API trouxe empresas, mas o filtro de visibilidade (Configurações)
+        # excluiu todas — não é problema de token.
+        "Nenhuma empresa no filtro de visibilidade. Ajuste em Configurações."
+        if names else _companies_empty_reason()
     )
-    pd = doc.get("positionDate") if doc else None
-    if pd is None:
-        return jsonify({"positionDate": None})
-    # positionDate is stored as a python datetime — emit YYYY-MM-DD so the
-    # <input type="date"> can consume it directly.
-    iso = pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10]
-    return jsonify({"positionDate": iso})
+    resp = make_response(jsonify(items))
+    if reason:
+        resp.headers["X-Companies-Empty-Reason"] = reason
+    return resp
 
 
 @bp.route("/api/beehus/filters/groupings")
@@ -227,20 +240,18 @@ def filter_wallets():
     gindex = get_grouping_index().get(grouping_id) if grouping_id else None
 
     def _build():
-        query = {"companyId": company_id}
+        allowed_ids = None
         if grouping_id:
             if not gindex:
                 return []
-            try:
-                wallet_oids = [ObjectId(w) for w in gindex["walletIds"]]
-            except InvalidId:
-                return []
-            query["_id"] = {"$in": wallet_oids}
+            allowed_ids = {str(w) for w in gindex["walletIds"]}
 
         items = []
-        for w in db.wallets.find(query, {"_id": 1, "entityId": 1}):
+        for w in beehus_catalog.wallets_in_company(company_id):
             wid = str(w["_id"])
-            eid = str(w.get("entityId") or "") if w.get("entityId") else ""
+            if allowed_ids is not None and wid not in allowed_ids:
+                continue
+            eid = beehus_catalog.id_str(w["entityId"]) if w.get("entityId") else ""
             items.append({
                 "id":         wid,
                 "name":       wallet_names.get(wid, "") or wid,
@@ -274,20 +285,19 @@ def filter_groupings_by_publish_state():
     if not company_visible(company_id) or not position_date:
         return jsonify([])
 
-    eligible = {
-        str(gid)
-        for gid in db.navPackages.distinct(
-            "groupingId",
-            {
-                "companyId":    company_id,
-                "positionDate": position_date,
-                "published":    published,
-                "groupingId":   {"$ne": None},
-                "trashed":      {"$ne": True},
-            },
-        )
-        if gid
-    }
+    # navPackages de nível agrupamento via cache consolidado da empresa. Em
+    # produção há 1 doc por agrupamento/data (validado), então `distinct` vira
+    # um set sobre os docs filtrados pelo estado `published`. O cache já é
+    # não-trashed. `published` casa estritamente (campo ausente/null não casa
+    # nem true nem false, igual ao Mongo).
+    eligible = set()
+    for d in beehus_catalog.nav_grouping_docs(company_id, position_date):
+        pub = d.get("published")
+        if pub is None or bool(pub) != published:
+            continue
+        gid = beehus_catalog.id_str(d.get("groupingId"))
+        if gid:
+            eligible.add(gid)
     if not eligible:
         return jsonify([])
 
@@ -339,20 +349,16 @@ def filter_grouping_return_deltas():
     if not company_visible(company_id) or not position_date:
         return jsonify([])
 
-    mongo_filter: dict = {
-        "companyId":    company_id,
-        "positionDate": position_date,
-        "trashed":      {"$ne": True},
-        "groupingId":   {"$ne": None},
-    }
-    if not fetch_all:
-        mongo_filter["published"] = published
-
-    projection = {"groupingId": 1, "returnNavPerShare": 1, "returnContribution": 1}
-    if fetch_all:
-        projection["published"] = 1
-
-    cursor = db.navPackages.find(mongo_filter, projection)
+    # navPackages de nível agrupamento via cache consolidado da empresa (1 doc
+    # por agrupamento/data em produção, validado). Não-trashed já garantido;
+    # quando não é `all`, filtra pelo estado `published` (estrito como o Mongo).
+    cursor = []
+    for d in beehus_catalog.nav_grouping_docs(company_id, position_date):
+        if not fetch_all:
+            pub = d.get("published")
+            if pub is None or bool(pub) != published:
+                continue
+        cursor.append(d)
 
     # For each grouping, keep the wallet doc with the largest |Δ|. A grouping
     # with at least one numeric pair wins over one with only None pairs (so
@@ -401,264 +407,32 @@ def filter_grouping_return_deltas():
     return jsonify(items)
 
 
-@bp.route("/api/beehus/filters/grouping-id-classify", methods=["POST"])
-def filter_grouping_id_classify():
-    """Tell the user **why** each grouping id in the body is excluded from
-    the publish-eligibility list for `(companyId, positionDate)`.
-
-    Body: ``{companyId, positionDate, groupingIds: [str]}``
-
-    Each id is tagged with the most-specific reason in this priority:
-      - ``not_found``         — no grouping doc in ``db.groupings`` at all
-      - ``trashed``           — grouping doc has ``trashed=True``
-      - ``wrong_company``     — grouping's ``companyId`` ≠ requested one
-      - ``not_calculated``    — grouping ok, but no navPackage doc for
-                                ``(companyId, positionDate, groupingId)``
-      - ``navpackage_trashed``— only trashed navPackage docs exist
-      - ``already_published`` — at least one published navPackage and no
-                                unpublished/untrashed one
-      - ``eligible``          — would have been on the list (diagnostic
-                                anomaly — caller treated it as ignored)
-
-    Returns ``{"summary": {<reason>: count, …}, "perId": [{groupingId,
-    reason, groupingName?}, …]}``.
-    """
-    data = request.get_json(silent=True) or {}
-    company_id    = (data.get("companyId") or "").strip()
-    position_date = (data.get("positionDate") or "").strip()
-    grouping_ids  = data.get("groupingIds") or []
-
-    if not company_id or not position_date:
-        return jsonify({"error": "companyId and positionDate are required"}), 400
-    if not company_visible(company_id):
-        return jsonify({"error": "company is not visible to this user"}), 403
-    if not isinstance(grouping_ids, list) or not all(isinstance(g, str) for g in grouping_ids):
-        return jsonify({"error": "groupingIds must be a list of strings"}), 400
-    if not grouping_ids:
-        return jsonify({"summary": {}, "perId": []})
-
-    # Cap input to keep the IN-clause sane. 5000 is well above every
-    # realistic upload size and protects the server from a runaway query.
-    if len(grouping_ids) > 5000:
-        return jsonify({"error": "too many groupingIds (max 5000)"}), 400
-
-    gindex = get_grouping_index()
-
-    # Aggregate navPackages per groupingId — upstream stores one doc per
-    # wallet, so each grouping can have many. We collapse those rows into
-    # the four flags the classifier needs.
-    #
-    # `groupingId` on `db.navPackages` is stored as ObjectId in production,
-    # so a `$in: [hex-strings]` filter would silently match nothing. We
-    # build the IN-clause with both representations so the query works
-    # regardless of how the field is stored.
-    in_clause: list = list(grouping_ids)
-    for gid in grouping_ids:
-        try:
-            in_clause.append(ObjectId(gid))
-        except (InvalidId, TypeError):
-            pass
-
-    np_state: dict[str, dict] = {}
-    for d in db.navPackages.find(
-        {
-            "companyId":    company_id,
-            "positionDate": position_date,
-            "groupingId":   {"$in": in_clause},
-        },
-        {"groupingId": 1, "published": 1, "trashed": 1},
-    ):
-        gid = str(d.get("groupingId") or "")
-        if not gid:
-            continue
-        s = np_state.setdefault(gid, {
-            "any_doc":          False,
-            "any_non_trashed":  False,
-            "any_eligible":     False,
-            "any_published":    False,
-        })
-        s["any_doc"] = True
-        if not d.get("trashed"):
-            s["any_non_trashed"] = True
-            if d.get("published"):
-                s["any_published"] = True
-            else:
-                s["any_eligible"] = True
-
-    summary: dict[str, int] = {}
-    per_id  = []
-    not_calc_gids: list[str] = []
-    for gid in grouping_ids:
-        g = gindex.get(gid)
-        if not g:
-            reason = "not_found"
-        elif g.get("trashed"):
-            reason = "trashed"
-        elif g.get("companyId") and g["companyId"] != company_id:
-            reason = "wrong_company"
-        else:
-            s = np_state.get(gid)
-            if s is None or not s["any_doc"]:
-                reason = "not_calculated"
-                not_calc_gids.append(gid)
-            elif s["any_eligible"]:
-                reason = "eligible"
-            elif s["any_published"]:
-                reason = "already_published"
-            else:
-                reason = "navpackage_trashed"
-        summary[reason] = summary.get(reason, 0) + 1
-        entry = {"groupingId": gid, "reason": reason}
-        if g and g.get("name"):
-            entry["groupingName"] = g["name"]
-        per_id.append(entry)
-
-    # Deep probe — for every id that came up "not_calculated", look at
-    # `db.navPackages` again with progressively weaker filters so we can
-    # tell **why** the doc was missed: bad companyId? bad positionDate?
-    # or genuinely no doc at all? Findings are folded back into per_id and
-    # summarized so the UI surfaces the real story.
-    probe_summary: dict[str, int] = {}
-    if not_calc_gids:
-        # Build a $in clause that tolerates string-or-ObjectId storage.
-        probe_in: list = list(not_calc_gids)
-        for gid in not_calc_gids:
-            try:
-                probe_in.append(ObjectId(gid))
-            except (InvalidId, TypeError):
-                pass
-        # Per-id buckets: company-only / date-only / anywhere.
-        probe = {gid: {"any_doc": 0, "by_company": 0, "by_date": 0,
-                       "company_seen": set(), "date_seen": set()}
-                 for gid in not_calc_gids}
-        for d in db.navPackages.find(
-            {"groupingId": {"$in": probe_in}},
-            {"groupingId": 1, "companyId": 1, "positionDate": 1},
-        ):
-            gid = str(d.get("groupingId") or "")
-            if gid not in probe:
-                continue
-            p = probe[gid]
-            p["any_doc"] += 1
-            cid_v = d.get("companyId")
-            pd_v  = d.get("positionDate")
-            # Capture distinct samples so we can compare types/values.
-            if len(p["company_seen"]) < 5:
-                p["company_seen"].add(f"{type(cid_v).__name__}:{cid_v!r}")
-            if len(p["date_seen"]) < 5:
-                p["date_seen"].add(f"{type(pd_v).__name__}:{pd_v!r}")
-            if cid_v == company_id:
-                p["by_company"] += 1
-            if pd_v == position_date:
-                p["by_date"] += 1
-        # Merge probe info into per_id entries and tally a sub-summary.
-        for entry in per_id:
-            if entry["reason"] != "not_calculated":
-                continue
-            p = probe.get(entry["groupingId"])
-            if not p:
-                continue
-            if p["any_doc"] == 0:
-                bucket = "no_doc_anywhere"
-            elif p["by_company"] == 0 and p["by_date"] == 0:
-                bucket = "doc_with_other_company_and_date"
-            elif p["by_company"] == 0:
-                bucket = "doc_with_other_company"
-            elif p["by_date"] == 0:
-                bucket = "doc_with_other_position_date"
-            else:
-                bucket = "type_mismatch_or_other"
-            probe_summary[bucket] = probe_summary.get(bucket, 0) + 1
-            entry["probe"] = {
-                "anyDoc":         p["any_doc"],
-                "byCompanyMatch": p["by_company"],
-                "byDateMatch":    p["by_date"],
-                "companySamples": sorted(p["company_seen"]),
-                "dateSamples":    sorted(p["date_seen"]),
-                "bucket":         bucket,
-            }
-
-    out = {"summary": summary, "perId": per_id}
-    if probe_summary:
-        out["probeSummary"] = probe_summary
-    return jsonify(out)
-
-
-@bp.route("/api/beehus/filters/grouping-id-probe")
-def filter_grouping_id_probe():
-    """Diagnostic: dump everything `db.navPackages` knows about a single
-    `groupingId` so we can see exactly why a `(companyId, positionDate,
-    groupingId)` query missed it.
-
-    Hit this manually from the browser, e.g.:
-
-        /api/beehus/filters/grouping-id-probe?groupingId=69bbed3e4f5bf9c29f65b00b
-
-    Returns up to 50 raw docs (key fields only) plus the **type** of each
-    field, so a string-vs-ObjectId or string-vs-Date mismatch becomes
-    visible immediately.
-    """
-    gid_str = (request.args.get("groupingId") or "").strip()
-    if not gid_str:
-        return jsonify({"error": "groupingId is required"}), 400
-
-    candidates: list = [gid_str]
-    try:
-        candidates.append(ObjectId(gid_str))
-    except (InvalidId, TypeError):
-        pass
-
-    docs = list(
-        db.navPackages.find(
-            {"groupingId": {"$in": candidates}},
-            {"_id": 0, "companyId": 1, "positionDate": 1, "groupingId": 1,
-             "walletId": 1, "published": 1, "trashed": 1},
-        ).limit(50)
-    )
-
-    def describe(v):
-        return {"value": str(v), "type": type(v).__name__}
-
-    sample = []
-    for d in docs:
-        sample.append({
-            "companyId":    describe(d.get("companyId")),
-            "positionDate": describe(d.get("positionDate")),
-            "groupingId":   describe(d.get("groupingId")),
-            "walletId":     str(d.get("walletId")),
-            "published":    bool(d.get("published")),
-            "trashed":      bool(d.get("trashed")),
-        })
-    return jsonify({"groupingId": gid_str, "matchCount": len(docs), "docs": sample})
-
-
 @bp.route("/api/beehus/filters/wallets-with-position")
 def filter_wallets_with_position():
-    """Wallets in the company that have a `processedPosition` for the given date.
+    """Wallets in the company that have a processed position for the given date.
 
     Used by the Excluir Posições view to limit the Available pane to wallets
     that actually have a processed position to delete on that date.
+
+    Source: pre-processing endpoint E (`processedWalletsDetailed`) via
+    `beehus_catalog.wallets_with_position` — the company-wide set of wallets
+    processed on that date. (Replaces the old direct `processedPosition` read.)
     """
     company_id    = request.args.get("companyId", "")
     position_date = request.args.get("positionDate", "")
     if not company_visible(company_id) or not position_date:
         return jsonify([])
 
-    eligible = {
-        str(d["walletId"])
-        for d in db.processedPosition.find(
-            {"companyId": company_id, "positionDate": position_date},
-            {"walletId": 1},
-        )
-        if d.get("walletId")
-    }
+    eligible = beehus_catalog.wallets_with_position(company_id, position_date)
     if not eligible:
         return jsonify([])
 
+    # Prefer the UI's cached wallet name (keeps labels consistent with the rest
+    # of the console); fall back to the name the endpoint returned, then the id.
     wallet_names = get_wallet_names()
     items = [
-        {"id": wid, "name": wallet_names.get(wid, "") or wid}
-        for wid in eligible
+        {"id": w["id"], "name": wallet_names.get(w["id"], "") or w.get("name") or w["id"]}
+        for w in eligible
     ]
     items.sort(key=lambda x: x["name"].lower())
     return jsonify(items)
@@ -676,8 +450,8 @@ def filter_entities():
 
     def _build():
         eids = {
-            str(w.get("entityId"))
-            for w in db.wallets.find({"companyId": company_id}, {"entityId": 1})
+            beehus_catalog.id_str(w["entityId"])
+            for w in beehus_catalog.wallets_in_company(company_id)
             if w.get("entityId")
         }
         items = [{"id": eid, "name": enames.get(eid, "") or eid} for eid in eids]
@@ -692,17 +466,26 @@ def filter_entities():
 @bp.route("/api/beehus/filters/securities")
 def filter_securities():
     # The response is a sorted list of ALL ~16k securities — identical for
-    # every caller and changing only as often as the underlying name cache
+    # every caller and changing only as often as the underlying catalog
     # (5-min TTL). Building + sorting + serialising 16k dicts per request cost
     # ~1s; cache the finished list so that work runs at most once per TTL.
-    # Resolve the (already-cached) name map OUTSIDE the _cached_ttl loader so
-    # we never nest cache locks / hold the lock across the name-map load.
-    names = get_security_names()
-    items = _cached_ttl(
-        "securities_filter_list",
-        lambda: _sorted_dicts_to_list(names),
-    )
-    return jsonify(items)
+    # Each item carries {id, name, mainId}: the security-edit modal's free-text
+    # search shows the mainId column and a manual pick keeps its mainId (see
+    # pickSecForEdit), so the suggestion cell renders "mainId · name" instead of
+    # the bare beehusName. The index read uses beehus_catalog's own cache (a
+    # different lock than this `_cached_ttl`), so no lock nesting occurs.
+    def _build():
+        idx = beehus_catalog.securities_index()
+        items = [
+            {"id": sid,
+             "name": d.get("beehusName") or sid,
+             "mainId": d.get("mainId") or ""}
+            for sid, d in idx.items()
+        ]
+        items.sort(key=lambda x: (x["name"] or "").lower())
+        return items
+
+    return jsonify(_cached_ttl("securities_filter_list", _build))
 
 
 # ── Transactions ──────────────────────────────────────────────────────────────
@@ -755,64 +538,6 @@ _TXN_PATCHABLE = {
 }
 
 
-# Fields whose Mongo storage type differs from the wire format (string ID
-# from the UI → ObjectId in Mongo). Listed explicitly so the conversion
-# can't silently break if a new patchable field is added that also needs
-# coercion. Other fields pass through as-is — dates stay as 'YYYY-MM-DD'
-# strings to match how `transactions_search` queries them.
-_TXN_OBJECTID_FIELDS = {"securityId"}
-
-
-def _apply_patch_to_mongo(txn_id, patch):
-    """Mirror the upstream PATCH to the local `db.transactions` cache.
-
-    Mongo is the read-side cache; without this mirror, edits made through
-    the console (Editar Transações or Identificar Transações) are invisible
-    to the rest of the app until a separate sync job runs. Returns True on
-    success. On failure, logs a warning and returns False — the upstream
-    write is the source of truth, so a Mongo miss is recoverable but worth
-    surfacing.
-    """
-    log = logging.getLogger(__name__)
-    try:
-        oid = ObjectId(txn_id)
-    except (InvalidId, TypeError):
-        log.warning("mongo mirror skipped — invalid txn id %r", txn_id)
-        return False
-
-    update = {}
-    for key, value in patch.items():
-        if key not in _TXN_PATCHABLE:
-            continue
-        if key in _TXN_OBJECTID_FIELDS and value:
-            try:
-                update[key] = ObjectId(value)
-            except (InvalidId, TypeError):
-                log.warning(
-                    "mongo mirror skipped %s — invalid ObjectId %r for txn %s",
-                    key, value, txn_id,
-                )
-                return False
-        else:
-            update[key] = value
-    if not update:
-        return True
-
-    try:
-        result = db.transactions.update_one({"_id": oid}, {"$set": update})
-    except Exception:  # pymongo errors are subclasses of Exception
-        log.exception("mongo mirror failed for txn %s", txn_id)
-        return False
-    if result.matched_count == 0:
-        log.warning(
-            "mongo mirror — no local row matched txn %s (upstream PATCH ok); "
-            "local cache may be stale",
-            txn_id,
-        )
-        return False
-    return True
-
-
 @bp.route("/api/beehus/transactions/<txn_id>", methods=["PATCH"])
 def transactions_patch(txn_id):
     """Forward a partial PATCH to the upstream Beehus API.
@@ -831,17 +556,12 @@ def transactions_patch(txn_id):
     except BeehusAPIError as e:
         return _api_error_response(e)
 
-    # Upstream is the source of truth; mirror the change into Mongo so the
-    # local cache (used by the search/identify routes and the rest of the
-    # app) reflects the edit immediately. A Mongo miss is logged but does
-    # not fail the request — the upstream write already succeeded.
-    mongo_ok = _apply_patch_to_mongo(txn_id, patch)
-
+    # A API (upstream) é a fonte de verdade. Não há mais espelho no Mongo local
+    # — o cache de leitura saiu; os listings vêm do endpoint G via beehus_catalog.
     return jsonify({
         "updated":  txn_id,
         "patch":    patch,
         "response": result,
-        "mongoOk":  mongo_ok,
     })
 
 
@@ -952,6 +672,9 @@ def nav_calculate_wallets():
         )
     except BeehusAPIError as e:
         return _api_error_response(e)
+    # NAV mudou upstream → invalida o cache consolidado da empresa (a grade de
+    # divergência e os filtros de publicação leem de beehus_catalog.nav_packages).
+    beehus_catalog.invalidate_nav(company_id)
     return jsonify(result if result is not None else {"ok": True})
 
 
@@ -986,6 +709,7 @@ def nav_explosion_proportions():
         )
     except BeehusAPIError as e:
         return _api_error_response(e)
+    beehus_catalog.invalidate_nav(company_id)
     return jsonify(result if result is not None else {"ok": True})
 
 
@@ -1020,6 +744,7 @@ def nav_calculate_groupings():
         )
     except BeehusAPIError as e:
         return _api_error_response(e)
+    beehus_catalog.invalidate_nav(company_id)
     return jsonify(result if result is not None else {"ok": True})
 
 
@@ -1125,6 +850,9 @@ def nav_publish():
         position_date=position_date,
         grouping_ids=grouping_ids,
     )
+    # Mesmo em sucesso parcial, chunks publicados mudaram o estado `published`
+    # → invalida o cache (filtros de publicação leem de nav_packages).
+    beehus_catalog.invalidate_nav(company_id)
     if summary["ok"]:
         return jsonify(summary), 200
     # Match the rest of the routes: 401 for auth errors, 502 for upstream
@@ -1158,6 +886,7 @@ def nav_unpublish():
         position_date=position_date,
         grouping_ids=grouping_ids,
     )
+    beehus_catalog.invalidate_nav(company_id)
     if summary["ok"]:
         return jsonify(summary), 200
     code = 401 if summary.get("upstream_status") == 401 else 502
@@ -1216,12 +945,16 @@ def transactions_search():
     # `groupingId` branch into the final query below. Only groupings that
     # belong to the visible company count (the gindex carries `companyId`,
     # same guard the classify route uses).
-    wallet_query = {"companyId": company_id}
     grouping_ids = list(data.get("groupingIds") or [])
     legacy_grouping = (data.get("groupingId") or "").strip()
     if legacy_grouping and legacy_grouping not in grouping_ids:
         grouping_ids.append(legacy_grouping)
     valid_grouping_ids: list[str] = []
+    # When groupings are selected the wallet branch is narrowed to their member
+    # wallets (intersected with the company's wallets); otherwise it is every
+    # wallet of the company. `allowed_wallet_ids is None` means "no grouping
+    # narrowing"; an (possibly empty) set means "restrict to these".
+    allowed_wallet_ids: set[str] | None = None
     if grouping_ids:
         gindex = get_grouping_index()
         wallet_ids: set[str] = set()
@@ -1232,16 +965,19 @@ def transactions_search():
             if g.get("companyId") and g["companyId"] != company_id:
                 continue
             valid_grouping_ids.append(gid)
-            wallet_ids.update(g.get("walletIds") or [])
+            wallet_ids.update(str(w) for w in (g.get("walletIds") or []))
         # Narrow the wallet branch to the groupings' members. If none carry
         # wallets the branch is simply empty — the groupingId branch below can
-        # still surface grouping-tagged transactions. `$in: []` matches nothing.
-        try:
-            wallet_query["_id"] = {"$in": [ObjectId(w) for w in wallet_ids]}
-        except InvalidId:
-            wallet_query["_id"] = {"$in": []}
+        # still surface grouping-tagged transactions.
+        allowed_wallet_ids = wallet_ids
 
-    candidate_wallets = {str(w["_id"]) for w in db.wallets.find(wallet_query, {"_id": 1})}
+    # Candidate wallets = the company's wallets (visibility!), optionally
+    # narrowed to the selected groupings' members. Same result set as the
+    # former db.wallets.find({companyId[, _id:$in]}, {_id:1}), via the index.
+    candidate_wallets = {
+        str(w["_id"]) for w in beehus_catalog.wallets_in_company(company_id)
+        if allowed_wallet_ids is None or str(w["_id"]) in allowed_wallet_ids
+    }
     explicit_wallets  = set(data.get("walletIds") or [])
     if explicit_wallets:
         candidate_wallets &= explicit_wallets
@@ -1314,18 +1050,75 @@ def transactions_search():
     # handles realistic company-wide ranges. Sorted by `liquidationDate`
     # desc (most recent settlement first).
     _TXN_SEARCH_CAP = 10_000
-    cursor = db.transactions.find(
-        txn_query,
-        {"walletId": 1, "entityId": 1, "securityId": 1, "balance": 1, "quantity": 1,
-         "price": 1, "beehusTransactionType": 1, "operationDate": 1,
-         "liquidationDate": 1, "description": 1, "comment": 1, "currencyId": 1},
-    ).sort("liquidationDate", -1).limit(_TXN_SEARCH_CAP)
-    for d in cursor:
+
+    # Migrated from `db.transactions.find` → Beehus endpoint G via
+    # beehus_catalog.transactions_search. The endpoint handles the
+    # liquidationDate range + company + wallet/security/entity/grouping
+    # filters; everything the API can't express (the wallet⋁grouping OR,
+    # the type/identified predicates, the `trashed` guard, the
+    # liquidationDate-desc sort and the cap) is reapplied client-side.
+    #
+    # The original scope was `walletId ∈ candidate_wallets OR groupingId ∈
+    # valid_grouping_ids`. The endpoint ANDs its filters, so when both
+    # branches exist we run two searches (one per branch) and union the
+    # docs by `_id`; with a single branch we run one search.
+    sec_filter = [str(s) for s in sec_ids] if sec_ids else None
+    ent_filter = [str(e) for e in entity_ids] if entity_ids else None
+
+    def _search(*, wallet_ids=None, grouping_ids=None):
+        return beehus_catalog.transactions_search(
+            company_id, initial_date=initial_date, final_date=final_date,
+            wallet_ids=wallet_ids, grouping_ids=grouping_ids,
+            security_ids=sec_filter, entity_ids=ent_filter,
+            date_type="liquidation")
+
+    raw_docs: list[dict] = []
+    seen_ids: set[str] = set()
+    branch_calls: list[dict] = []
+    if candidate_wallets:
+        branch_calls.append({"wallet_ids": list(candidate_wallets)})
+    if valid_grouping_ids:
+        branch_calls.append({"grouping_ids": list(valid_grouping_ids)})
+    for _call in branch_calls:
+        for d in _search(**_call):
+            _key = str(d.get("_id") or d.get("id") or "")
+            if _key and _key in seen_ids:
+                continue
+            if _key:
+                seen_ids.add(_key)
+            raw_docs.append(d)
+
+    # Reapply filters the endpoint G doesn't cover, then sort desc by
+    # liquidationDate and cap. `trashed` guard mirrors the original
+    # "trashed": {"$ne": True}.
+    def _type_ok(d):
+        bt = d.get("beehusTransactionType")
+        # 'false' overrides any user-provided types filter (mirrors the
+        # original `txn_query["beehusTransactionType"] = {"$in": [None, ""]}`
+        # which *replaced* the types `$in`). A missing/empty field can't be in
+        # any types list anyway, so the types predicate is intentionally skipped
+        # here — applying it first would make 'false' + non-empty types match
+        # nothing (the two sets are disjoint).
+        if identified_str == "false":
+            return bt in (None, "")
+        if types:
+            if bt not in types:
+                return False
+        if identified_str == "true":
+            if not types and (bt is None or bt == ""):
+                return False
+        return True
+
+    filtered = [d for d in raw_docs if not d.get("trashed") and _type_ok(d)]
+    filtered.sort(key=lambda d: str(d.get("liquidationDate") or ""), reverse=True)
+    docs = filtered[:_TXN_SEARCH_CAP]
+
+    for d in docs:
         wid = str(d.get("walletId") or "")
         eid = str(d.get("entityId") or "")
         sid = str(d.get("securityId") or "") if d.get("securityId") else ""
         out.append({
-            "id":              str(d["_id"]),
+            "id":              str(d.get("_id") or d.get("id") or ""),
             "walletId":        wid,
             "walletName":      wallet_names.get(wid, "") or wid,
             "entityId":        eid,
@@ -1905,8 +1698,9 @@ def identify_txn_reinforcement_normalize():
 
 @bp.route("/api/beehus/identify-transactions/wallet-securities", methods=["GET"])
 def identify_txn_wallet_securities():
-    """Return the union of securityIds held by `walletId` in the most recent
-    three processedPositions on or before `liquidationDate` (T, T-1, T-2).
+    """Return the union of securityIds held by `walletId` at the FIXED dates
+    D, D-1 and D-2 business days (D = `liquidationDate`), fetched via the
+    Beehus API at each EXACT date — no backward scan over sparse dates.
 
     Used by the security-edit modal to restrict the free-text search to a
     universe of securities the wallet actually holds — matches the L1∪L2
@@ -1920,39 +1714,29 @@ def identify_txn_wallet_securities():
     # Authorization: resolve the wallet's company and gate against the
     # caller's visible-companies set (consistent with the rest of the page).
     try:
-        wallet_oid = ObjectId(wallet_id)
+        ObjectId(wallet_id)
     except (InvalidId, TypeError):
         return jsonify({"error": "invalid walletId"}), 400
-    wallet_doc = db.wallets.find_one({"_id": wallet_oid}, {"companyId": 1})
+    wallet_doc = resolve_wallet(wallet_id, {"companyId": 1})
     if not wallet_doc:
         return jsonify({"securityIds": []})
-    if not company_visible(str(wallet_doc.get("companyId") or "")):
+    company_id = str(wallet_doc.get("companyId") or "")
+    if not company_visible(company_id):
         return jsonify({"securityIds": []}), 403
 
-    # Pick the three most recent positionDates on or before the liquidation
-    # date. processedPositions stores positionDate as a string ('YYYY-MM-DD'
-    # in this codebase) — sort lexicographically.
-    dates = [
-        d.get("positionDate")
-        for d in db.processedPosition.find(
-            {"walletId": wallet_id,
-             "positionDate": {"$lte": liquidation_date},
-             "trashed": {"$ne": True}},
-            {"positionDate": 1},
-        ).sort("positionDate", -1).limit(3)
-    ]
-    if not dates:
-        return jsonify({"securityIds": []})
-
+    # Fixed dates: D (liquidationDate), D-1 and D-2 business days. One exact-
+    # date API call each; a date with no position simply contributes nothing.
+    d = str(liquidation_date)[:10]
+    dates = [d, business_days_before(d, 1), business_days_before(d, 2)]
     sec_ids = set()
-    for doc in db.processedPosition.find(
-        {"walletId": wallet_id,
-         "positionDate": {"$in": dates},
-         "trashed": {"$ne": True}},
-        {"securities.securityId": 1},
-    ):
+    for dt in dates:
+        if not dt:
+            continue
+        doc = beehus_catalog.processed_doc(wallet_id, dt, company_id)
+        if not doc:
+            continue
         for s in (doc.get("securities") or []):
-            sid = str(s.get("securityId", "")) if s.get("securityId") else ""
+            sid = beehus_catalog.id_str(s.get("securityId")) if s.get("securityId") else ""
             if sid:
                 sec_ids.add(sid)
     return jsonify({"securityIds": sorted(sec_ids)})
@@ -1960,25 +1744,24 @@ def identify_txn_wallet_securities():
 
 @bp.route("/api/beehus/identify-transactions/wallet-position-detail", methods=["GET"])
 def identify_txn_wallet_position_detail():
-    """Return the wallet's processedPositions snapshot at level L1 or L2,
-    enriched with security metadata so the security-edit modal can render the
-    full position (not just the matcher's top alternatives).
+    """Return the wallet's position snapshot at level L1 or L2, enriched with
+    security metadata so the security-edit modal can render the full position
+    (not just the matcher's top alternatives). Prefers the processedPosition;
+    falls back to the raw (unprocessed) position of the SAME date when there is
+    none (see `_position_rows`).
 
     Query params:
       walletId          required
-      liquidationDate   required, YYYY-MM-DD (the txn liquidation date — we
-                        look at positions on or before this date, matching
-                        the classifier's L1/L2 definition)
+      liquidationDate   required, YYYY-MM-DD (D — the txn liquidation date)
       level             optional, one of {'l1', 'l2'}. Default 'l1'.
-                          l1 = most-recent processedPositions doc (T)
-                          l2 = T-1 ∪ T-2 (union of the 2nd and 3rd most-
-                               recent docs); L1 ids are excluded so the two
-                               groups are disjoint.
+                          l1 = position at D (the liquidationDate)
+                          l2 = position at D-1 ∪ D-2 business days; L1 ids
+                               are excluded so the two groups are disjoint.
 
     Returns:
       {
         level: 'l1' | 'l2',
-        positionDate: 'YYYY-MM-DD' (L1 only — L2 spans two dates),
+        positionDate: 'YYYY-MM-DD' (L1 only),
         positionDates: ['YYYY-MM-DD', 'YYYY-MM-DD'] (L2 only),
         securities: [
           {securityId, beehusName, mainId, ticker, securityType,
@@ -1986,10 +1769,16 @@ def identify_txn_wallet_position_detail():
         ]
       }
 
-    The "expand L1" affordance in the modal calls this and replaces the
-    short matcher-top-5 list with the wallet's complete position — useful
+    Fixed-offset, EXACT-date lookups via the Beehus API (no backward scan over
+    sparse dates): for each target date the processedPosition is tried first and,
+    when absent, the raw unprocessed position of that same date (reading the
+    resolved `preProcessingData.securityId`). A date with neither contributes
+    nothing. The "expand L1/L2" affordance in the modal calls this and replaces
+    the short matcher-top-5 list with the wallet's complete position — useful
     when the matcher missed the right security (descrição com nomenclatura
-    diferente do beehusName) but the operator can recognise it by glance.
+    diferente do beehusName) but the operator can recognise it by glance, and so
+    that carteiras em tombamento (só foto-base processada) still show the
+    holdings em D.
     """
     wallet_id        = (request.args.get("walletId") or "").strip()
     liquidation_date = (request.args.get("liquidationDate") or "").strip()
@@ -2001,74 +1790,83 @@ def identify_txn_wallet_position_detail():
 
     # Authorization (same gate as the wallet-securities endpoint).
     try:
-        wallet_oid = ObjectId(wallet_id)
+        ObjectId(wallet_id)
     except (InvalidId, TypeError):
         return jsonify({"error": "invalid walletId"}), 400
-    wallet_doc = db.wallets.find_one({"_id": wallet_oid}, {"companyId": 1})
+    wallet_doc = resolve_wallet(wallet_id, {"companyId": 1})
     if not wallet_doc:
         return jsonify({"securities": [], "level": level})
-    if not company_visible(str(wallet_doc.get("companyId") or "")):
+    company_id = str(wallet_doc.get("companyId") or "")
+    if not company_visible(company_id):
         return jsonify({"securities": [], "level": level}), 403
 
-    # Sorted (most recent first) list of positionDates at or before the
-    # liquidation date. We need up to 3 dates: T (L1), T-1, T-2 (L2 union).
-    pos_dates = [
-        d.get("positionDate")
-        for d in db.processedPosition.find(
-            {"walletId": wallet_id,
-             "positionDate": {"$lte": liquidation_date},
-             "trashed": {"$ne": True}},
-            {"positionDate": 1},
-        ).sort("positionDate", -1).limit(3)
-    ]
-    if not pos_dates:
-        return jsonify({"securities": [], "level": level})
-
+    # Fixed dates: D (liquidationDate), D-1 and D-2 business days.
+    d0 = str(liquidation_date)[:10]
+    d1 = business_days_before(d0, 1)
+    d2 = business_days_before(d0, 2)
     if level == "l1":
-        target_dates = [pos_dates[0]]
+        target_dates = [d0]
     else:
-        target_dates = pos_dates[1:]  # T-1, T-2
+        target_dates = [x for x in (d1, d2) if x]   # D-1, D-2 (most recent first)
         if not target_dates:
-            # The wallet only has one snapshot — there is no L2.
             return jsonify({"securities": [], "level": level, "positionDates": []})
 
-    # Collect securities entries across the target dates. For L2 we may have
-    # the same securityId on both T-1 and T-2 — dedupe by id, keeping the
-    # entry from the most recent date (target_dates is already sorted DESC).
+    def _position_rows(dt):
+        """Security rows held by the wallet on the EXACT `dt`, as
+        ``[{securityId, quantity, pu, pricingType}]``. Prefers the PROCESSED
+        position; when the wallet has no processed position that date (carteira
+        em tombamento, que só tem a foto-base processada) falls back to the RAW
+        (unprocessed) position of the SAME date, reading each item's already
+        resolved ``preProcessingData.securityId``. Unresolved raw items (no
+        securityId yet) are skipped — they aren't pickable. Same exact-date
+        semantics as the L1/L2 classifier cascade (see _WalletCandidatePool)."""
+        if not dt:
+            return []
+        pdoc = beehus_catalog.processed_doc(wallet_id, dt, company_id)
+        if pdoc and (pdoc.get("securities") or []):
+            rows = []
+            for s in (pdoc.get("securities") or []):
+                sid = beehus_catalog.id_str(s.get("securityId")) if s.get("securityId") else ""
+                if sid:
+                    rows.append({"securityId": sid, "quantity": s.get("quantity"),
+                                 "pu": s.get("pu"), "pricingType": s.get("pricingType")})
+            return rows
+        udoc = beehus_catalog.unprocessed_doc(wallet_id, dt, company_id)
+        rows = []
+        if udoc:
+            for s in (udoc.get("securities") or []):
+                ppd = s.get("preProcessingData") if isinstance(s, dict) else None
+                raw = ppd.get("securityId") if isinstance(ppd, dict) else None
+                sid = beehus_catalog.id_str(raw) if raw else ""
+                if sid:
+                    rows.append({"securityId": sid, "quantity": s.get("quantity"),
+                                 "pu": s.get("pu"),
+                                 "pricingType": ppd.get("pricingType") if isinstance(ppd, dict) else None})
+        return rows
+
+    # Collect securities across the target dates (exact-date API). For L2 we
+    # may see the same securityId on D-1 and D-2 — dedupe by id, keeping the
+    # entry from the most recent date (target_dates is sorted DESC).
     by_sid = {}
-    for doc in db.processedPosition.find(
-        {"walletId": wallet_id,
-         "positionDate": {"$in": target_dates},
-         "trashed": {"$ne": True}},
-        {"securities.securityId": 1, "securities.quantity": 1,
-         "securities.pu": 1, "securities.pricingType": 1, "positionDate": 1},
-    ).sort("positionDate", -1):
-        for s in (doc.get("securities") or []):
-            sid = str(s.get("securityId") or "")
-            if not sid or sid in by_sid:
+    for dt in target_dates:
+        for r in _position_rows(dt):
+            sid = r["securityId"]
+            if sid in by_sid:
                 continue
             by_sid[sid] = {
                 "securityId":  sid,
-                "quantity":    s.get("quantity"),
-                "pu":          s.get("pu"),
-                "pricingType": s.get("pricingType"),
+                "quantity":    r["quantity"],
+                "pu":          r["pu"],
+                "pricingType": r["pricingType"],
             }
 
-    # For L2 we need to exclude anything already in L1 so the two groups are
-    # disjoint (matches the classifier's L2 definition: T-1 ∪ T-2 \ T).
+    # For L2, exclude anything already in L1 so the two groups are disjoint
+    # (matches the classifier's L2 definition: D-1 ∪ D-2 \ D).
     if level == "l2":
-        l1_doc = db.processedPosition.find_one(
-            {"walletId": wallet_id, "positionDate": pos_dates[0],
-             "trashed": {"$ne": True}},
-            {"securities.securityId": 1},
-        )
-        if l1_doc:
-            l1_ids = {str(s.get("securityId") or "")
-                      for s in (l1_doc.get("securities") or [])
-                      if s.get("securityId")}
-            for sid in list(by_sid.keys()):
-                if sid in l1_ids:
-                    by_sid.pop(sid, None)
+        l1_ids = {r["securityId"] for r in _position_rows(d0)}
+        for sid in list(by_sid.keys()):
+            if sid in l1_ids:
+                by_sid.pop(sid, None)
 
     if not by_sid:
         out = []
@@ -2085,12 +1883,7 @@ def identify_txn_wallet_position_detail():
                 continue
         meta_by_id = {}
         if oids:
-            for s in db.securities.find(
-                {"_id": {"$in": oids}},
-                {"beehusName": 1, "mainId": 1, "ticker": 1, "taxId": 1,
-                 "isIn": 1, "selicCode": 1, "securityType": 1,
-                 "maturityDate": 1},
-            ):
+            for s in beehus_catalog.securities_by_ids(oids).values():
                 meta_by_id[str(s["_id"])] = s
 
         out = []
@@ -2116,7 +1909,7 @@ def identify_txn_wallet_position_detail():
 
     payload = {"level": level, "securities": out}
     if level == "l1":
-        payload["positionDate"] = pos_dates[0]
+        payload["positionDate"] = d0
     else:
         payload["positionDates"] = target_dates
     return jsonify(payload)
@@ -2189,51 +1982,95 @@ def _compute_execution_extras(txn_docs_by_id, suggestions_by_id):
         except (InvalidId, TypeError):
             pass
     if oids:
-        for s in db.securities.find({"_id": {"$in": oids}}, {"securityType": 1}):
+        for s in beehus_catalog.securities_by_ids(oids).values():
             sec_type[str(s["_id"])] = s.get("securityType") or ""
 
-    # ── 3. Recent processedPositions per wallet (for PU + Δqty fallback) ──────
-    pos_cache = {}
+    # ── 3. processedPositions per wallet (PU + Δqty), via endpoint A (no Mongo) ──
+    # Endpoint A is EXACT-date only (no range / no "≤ date"), so we walk business
+    # days back from the liquidationDate to the latest position at/-before it (d0,
+    # for PU) and — lazily, only when a Δqty fallback is actually needed — to the
+    # position before that (d1). Daily-position wallets resolve in 1-2 calls;
+    # sparser wallets walk back up to _POS_MAXBACK business days, then degrade
+    # gracefully (PU None / Δqty = absolute qty), as the old 40-doc window did
+    # for liq dates beyond its reach. Each (wallet, date) is fetched once (cached).
+    _POS_MAXBACK = 25  # business days — covers monthly positions + holiday gaps
+    _wallets = {e["wallet"] for e in eff.values() if e["wallet"]}
+    _wallet_company = {
+        wid: str(cid or "")
+        for wid, cid in beehus_catalog.wallet_company_map(list(_wallets)).items()
+    } if _wallets else {}
 
-    def _positions(wallet):
-        if wallet in pos_cache:
-            return pos_cache[wallet]
-        rows = []
-        if wallet:
-            for doc in db.processedPosition.find(
-                {"walletId": wallet, "trashed": {"$ne": True}},
-                {"positionDate": 1, "securities.securityId": 1,
-                 "securities.pu": 1, "securities.quantity": 1},
-            ).sort("positionDate", -1).limit(40):
-                d = str(doc.get("positionDate", ""))[:10]
-                if not d:
-                    continue
-                secs = {}
-                for s in (doc.get("securities") or []):
-                    s_sid = str(s.get("securityId") or "")
-                    if s_sid:
-                        secs[s_sid] = {"pu": s.get("pu"), "qty": s.get("quantity")}
-                rows.append({"date": d, "secs": secs})
-        pos_cache[wallet] = rows
-        return rows
+    _secs_cache = {}   # (wallet, date) -> {sid: {pu, qty}} | None  (None = no position)
+
+    def _secs_on(wallet, date):
+        key = (wallet, date)
+        if key in _secs_cache:
+            return _secs_cache[key]
+        cid = _wallet_company.get(wallet)
+        doc = beehus_catalog.processed_doc(wallet, date, cid) if (wallet and date and cid) else None
+        secs = None
+        if doc:
+            secs = {}
+            for s in (doc.get("securities") or []):
+                s_sid = str(s.get("securityId") or "")
+                if s_sid:
+                    secs[s_sid] = {"pu": s.get("pu"), "qty": s.get("quantity")}
+        _secs_cache[key] = secs
+        return secs
+
+    def _walk_back(wallet, start_date, predicate):
+        """First (date, secs) at/-before `start_date` (business days) where
+        `predicate(secs)` holds, within _POS_MAXBACK; else (None, None)."""
+        d = str(start_date)[:10]
+        for _ in range(_POS_MAXBACK + 1):
+            if not d:
+                break
+            secs = _secs_on(wallet, d)
+            if secs is not None and predicate(secs):
+                return d, secs
+            d = business_days_before(d, 1)
+        return None, None
+
+    _d0_cache = {}   # (wallet, liq) -> (date0, secs0)  — latest position ≤ liq
+    def _d0(wallet, liq):
+        key = (wallet, liq)
+        if key not in _d0_cache:
+            _d0_cache[key] = _walk_back(wallet, liq, lambda s: True)
+        return _d0_cache[key]
+
+    _d1_cache = {}   # (wallet, liq) -> secs1  — position immediately before d0
+    def _d1(wallet, liq):
+        key = (wallet, liq)
+        if key not in _d1_cache:
+            d0_date, _ = _d0(wallet, liq)
+            secs1 = None
+            if d0_date:
+                _, secs1 = _walk_back(wallet, business_days_before(d0_date, 1), lambda s: True)
+            _d1_cache[key] = secs1
+        return _d1_cache[key]
 
     def _pu(wallet, sid, liq):
         if not (wallet and sid and liq):
             return None
-        for r in _positions(wallet):           # already sorted newest → oldest
-            if r["date"] <= liq and sid in r["secs"]:
-                return r["secs"][sid].get("pu")
-        return None
+        d0_date, secs0 = _d0(wallet, liq)
+        if secs0 is not None and sid in secs0:
+            return secs0[sid].get("pu")
+        # sid absent from the position ≤ liq: latest older position containing it
+        # (mirrors the original "most recent position ≤ liq that holds sid").
+        if not d0_date:
+            return None
+        _, secs = _walk_back(wallet, business_days_before(d0_date, 1), lambda s: sid in s)
+        return (secs.get(sid) or {}).get("pu") if secs else None
 
     def _pos_delta(wallet, sid, liq):
         if not (wallet and sid and liq):
             return None
-        rows = _positions(wallet)
-        idx = next((k for k, r in enumerate(rows) if r["date"] <= liq), None)
-        if idx is None:
+        _, secs0 = _d0(wallet, liq)
+        if secs0 is None:
             return None
-        cur = (rows[idx]["secs"].get(sid) or {}).get("qty")
-        prev = (rows[idx + 1]["secs"].get(sid) or {}).get("qty") if idx + 1 < len(rows) else None
+        secs1 = _d1(wallet, liq)   # lazy: triggers the longer walk only here
+        cur = (secs0.get(sid) or {}).get("qty")
+        prev = (secs1.get(sid) or {}).get("qty") if secs1 else None
         if cur is None and prev is None:
             return None
         delta = (_num(cur) or 0.0) - (_num(prev) or 0.0)
@@ -2312,48 +2149,56 @@ def _compute_execution_extras(txn_docs_by_id, suggestions_by_id):
 @bp.route("/api/beehus/identify-transactions/identify", methods=["POST"])
 def identify_txn_identify():
     """Suggest a `beehusTransactionType` and (when needed) a `securityId`
-    for each transaction id in the body.
+    for each transaction in the body.
 
-    Body: ``{transactionIds: [str]}``.
+    The transaction data comes FROM THE CLIENT — the `/search` response
+    (`this._txns`) already carries every field the classifier and the
+    execution-extras pass need — so this route does **not** read the
+    transactions back from Mongo (no by-id round-trip).
 
-    The identification algorithm itself is intentionally a stub for now —
-    this route returns one entry per id with empty suggestions and a
-    `needsSecurity` boolean derived from the saved config (so the UI can
-    render the right input controls). Replace `_suggest_for_transaction`
-    when the real heuristic / model is specified.
+    Body: ``{transactions: [{id, description, walletId, entityId, securityId,
+            balance, quantity, price, operationDate, liquidationDate,
+            beehusTransactionType, currencyId}]}``  (max 5000).
+      - `beehusTransactionType` may also arrive as `type` (the `/search` alias).
+      - Only `id` is required per item; missing fields just weaken the result.
     """
     data = request.get_json(silent=True) or {}
-    txn_ids = data.get("transactionIds") or []
-    if not isinstance(txn_ids, list) or not all(isinstance(x, str) for x in txn_ids):
-        return jsonify({"error": "transactionIds must be a list of strings"}), 400
-    if not txn_ids:
+    txns = data.get("transactions")
+    if not isinstance(txns, list) or not all(isinstance(x, dict) for x in txns):
+        return jsonify({"error": "transactions must be a list of objects "
+                                 "({id, description, walletId, liquidationDate, "
+                                 "balance, beehusTransactionType, ...})"}), 400
+    if not txns:
         return jsonify({"suggestions": []})
-    if len(txn_ids) > 5000:
-        return jsonify({"error": "too many transactionIds (max 5000)"}), 400
+    if len(txns) > 5000:
+        return jsonify({"error": "too many transactions (max 5000)"}), 400
 
     cfg = _load_identify_txn_config()
     types_need_security = set(cfg["typesNeedingSecurity"])
 
-    # Load the source rows so a future real algorithm has something to
-    # work with. We don't use the data yet — but loading it now keeps the
-    # response shape stable when the heuristic ships.
-    object_ids = []
-    for tid in txn_ids:
-        try:
-            object_ids.append(ObjectId(tid))
-        except (InvalidId, TypeError):
-            continue
-
+    # Re-hydrate the txn docs from the client payload (which came from /search)
+    # — no Mongo round-trip. Mirrors the field set the old by-id projection
+    # loaded, so `_suggest_for_transaction` and `_compute_execution_extras` see
+    # the same shape. `type` is the /search alias for `beehusTransactionType`.
     txn_by_id = {}
-    if object_ids:
-        for d in db.transactions.find(
-            {"_id": {"$in": object_ids}},
-            {"walletId": 1, "entityId": 1, "securityId": 1, "balance": 1,
-             "quantity": 1, "price": 1, "beehusTransactionType": 1,
-             "operationDate": 1, "liquidationDate": 1, "description": 1,
-             "comment": 1, "currencyId": 1},
-        ):
-            txn_by_id[str(d["_id"])] = d
+    for t in txns:
+        tid = str(t.get("id") or t.get("transactionId") or t.get("_id") or "")
+        if not tid:
+            continue
+        txn_by_id[tid] = {
+            "walletId":              t.get("walletId") or "",
+            "entityId":              t.get("entityId") or "",
+            "securityId":            t.get("securityId") or "",
+            "balance":               t.get("balance"),
+            "quantity":              t.get("quantity"),
+            "price":                 t.get("price"),
+            "beehusTransactionType": t.get("beehusTransactionType") or t.get("type") or "",
+            "operationDate":         t.get("operationDate") or "",
+            "liquidationDate":       t.get("liquidationDate") or "",
+            "description":           t.get("description") or "",
+            "comment":               t.get("comment") or "",
+            "currencyId":            t.get("currencyId") or "",
+        }
 
     # Authorization: drop any transaction whose wallet's companyId is outside
     # the caller's company_filter. Transactions don't carry companyId directly;
@@ -2363,19 +2208,13 @@ def identify_txn_identify():
         wallet_ids_to_check = {
             str(d.get("walletId") or "") for d in txn_by_id.values() if d.get("walletId")
         }
-        wallet_oids = []
-        for wid in wallet_ids_to_check:
-            try:
-                wallet_oids.append(ObjectId(wid))
-            except (InvalidId, TypeError):
-                continue
-        wallet_company = {}
-        if wallet_oids:
-            for w in db.wallets.find(
-                {"_id": {"$in": wallet_oids}},
-                {"_id": 1, "companyId": 1},
-            ):
-                wallet_company[str(w["_id"])] = str(w.get("companyId") or "")
+        # walletId → companyId via the cached wallets index (O(1) lookups, not N+1).
+        wallet_company = {
+            wid: str(cid or "")
+            for wid, cid in beehus_catalog.wallet_company_map(
+                list(wallet_ids_to_check)
+            ).items()
+        }
         txn_by_id = {
             tid: d for tid, d in txn_by_id.items()
             if wallet_company.get(str(d.get("walletId") or "")) in visible
@@ -2389,7 +2228,8 @@ def identify_txn_identify():
         sec_clf.reset_request_cache()
 
     suggestions = []
-    for tid in txn_ids:
+    for t in txns:
+        tid = str(t.get("id") or t.get("transactionId") or t.get("_id") or "")
         s = _suggest_for_transaction(txn_by_id.get(tid), types_need_security)
         suggestions.append({
             "transactionId":         tid,
@@ -2712,33 +2552,23 @@ def provisions_search():
     if not company_visible(company_id):
         return jsonify({"provisions": []})
 
-    query = {
-        "companyId": company_id,
-        "trashed":   {"$ne": True},
-    }
+    _wids = [wallet_id] if wallet_id else None
     if cover_date:
         # Modo "ativo em coverDate" — régua estrita da prévia.
-        query["initialDate"]     = {"$lte": cover_date}
-        query["liquidationDate"] = {"$gt":  cover_date}
+        _provs = beehus_catalog.provisions_active(company_id, cover_date, wallet_ids=_wids)
     else:
         # Modo overlap (legado).
-        query["initialDate"]     = {"$lte": final_date}
-        query["liquidationDate"] = {"$gte": initial_date}
-    if wallet_id:
-        query["walletId"] = wallet_id
+        _provs = beehus_catalog.provisions_overlapping(
+            company_id, initial_date, final_date, wallet_ids=_wids)
+    _provs.sort(key=lambda p: str(p.get("liquidationDate") or "")[:10], reverse=True)
 
     wallet_names   = get_wallet_names()
     security_names = get_security_names()
 
     out = []
-    cursor = db.provisions.find(
-        query,
-        {"walletId": 1, "securityId": 1, "balance": 1, "provisionType": 1,
-         "initialDate": 1, "liquidationDate": 1, "description": 1,
-         "currencyId": 1, "provisionSource": 1},
-    ).sort("liquidationDate", -1).limit(1000)
+    cursor = _provs[:1000]
     for d in cursor:
-        wid = str(d.get("walletId") or "")
+        wid = beehus_catalog.id_str(d.get("walletId"))
         sid = str(d.get("securityId") or "") if d.get("securityId") else ""
         out.append({
             "id":              str(d["_id"]),
@@ -2856,40 +2686,35 @@ def identify_txn_execution_extras():
             summary["taxFail"] += 1
             summary["errors"].append(f"IRRF inválido: {item}")
             continue
-        try:
-            oid = ObjectId(src_id)
-        except (InvalidId, TypeError):
+        # Source-transaction fields come FROM THE CLIENT (the Identificar grid
+        # already loaded them via /search) — no by-id Mongo round-trip, mirroring
+        # the /identify route. companyId is still resolved server-side from the
+        # wallet and gated by company visibility (authorization by wallet
+        # visibility, not by-id ownership — same trade-off as the conciliação guards).
+        wallet_id = str(item.get("walletId") or "")
+        if not wallet_id:
             summary["taxFail"] += 1
-            summary["errors"].append(f"IRRF id inválido: {src_id}")
+            summary["errors"].append(f"IRRF sem walletId (origem {src_id})")
             continue
-        src = db.transactions.find_one(
-            {"_id": oid},
-            {"walletId": 1, "entityId": 1, "securityId": 1, "currencyId": 1,
-             "operationDate": 1, "liquidationDate": 1, "description": 1},
-        )
-        if not src:
-            summary["taxFail"] += 1
-            summary["errors"].append(f"IRRF origem não encontrada: {src_id}")
-            continue
-        wallet_id  = str(src.get("walletId") or "")
         company_id = _company_for(wallet_id)
         if not company_id or not company_visible(company_id):
             summary["taxFail"] += 1
             summary["errors"].append(f"IRRF wallet {wallet_id} sem company visível")
             continue
-        desc = src.get("description") or ""
+        desc = item.get("description") or ""
+        sec_id = str(item.get("securityId") or "")
         try:
             create_transaction(
                 company_id=company_id,
-                entity_id=str(src.get("entityId") or ""),
+                entity_id=str(item.get("entityId") or ""),
                 wallet_id=wallet_id,
                 balance=balance,
-                operation_date=_date_str(src.get("operationDate")),
-                liquidation_date=_date_str(src.get("liquidationDate")),
-                currency_id=src.get("currencyId") or "BRL",
+                operation_date=_date_str(item.get("operationDate")),
+                liquidation_date=_date_str(item.get("liquidationDate")),
+                currency_id=item.get("currencyId") or "BRL",
                 transaction_type="taxes",
                 description=(f"IRRF — {desc}" if desc else "IRRF"),
-                security_id=(str(src.get("securityId")) if src.get("securityId") else None),
+                security_id=(sec_id or None),
             )
             summary["taxOk"] += 1
         except BeehusAuthError as e:
@@ -2951,8 +2776,8 @@ def util_parse_strings_excel():
 def util_parse_dates_excel():
     """Extract a sorted, deduped list of YYYY-MM-DD dates from an uploaded
     .xlsx. The sheet has no header — every cell that looks like a date is
-    collected. Used by the Fluxo por datas picker to bulk-load a custom
-    list of business days from a spreadsheet.
+    collected. Used by the "por datas" pickers (Processar / NAV Wallets / NAV
+    Groupings / Publicar) to bulk-load a custom list of business days.
     """
     f = request.files.get("file")
     if f is None:

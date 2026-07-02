@@ -16,10 +16,12 @@ from beehus_api import (
 )
 from db import (db, get_biz_dates, load_config_delays, get_company_filter,
                 company_visible, get_company_names, get_wallet_names,
-                get_grouping_index, atomic_write_json, today_in_brt, _cached_ttl)
+                get_grouping_index, atomic_write_json, today_in_brt, _cached_ttl,
+                invalidate_cache, business_days_before, IDENTIFICAR_ENABLED)
+import beehus_catalog
 from security_type_classifier import SecurityTypeClassifier, JSON_PATH
 from security_matcher import (
-    SecurityMatcher, get_cache, _score_breakdown, _confidence_label,
+    SecurityMatcher, get_cache, get_mapping_cache, _score_breakdown, _confidence_label,
 )
 
 bp = Blueprint("controlpanel", __name__)
@@ -67,7 +69,12 @@ def _get_matcher():
     if _matcher is not None:
         return _matcher
     with _init_lock:
-        if _matcher is None and db._ready():
+        if _matcher is None:
+            # SecurityMatcher is API/file-backed: its cache loads from the daily
+            # JSON or beehus_catalog (API), never Mongo, and `db` is passed only
+            # for signature compatibility (never dereferenced). So the matcher
+            # builds even with Mongo disconnected — do NOT gate on db._ready(),
+            # or POST /api/controlpanel/match 500s on a Mongo-free instance.
             _matcher = SecurityMatcher(db, classifier=_get_classifier())
         return _matcher
 
@@ -85,9 +92,12 @@ ISSUE_TYPES = [
     ("security_missing_classification",      "Classificação"),
     ("security_missing_price",               "Registro de Preço"),
     ("security_missing_history_price",       "Preço para o dia"),
-    ("missing_fund_position_for_explosion",  "Posição para explosão"),
-    ("explosion_error",                      "Erro em explosão"),
 ]
+# NOTA: os tipos de pós-processamento `missing_fund_position_for_explosion` e
+# `explosion_error` foram REMOVIDOS do Painel. O endpoint de pre-processing (E)
+# — fonte das contagens — não os expõe de forma confiável: as carteiras
+# bloqueadas por explosão nem aparecem na resposta, então contá-los exigiria
+# voltar a varrer a coleção `issues` no Mongo. Decisão: não exibir explosão aqui.
 
 # Columns appended to the right of ISSUE_TYPES, separated by a visual divider
 # in the UI. They surface day-by-day pipeline state per company, not pending
@@ -177,97 +187,76 @@ def _wallets_by_company():
     def _load():
         by_company = {}
         wallet_to_company = {}
-        for w in db.wallets.find({}, {"_id": 1, "companyId": 1}):
+        for w in beehus_catalog.wallets_index().values():
             cid = str(w.get("companyId") or "")
-            wid = str(w["_id"])
-            if cid:
+            wid = beehus_catalog.id_str(w.get("_id"))
+            if cid and wid:
                 by_company[cid] = by_company.get(cid, 0) + 1
                 wallet_to_company[wid] = cid
         return (by_company, wallet_to_company)
-    return _cached_ttl("controlpanel.wallets_by_company", _load)
+    result = _cached_ttl("controlpanel.wallets_by_company", _load)
+    if not result[0]:
+        # Não deixe um índice vazio TRANSITÓRIO (token ainda não pronto / hiccup
+        # na API) grudar pelos 5 min do TTL: ele zera o denominador (`total`) das
+        # colunas de progresso do Painel e elas viram "—" mesmo com dado vivo
+        # disponível. Mesmo guard que beehus_catalog.wallets_index() já aplica na
+        # fonte — aqui protege a cache DERIVADA, que senão mascararia o self-heal.
+        invalidate_cache("controlpanel.wallets_by_company")
+    return result
 
 
 def _groupings_by_company():
     """{companyId: total_untrashed_groupings}. Cached 5 min via _cached_ttl —
-    callers must NOT mutate the returned dict."""
+    callers must NOT mutate the returned dict.
+
+    Derivado de `get_grouping_index()` (API + fallback Mongo) em vez de um
+    aggregate direto no Mongo: conta os agrupamentos não-trashed por empresa."""
     def _load():
         out = {}
-        for doc in db.groupings.aggregate([
-            {"$match": {"trashed": {"$ne": True}}},
-            {"$group": {"_id": "$companyId", "n": {"$sum": 1}}},
-        ]):
-            cid = str(doc["_id"] or "")
+        for g in get_grouping_index().values():
+            if g.get("trashed"):
+                continue
+            cid = g.get("companyId") or ""
             if cid:
-                out[cid] = doc["n"]
+                out[cid] = out.get(cid, 0) + 1
         return out
-    return _cached_ttl("controlpanel.groupings_by_company", _load)
-
-
-def _processed_count_by_company(date, wallet_to_company):
-    """{companyId: processedPosition docs on date}, joined via wallet_to_company."""
-    out = {}
-    for doc in db.processedPosition.find({"positionDate": date}, {"walletId": 1}):
-        cid = wallet_to_company.get(str(doc.get("walletId") or ""), "")
-        if cid:
-            out[cid] = out.get(cid, 0) + 1
-    return out
+    result = _cached_ttl("controlpanel.groupings_by_company", _load)
+    if not result:
+        # Mesmo guard de _wallets_by_company: um vazio transitório não pode
+        # grudar pelo TTL e zerar os totais das colunas NAV Grouping / Published.
+        invalidate_cache("controlpanel.groupings_by_company")
+    return result
 
 
 def _navpackage_counts_by_company(date, threshold):
-    """One pass over navPackages on this date, returning four parallel dicts:
+    """Quatro dicts paralelos (por companyId) na data:
 
-      - nav_wallet:   docs with walletId    (NAV calculados por carteira)
-      - gap:          wallet docs where |returnNavPerShare - returnContribution| > threshold
-      - nav_grouping: docs with groupingId  (NAV calculados por agrupamento)
-      - published:    docs with groupingId AND published == true
+      - nav_wallet:   carteiras com NAV calculado
+      - gap:          carteiras com |returnNavPerShare - returnContribution| > threshold
+      - nav_grouping: agrupamentos com NAV calculado
+      - published:    agrupamentos publicados
 
-    All counts respect trashed != true. Single $match + $facet halves the
-    round-trips compared to four separate aggregations.
-    """
+    Via endpoint consolidado `/results` (1 chamada por empresa, AO VIVO,
+    paralelizado), com fallback Mongo por empresa. `walletsWithNav`/
+    `totalGroupings`/`publishedGroupings` já vêm prontos; o `gap` é contado sobre
+    `walletsWithNavDetailed` com a MESMA regra do mismatch da Conciliação. Só
+    entram empresas com atividade na data (espelha o $group por companyId)."""
     nav_wallet, gap, nav_grouping, published = {}, {}, {}, {}
-    if threshold and threshold > 0:
-        gap_expr = {"$gt": [
-            {"$abs": {"$subtract": [
-                {"$ifNull": ["$returnNavPerShare", 0]},
-                {"$ifNull": ["$returnContribution", 0]},
-            ]}},
-            float(threshold),
-        ]}
-    else:
-        gap_expr = {"$ne": ["$returnNavPerShare", "$returnContribution"]}
-
-    pipeline = [
-        {"$match": {"positionDate": date, "trashed": {"$ne": True}}},
-        {"$facet": {
-            "nav_wallet": [
-                {"$match": {"walletId": {"$exists": True, "$ne": None}}},
-                {"$group": {"_id": "$companyId", "n": {"$sum": 1}}},
-            ],
-            "gap": [
-                {"$match": {"walletId": {"$exists": True, "$ne": None}, "$expr": gap_expr}},
-                {"$group": {"_id": "$companyId", "n": {"$sum": 1}}},
-            ],
-            "nav_grouping": [
-                {"$match": {"groupingId": {"$exists": True, "$ne": None}}},
-                {"$group": {"_id": "$companyId", "n": {"$sum": 1}}},
-            ],
-            "published": [
-                {"$match": {"groupingId": {"$exists": True, "$ne": None}, "published": True}},
-                {"$group": {"_id": "$companyId", "n": {"$sum": 1}}},
-            ],
-        }},
-    ]
-
-    cur = list(db.navPackages.aggregate(pipeline))
-    if not cur:
-        return nav_wallet, gap, nav_grouping, published
-    facets = cur[0]
-    for key, target in (("nav_wallet", nav_wallet), ("gap", gap),
-                        ("nav_grouping", nav_grouping), ("published", published)):
-        for doc in facets.get(key, []):
-            cid = str(doc["_id"] or "")
-            if cid:
-                target[cid] = doc["n"]
+    results = beehus_catalog.nav_results_many(beehus_catalog.all_company_ids(), date)
+    for cid, res in results.items():
+        nw = res.get("walletsWithNav") or 0
+        ng = res.get("totalGroupings") or 0
+        pub = res.get("publishedGroupings") or 0
+        g = sum(1 for w in res.get("walletsWithNavDetailed", [])
+                if beehus_catalog._nav_results_is_gap(w, threshold))
+        if nw:
+            nav_wallet[cid] = nw
+        if g:
+            gap[cid] = g
+        if ng:
+            nav_grouping[cid] = ng
+        if pub:
+            published[cid] = pub
     return nav_wallet, gap, nav_grouping, published
 
 
@@ -302,18 +291,69 @@ def _cell_cls(count):
     return "bg-green-100 text-green-700 font-medium" if count > 0 else "text-gray-300"
 
 
-def _count_pending_for_date(date):
-    """Returns {(companyId, type): count} for the given date."""
-    counts = {}
-    for doc in db.issues.aggregate([
-        {"$match": {"status": "pending", "date": date}},
-        {"$group": {"_id": {"c": "$companyId", "t": "$type"}, "n": {"$sum": 1}}},
-    ]):
-        cid = str(doc["_id"].get("c", ""))
-        typ = doc["_id"].get("t", "")
-        if cid and typ:
-            counts[(cid, typ)] = doc["n"]
-    return counts
+# Como derivar cada contagem do endpoint E (pre-processing) p/ bater 1:1 com o
+# Mongo `issues` (validado ao vivo). `(tipo_painel, chave_top_level, chave_Detailed)`:
+#  - missing_wallet / missing_unprocessed_position → contagem TOP-LEVEL do E
+#    (1 issue por carteira; top-level == len(Detailed) == Mongo).
+#  - security_* → contar via *Detailed, pois o shape difere por tipo e o Mongo
+#    conta OCORRÊNCIAS (security × carteira):
+#      · unmapped / missing_price / missing_classification: 1 item por security
+#        DISTINTA, com `affectedWallets[]` → ocorrências = soma de affectedWallets.
+#      · missing_history_price: 1 item por carteira (tem `walletId`, SEM
+#        affectedWallets) → ocorrências = len(Detailed).
+#    Regra única que cobre os dois: len(affectedWallets) se presente, senão 1.
+#    Validado == Mongo: unmapped 29, missing_price 13, history_price 31.
+_PREPROC_SPEC = [
+    ("missing_wallet",                  "missingWallet",  None),
+    ("missing_unprocessed_position",    "missingPosition", None),
+    ("security_unmapped",               None, "securityUnmappedDetailed"),
+    ("security_missing_classification", None, "securityMissingClassificationDetailed"),
+    ("security_missing_price",          None, "securityMissingPriceDetailed"),
+    ("security_missing_history_price",  None, "securityMissingHistoryPriceDetailed"),
+]
+
+
+def _detailed_occurrences(lst):
+    """Ocorrências (security × carteira) numa lista *Detailed do E: soma
+    len(affectedWallets) quando o item tem essa chave; senão conta o item como 1
+    (itens por-carteira, ex.: securityMissingHistoryPriceDetailed)."""
+    total = 0
+    for it in (lst or []):
+        if not isinstance(it, dict):
+            continue
+        aw = it.get("affectedWallets")
+        total += len(aw) if isinstance(aw, list) else 1
+    return total
+
+
+def _counts_from_status(st):
+    """`{tkey: count}` para UMA empresa, a partir do status do endpoint E,
+    aplicando a regra `_PREPROC_SPEC` (top-level p/ missing_*, soma de
+    ocorrências nas `*Detailed` p/ security_*). Mesma contagem usada no grid do
+    Painel — garante que summary e grid não divergem."""
+    out = {}
+    for tkey, top_key, det_key in _PREPROC_SPEC:
+        n = (st.get(top_key) or 0) if top_key else _detailed_occurrences(st.get(det_key))
+        if n:
+            out[tkey] = n
+    return out
+
+
+def _preproc_counts(date):
+    """Via endpoint E (pre-processing), fan-out por empresa (paralelo, como
+    `nav_results_many`): retorna ({(companyId, type): count} p/ os 6 tipos do
+    Painel, {companyId: processedWallets}). Substitui os reads Mongo de `issues`
+    (contagem por tipo) e `processedPosition` (contagem) do grid numa só passada."""
+    counts, processed = {}, {}
+    statuses = beehus_catalog.preprocessing_status_many(
+        beehus_catalog.all_company_ids(), date)
+    for cid, st in statuses.items():
+        for tkey, n in _counts_from_status(st).items():
+            counts[(cid, tkey)] = n
+        pw = st.get("processedWallets") or 0
+        if pw:
+            processed[cid] = pw
+    return counts, processed
 
 
 def _format_issue(issue):
@@ -332,16 +372,11 @@ def _format_issue(issue):
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 def _date_cards(dates):
-    """Returns list of {date, total} for the date picker cards."""
-    totals = {}
-    for doc in db.issues.aggregate([
-        {"$match": {"status": "pending", "date": {"$in": dates}}},
-        {"$group": {"_id": "$date", "n": {"$sum": 1}}},
-    ]):
-        d = str(doc["_id"])[:10]
-        if d:
-            totals[d] = doc["n"]
-    return [{"date": d, "total": totals.get(d, 0)} for d in dates]
+    """Lista de {date} para os cards do seletor (SEM contador de issues). As datas
+    são os `_NUM_DATES` dias ÚTEIS de `get_biz_dates` (já exclui fins de semana);
+    o seletor é pura navegação de datas e o grid (/rows) preenche ao clicar.
+    Mongo-free — o contador de pendências por data foi removido."""
+    return [{"date": d} for d in dates]
 
 
 @bp.route("/controlpanel")
@@ -359,6 +394,7 @@ def index():
         extra_cols=EXTRA_COLS,
         default_delay=default_delay,
         threshold_pct=threshold_pct,
+        identificar_enabled=IDENTIFICAR_ENABLED,
     )
 
 
@@ -380,34 +416,25 @@ def date_cards():
     return jsonify({"cards": _date_cards(dates), "dates": dates})
 
 
-def _unidentified_txn_count_by_company(date, wallet_to_company):
+def _unidentified_txn_count_by_company(date):
     """Count transactions still missing a `beehusTransactionType` per company
-    for `date`.
+    for `date`, via endpoint G (`list_transactions`) — fan-out por empresa.
 
-    Mirrors the Identificar Transações default search (company wallets,
-    `identified=false`, single day): transactions are scoped to a company
-    through `walletId → companyId` (they carry no companyId field), the date
-    axis is `liquidationDate`, and "não identificada" means
-    `beehusTransactionType` is null or empty. `trashed` rows are excluded.
-    Returns {companyId: count}.
-    """
+    Espelha a busca padrão de Identificar Transações: `dateType=liquidation` na
+    data, "não identificada" = `beehusTransactionType` null/'' , `trashed`
+    excluído. O endpoint G já escopa por empresa (dispensa o mapa
+    walletId→companyId); os filtros de tipo/trashed são aplicados no cliente
+    sobre o resultado. Returns {companyId: count}."""
     counts = {}
-    try:
-        for doc in db.transactions.aggregate([
-            {"$match": {
-                "liquidationDate":       {"$gte": date, "$lte": date},
-                "trashed":               {"$ne": True},
-                "beehusTransactionType": {"$in": [None, ""]},
-            }},
-            {"$group": {"_id": "$walletId", "n": {"$sum": 1}}},
-        ]):
-            wid = str(doc.get("_id") or "")
-            cid = wallet_to_company.get(wid)
-            if cid:
-                counts[cid] = counts.get(cid, 0) + int(doc["n"])
-    except Exception:
-        import logging, traceback
-        logging.error("unidentified txn count failed: %s", traceback.format_exc())
+    by_company = beehus_catalog.transactions_search_many(
+        beehus_catalog.all_company_ids(),
+        initial_date=date, final_date=date, date_type="liquidation")
+    for cid, txns in by_company.items():
+        n = sum(1 for t in txns
+                if not t.get("trashed")
+                and (t.get("beehusTransactionType") or "") == "")
+        if n:
+            counts[cid] = n
     return counts
 
 
@@ -417,15 +444,23 @@ def get_rows():
     company_names = get_company_names()
     threshold     = _diff_threshold_decimal(request)
 
-    counts = _count_pending_for_date(date)
-    # Include companies that have pipeline activity even when no pending issues
-    # exist — without this, the new processed/NAV/published columns would never
-    # render once the issues backlog is cleared.
-    wallets_total, wallet_to_company = _wallets_by_company()
+    # Issues (6 tipos) + posições processadas saem do endpoint E (pre-processing),
+    # 1 chamada por empresa em paralelo (o fan-out já usa 10 workers internos) —
+    # substitui os reads Mongo de `issues` e `processedPosition`. Inclui empresas
+    # com atividade no pipeline mesmo sem issues pendentes (senão as colunas
+    # processed/NAV/published sumiriam quando o backlog zera).
+    #
+    # A coluna TXN (transações não identificadas, endpoint G) NÃO é carregada aqui:
+    # medição mostrou que G é o endpoint mais caro (~60% do tempo de /rows) e
+    # bloqueava a renderização da tela inteira. Ela é buscada à parte por
+    # GET /api/controlpanel/txn-counts depois que a grade renderiza (ver template).
+    # Por isso o set de empresas abaixo NÃO inclui mais txn — empresas que só têm
+    # transações pendentes (sem issue/posição/NAV) são anexadas pelo front quando
+    # o /txn-counts retorna.
+    counts, processed = _preproc_counts(date)
+    wallets_total, _ = _wallets_by_company()
     groupings_total = _groupings_by_company()
-    processed   = _processed_count_by_company(date, wallet_to_company)
     nav_wallet, gap, nav_grouping, published = _navpackage_counts_by_company(date, threshold)
-    txn_unident = _unidentified_txn_count_by_company(date, wallet_to_company)
 
     company_ids = (
         {cid for (cid, _) in counts}
@@ -433,7 +468,6 @@ def get_rows():
         | set(nav_wallet.keys())
         | set(nav_grouping.keys())
         | set(published.keys())
-        | set(txn_unident.keys())
     )
     cf = get_company_filter()
     if cf:
@@ -466,22 +500,49 @@ def get_rows():
              **_extra_cell(published.get(cid, 0),    gt)},
         ]
 
-        tn = txn_unident.get(cid, 0)
         rows.append({
             "companyId": cid,
             "company":   company_names.get(cid, cid),
             "cells":     cells,
             "extras":    extras,
-            # Unidentified-transaction counter (column "TXN"), rendered between
-            # the issue-type cells and the pipeline-progress extras.
-            "txn": {
-                "count": tn,
-                "label": str(tn) if tn > 0 else "—",
-                "cls":   _cell_cls(tn),
-            },
+            # A coluna TXN é preenchida assíncronamente via /txn-counts depois que
+            # a grade renderiza (G é o endpoint mais caro). Aqui vai só um marcador
+            # "pendente" — o front renderiza a célula como "…" e troca quando o
+            # /txn-counts chega.
+            "txn": {"pending": True},
         })
 
     return jsonify({"rows": rows, "date": date})
+
+
+@bp.route("/api/controlpanel/txn-counts")
+def txn_counts():
+    """Contagem de transações não identificadas por empresa (coluna TXN) na data.
+
+    Servido SEPARADO de /rows porque o endpoint G (transactions) é, de longe, o
+    mais caro do grid (~60% do tempo medido) e bloqueava a renderização da tela.
+    O fluxo é: /rows pinta a grade com E + /results; o front então busca esta rota
+    e preenche a coluna TXN — além de ANEXAR linhas de empresas que só têm
+    transações pendentes (sem issue/posição/NAV), preservando o conjunto de
+    empresas que o /rows antigo cobria.
+
+    Cada item já vem com a célula pronta (`{count,label,cls}`) para o front não
+    precisar replicar a regra de cor (`_cell_cls`). Só empresas com count > 0
+    aparecem (o fan-out de G só conta positivos)."""
+    date          = request.args.get("date", get_biz_dates(1)[0])
+    company_names = get_company_names()
+    txn_unident   = _unidentified_txn_count_by_company(date)
+    cf = get_company_filter()
+    items = []
+    for cid, n in txn_unident.items():
+        if cf and cid not in cf:
+            continue
+        items.append({
+            "companyId": cid,
+            "company":   company_names.get(cid, cid),
+            "txn": {"count": n, "label": str(n) if n > 0 else "—", "cls": _cell_cls(n)},
+        })
+    return jsonify({"date": date, "items": items})
 
 
 # ── Per-company issue summary (used by Fluxo apontamentos) ────────────────────
@@ -520,17 +581,13 @@ def issues_summary():
     if not types:
         return jsonify({"companyId": cid, "date": date, "types": [], "total": 0})
 
-    counts = {}
-    for doc in db.issues.aggregate([
-        {"$match": {
-            "status":    "pending",
-            "date":      date,
-            "companyId": cid,
-            "type":      {"$in": types},
-        }},
-        {"$group": {"_id": "$type", "n": {"$sum": 1}}},
-    ]):
-        counts[doc["_id"]] = doc["n"]
+    # Counts come from the pre-processing endpoint (E) — the SAME source the
+    # Painel grid uses (`_preproc_counts`), so the apontamento summary and the
+    # grid can never drift. Replaces the direct `db.issues.aggregate`. One E
+    # call per (company, date); empty/failed → all-zero counts.
+    statuses = beehus_catalog.preprocessing_status_many([cid], date)
+    st = statuses.get(cid)
+    counts = _counts_from_status(st) if st else {}
 
     # Preserve the order requested by the caller so the UI can render the
     # apontamento list deterministically — order in ISSUE_TYPES matches the
@@ -583,15 +640,16 @@ def get_detail():
 
     wallet_names = get_wallet_names()
 
+    # Issues vêm do pre-processing (E) via `beehus_catalog.issues_detail` — os
+    # mesmos arrays `*Detailed` que o grid já consome, expandidos por
+    # affectedWallets (1 linha por security×carteira). Drop-in do antigo
+    # `db.issues.find({companyId, status:'pending', date, type})`; validado ao
+    # vivo == Mongo nos 5 tipos. O enriquecimento (walletName/beehusName/mainId)
+    # segue abaixo, igual a antes.
     issues = sorted([
         {**_format_issue(issue),
          "walletName": wallet_names.get(str(issue.get("walletId", "") or ""), "")}
-        for issue in db.issues.find(
-            {"companyId": cid, "status": "pending", "date": date, "type": typ},
-            {"_id": 0, "type": 1, "description": 1, "walletId": 1,
-             "externalId": 1, "externalOrigin": 1, "securityId": 1,
-             "unprocessedSecurityId": 1, "createdAt": 1}
-        )
+        for issue in beehus_catalog.issues_detail(cid, date, typ)
     ], key=lambda x: x["createdAt"])
 
     # Enrich with beehusName from securities collection
@@ -607,9 +665,7 @@ def get_detail():
     if sec_ids:
         sec_map = {
             str(s["_id"]): s
-            for s in db.securities.find(
-                {"_id": {"$in": sec_ids}}, {"beehusName": 1, "mainId": 1}
-            )
+            for s in beehus_catalog.securities_by_ids(sec_ids).values()
         }
     for issue in issues:
         sec = sec_map.get(issue.get("securityId", "")) or {}
@@ -662,8 +718,8 @@ _PROCESSING_BLOCKING_ISSUE_TYPES = (
 def _wallets_for_company(company_id):
     """List of {id, name} for the given company, sorted by name."""
     out = []
-    for w in db.wallets.find({"companyId": company_id}, {"_id": 1, "name": 1}):
-        out.append({"id": str(w["_id"]), "name": (w.get("name") or "")})
+    for wid, nm in beehus_catalog.wallets_for_company(company_id).items():
+        out.append({"id": wid, "name": (nm or "")})
     out.sort(key=lambda w: (w["name"] or w["id"]).lower())
     return out
 
@@ -689,40 +745,27 @@ def _untrashed_groupings_for_company(company_id):
 
 
 def _processed_done_wallets(company_id, date, wallet_ids):
-    """Set of walletIds (str) with a processedPosition for the date. The
-    collection has no companyId field; we narrow by walletId to keep the
-    scan tight."""
+    """Set of walletIds (str) with a processedPosition for the date.
+
+    Via endpoint A (`processed_existing_wallets`, walletIds plural numa data),
+    com fallback Mongo."""
     if not wallet_ids:
         return set()
-    done = set()
-    for doc in db.processedPosition.find(
-        {"positionDate": date, "walletId": {"$in": list(wallet_ids)}},
-        {"walletId": 1},
-    ):
-        wid = str(doc.get("walletId") or "")
-        if wid:
-            done.add(wid)
-    return done
+    return beehus_catalog.processed_existing_wallets(company_id, date, wallet_ids)
 
 
-def _unprocessed_existing_wallets(date, wallet_ids):
+def _unprocessed_existing_wallets(company_id, date, wallet_ids):
     """Set of walletIds (str) that have at least one
     `unprocessedSecurityPositions` doc for the date. Surfaces in the
     "Posições Processadas" drill-down so operators can tell whether a
     pending wallet is waiting on raw positions arriving from upstream
     (no unprocessed doc yet) vs waiting on the processing step itself
-    (unprocessed doc exists but no processedPosition yet)."""
+    (unprocessed doc exists but no processedPosition yet).
+
+    Via endpoint B (`unprocessed_existing_wallets`), com fallback Mongo."""
     if not wallet_ids:
         return set()
-    done = set()
-    for doc in db.unprocessedSecurityPositions.find(
-        {"positionDate": date, "walletId": {"$in": list(wallet_ids)}},
-        {"walletId": 1},
-    ):
-        wid = str(doc.get("walletId") or "")
-        if wid:
-            done.add(wid)
-    return done
+    return beehus_catalog.unprocessed_existing_wallets(company_id, date, wallet_ids)
 
 
 def _blocking_issues_by_wallet(company_id, date, wallet_ids):
@@ -734,79 +777,36 @@ def _blocking_issues_by_wallet(company_id, date, wallet_ids):
     specific wallet in the UI."""
     if not wallet_ids:
         return {}
-    label_by_type = dict(ISSUE_TYPES)
-    by_wallet = {}
-    cursor = db.issues.aggregate([
-        {"$match": {
-            "companyId": company_id,
-            "status":    "pending",
-            "date":      date,
-            "type":      {"$in": list(_PROCESSING_BLOCKING_ISSUE_TYPES)},
-            "walletId":  {"$in": list(wallet_ids)},
-        }},
-        {"$group": {
-            "_id": {"w": "$walletId", "t": "$type"},
-            "n":   {"$sum": 1},
-        }},
-    ])
-    for doc in cursor:
-        wid = str(doc["_id"].get("w", "") or "")
-        typ = doc["_id"].get("t", "")
-        n   = doc.get("n", 0)
-        if not wid or not typ:
-            continue
-        by_wallet.setdefault(wid, {})[typ] = n
-
-    # Sort each wallet's issue list using the canonical pipeline order so
-    # the chips read left-to-right as "earliest blocker first".
-    result = {}
-    for wid, type_counts in by_wallet.items():
-        items = []
-        for typ in _PROCESSING_BLOCKING_ISSUE_TYPES:
-            if typ in type_counts:
-                items.append({
-                    "type":  typ,
-                    "label": label_by_type.get(typ, typ),
-                    "count": int(type_counts[typ]),
-                })
-        if items:
-            result[wid] = items
-    return result
+    # Sourced from the pre-processing endpoint (get_preprocessing_status) via
+    # beehus_catalog, which returns {walletId: [{type, label, count}, ...]} in
+    # the canonical pipeline order ({} if the endpoint shape isn't recognised).
+    # As contagens do grid (/rows) também vêm do E (via _preproc_counts) e os
+    # date-cards não têm mais contador (puro get_biz_dates, sem DB). Ainda no
+    # Mongo só os drill-downs (on-click, não a tela inicial): issues-summary e
+    # detail (lista de docs individuais).
+    return beehus_catalog.blocking_issues_by_wallet(
+        company_id, date, wallet_ids,
+        _PROCESSING_BLOCKING_ISSUE_TYPES, dict(ISSUE_TYPES))
 
 
 def _nav_done_wallets(company_id, date):
-    """Set of walletIds (str) that have an untrashed NAV navPackages doc
-    for (companyId, positionDate). Only docs with `walletId` set count —
-    grouping-level docs go through `_nav_done_groupings`."""
-    done = set()
-    for doc in db.navPackages.find(
-        {"companyId": company_id, "positionDate": date,
-         "trashed": {"$ne": True},
-         "walletId": {"$exists": True, "$ne": None}},
-        {"walletId": 1},
-    ):
-        wid = str(doc.get("walletId") or "")
-        if wid:
-            done.add(wid)
-    return done
+    """Set of walletIds (str) com NAV calculado em (companyId, positionDate).
+    Via endpoint consolidado `/results` (1 chamada, ao vivo), fallback Mongo."""
+    res = beehus_catalog.nav_results(company_id, date)
+    return {beehus_catalog.id_str(w.get("walletId"))
+            for w in res.get("walletsWithNavDetailed", [])
+            if beehus_catalog.id_str(w.get("walletId"))}
 
 
 def _nav_done_groupings(company_id, date, *, only_published=False):
-    """Set of groupingIds (str) that have an untrashed NAV navPackages
-    doc for (companyId, positionDate). When `only_published=True` we also
-    require `published == True`, matching the "Published" column."""
-    match = {
-        "companyId":    company_id,
-        "positionDate": date,
-        "trashed":      {"$ne": True},
-        "groupingId":   {"$exists": True, "$ne": None},
-    }
-    if only_published:
-        match["published"] = True
-    return {
-        str(gid) for gid in db.navPackages.distinct("groupingId", match)
-        if gid
-    }
+    """Set of groupingIds (str) com NAV calculado em (companyId, positionDate).
+    `only_published=True` exige `published == true` (coluna "Published").
+    Via endpoint consolidado `/results`, fallback Mongo."""
+    res = beehus_catalog.nav_results(company_id, date)
+    return {beehus_catalog.id_str(g.get("groupingId"))
+            for g in res.get("groupingsDetailed", [])
+            if beehus_catalog.id_str(g.get("groupingId"))
+            and (not only_published or g.get("published"))}
 
 
 @bp.route("/api/controlpanel/cell-detail")
@@ -871,7 +871,7 @@ def cell_detail():
         # doc) or because processing simply hasn't run yet (unprocessed
         # doc exists). Only relevant for the "Posições Processadas"
         # drill-down, so we skip the query for `nav_wallet`.
-        unprocessed_set = _unprocessed_existing_wallets(date, wallet_ids)
+        unprocessed_set = _unprocessed_existing_wallets(company_id, date, wallet_ids)
         # Blocking issues per wallet — surfaced only for the "Posições
         # Processadas" view so the operator can tell *why* an
         # unprocessed wallet hasn't reached `processedPosition`.
@@ -1011,26 +1011,27 @@ def security_type_fields():
 
 
 def _batch_pu(company_id, date, unprocessed_ids):
-    """Return {unprocessedId: pu} from the most recent unprocessedSecurityPositions.
+    """Return {unprocessedId: pu} from `unprocessedSecurityPositions` on the
+    selected `date`, via the Beehus API (endpoint B) — not Mongo.
 
-    Strategy: fetch the most recent position docs (one per wallet) and scan
-    their securities arrays in Python. Much faster than $unwind aggregation
-    on a large collection.
+    Lê via `beehus_catalog.unprocessed_docs_map` (→ unprocessed-security-positions,
+    range de 1 dia = a data exata), escopado às carteiras da empresa, e varre os
+    `securities[]` retornados pelo PU de cada `unprocessedId`. Só a **data
+    selecionada** é consultada (não a posição mais recente ≤ data). `{}` quando
+    falta company/date/ids ou a API falha (sem Mongo).
     """
-    if not company_id or not unprocessed_ids:
+    if not company_id or not unprocessed_ids or not date:
         return {}
-    query = {"companyId": company_id}
-    if date:
-        query["positionDate"] = {"$lte": date}
+    wallet_ids = [w.get("_id") for w in beehus_catalog.wallets_in_company(company_id)
+                  if w.get("_id")]
+    if not wallet_ids:
+        return {}
+    docs_map = beehus_catalog.unprocessed_docs_map(company_id, wallet_ids, [date])
 
     pu_map = {}
     remaining = set(unprocessed_ids)
-
-    # Fetch recent position docs, most recent first. Each doc is one wallet+date.
-    for doc in db.unprocessedSecurityPositions.find(
-        query, {"securities.unprocessedId": 1, "securities.pu": 1}
-    ).sort("positionDate", -1).limit(200):
-        for sec in doc.get("securities", []):
+    for doc in docs_map.values():
+        for sec in doc.get("securities") or []:
             uid = sec.get("unprocessedId")
             if uid and uid in remaining:
                 pu_map[uid] = sec.get("pu")
@@ -1040,48 +1041,44 @@ def _batch_pu(company_id, date, unprocessed_ids):
     return pu_map
 
 
-def _batch_last_price(security_ids, target_date=None):
-    """Return {securityId: {value, date}} from securityPrices.historyPrice.
-
-    If target_date (YYYY-MM-DD) is given, return the entry on that date; if
-    no exact match exists, fall back to the nearest available by absolute
-    day distance. Without target_date, returns the last entry (legacy).
-    """
+def _batch_last_price(security_ids, target_date=None, *, company_id=None,
+                      entity_id=None, wallet_id=None):
+    """`{securityId: {value, date}}` do record de preço RESOLVIDO (escopo
+    company/entity/wallet → C3→C2→C1→B2→B1) via seam (`filtered-security-price`;
+    só `status=="approved"`/não-trashed). Sem `target_date`: última entrada. Com
+    `target_date`: a entrada exata, senão a mais próxima por |Δdias|. Sem contexto
+    de carteira, resolve o B1 global. Substitui os reads diretos de
+    `db.securityPrices`."""
     price_map = {}
     if not security_ids:
         return price_map
 
+    hp_map = beehus_catalog.security_prices_resolved(
+        list(security_ids), company_id=company_id, entity_id=entity_id,
+        wallet_id=wallet_id)
+
     if not target_date:
-        for doc in db.securityPrices.find(
-            {"securityId": {"$in": list(security_ids)}},
-            {"securityId": 1, "historyPrice": {"$slice": -1}},
-        ):
-            sid = doc.get("securityId")
-            hp = doc.get("historyPrice", [])
-            if sid and hp:
-                price_map[sid] = {"value": hp[0].get("value"), "date": str(hp[0].get("date", ""))[:10]}
+        for sid, hp in hp_map.items():
+            if not hp:
+                continue
+            last = max(hp, key=lambda e: str(e.get("date", "")))
+            price_map[sid] = {"value": last.get("value"),
+                              "date": str(last.get("date", ""))[:10]}
         return price_map
 
     from datetime import datetime
     try:
         target_dt = datetime.strptime(target_date[:10], "%Y-%m-%d")
     except (ValueError, TypeError):
-        # Malformed target → fall back to last-entry behaviour rather than error.
-        return _batch_last_price(security_ids)
+        # target malformado → cai no comportamento "última entrada".
+        return _batch_last_price(security_ids, company_id=company_id,
+                                 entity_id=entity_id, wallet_id=wallet_id)
 
-    for doc in db.securityPrices.find(
-        {"securityId": {"$in": list(security_ids)}},
-        {"securityId": 1, "historyPrice": 1},
-    ):
-        sid = doc.get("securityId")
-        hp = doc.get("historyPrice") or []
-        if not sid or not hp:
-            continue
-
+    for sid, hp in hp_map.items():
         exact = None
         best = None
         best_diff = None
-        for entry in hp:
+        for entry in (hp or []):
             d_str = str(entry.get("date", ""))[:10]
             if not d_str:
                 continue
@@ -1217,6 +1214,7 @@ def match_securities():
                     "securityId": top["securityId"],
                     "mainId":     top["mainId"],
                     "beehusName": top["beehusName"],
+                    "indexer":    top.get("indexer", ""),
                     "score":      top["score"],
                     "confidence": top["confidence"],
                     "matched_on": top["matched_on"],
@@ -1271,8 +1269,8 @@ def security_mapping_id():
         return jsonify({"securityMappingId": None, "error": "missing companyId"}), 400
     if not company_visible(company_id):
         return jsonify({"securityMappingId": None, "error": "company not visible"}), 403
-    doc = db.securityMappings.find_one({"companyId": company_id}, {"_id": 1})
-    return jsonify({"securityMappingId": str(doc["_id"]) if doc else None})
+    smid = beehus_catalog.security_mapping_id(company_id)
+    return jsonify({"securityMappingId": smid})
 
 
 @bp.route("/api/controlpanel/apply-mapping", methods=["POST"])
@@ -1307,10 +1305,9 @@ def apply_mapping():
             return jsonify({"error": "each mapping requires non-empty 'from' and 'to'"}), 400
         cleaned.append({"from": frm, "to": to})
 
-    doc = db.securityMappings.find_one({"companyId": company_id}, {"_id": 1})
-    if not doc:
+    mapping_id = beehus_catalog.security_mapping_id(company_id)
+    if not mapping_id:
         return jsonify({"error": "securityMappingId not found for this company"}), 404
-    mapping_id = str(doc["_id"])
 
     try:
         result = update_security_mappings(
@@ -1413,6 +1410,7 @@ def search_securities():
                 "taxId":        s.get("taxId", ""),
                 "isIn":         s.get("isIn", ""),
                 "selicCode":    s.get("selicCode", ""),
+                "indexer":      s.get("indexer", ""),
                 "securityType": s.get("securityType", ""),
                 "maturityDate": s.get("maturityDate", ""),
             })
@@ -1426,6 +1424,46 @@ def search_securities():
         import traceback
         log.error("search_securities error: %s", traceback.format_exc())
         return jsonify({"results": [], "error": "internal error"}), 500
+
+
+# Max business days to walk back when a wallet has no processedPosition on the
+# requested date. The processed-position API is single-date (no server-side
+# "most recent <= date"), so we reproduce the old Mongo `.sort(positionDate,-1)`
+# fallback with a bounded backward scan — gaps are almost always weekends or a
+# single holiday, so a week of business days covers the realistic cases without
+# fanning out (one API call per company per day, only for wallets still missing).
+_WALLET_POS_MAX_BACK_DAYS = 7
+
+
+def _latest_positions_by_wallet(company_to_wids, end_date):
+    """`{walletId_str: securities_list}` for the most recent processedPosition
+    with positionDate <= end_date, per wallet.
+
+    API-only via `beehus_catalog.processed_positions_map` (the processed-position
+    route), grouped by company. Replaces the direct
+    `db.processedPosition.find({walletId:$in[, positionDate<=date]}).sort(positionDate,-1)`
+    that picked the latest snapshot per wallet. Walks back at most
+    `_WALLET_POS_MAX_BACK_DAYS` business days for wallets without a snapshot on
+    `end_date`; a wallet still missing after that is simply absent from the map."""
+    out = {}
+    for cid, wids in company_to_wids.items():
+        if not cid:
+            continue
+        remaining = set(wids)
+        d = end_date
+        tries = 0
+        while remaining and tries <= _WALLET_POS_MAX_BACK_DAYS:
+            # Single date per call keeps the map robust: processed_positions_map
+            # returns {} only if THIS date's fetch errors, so a bad day just
+            # falls through to the prior one instead of nuking earlier hits.
+            pos_map = beehus_catalog.processed_positions_map(cid, list(remaining), [d])
+            for (wid, _pd), secs in pos_map.items():
+                if wid in remaining:
+                    out[wid] = secs or []
+                    remaining.discard(wid)
+            d = business_days_before(d, 1)
+            tries += 1
+    return out
 
 
 @bp.route("/api/controlpanel/wallet-positions")
@@ -1457,6 +1495,13 @@ def wallet_positions():
     """
     import logging
     log = logging.getLogger(__name__)
+    # Identification is an instance-role feature, hidden in the UI when off
+    # (templates/controlpanel.html). The data itself now comes from the
+    # processed-position API (no Mongo), so this gate only mirrors the
+    # instance role; the modal's "Cadastro" source (global securities cache,
+    # API-backed) remains available regardless.
+    if not IDENTIFICAR_ENABLED:
+        return jsonify({"results": [], "walletsScanned": 0, "securityCount": 0})
     try:
         raw_ids = (request.args.get("walletIds") or "").strip()
         date    = (request.args.get("date") or "").strip() or None
@@ -1473,47 +1518,41 @@ def wallet_positions():
         # Resolve wallet names + enforce company visibility. Without this an
         # operator could exfiltrate positions from a wallet the company filter
         # would otherwise hide.
-        wallets = list(db.wallets.find(
-            {"_id": {"$in": [ObjectId(w) for w in wallet_ids if ObjectId.is_valid(w)]}},
-            {"name": 1, "companyId": 1},
-        ))
         cf = get_company_filter()
         visible_wallets = {}
-        for w in wallets:
-            wid = str(w["_id"])
-            cid = str(w.get("companyId") or "")
+        company_to_wids = {}   # companyId -> [walletId, ...] (for the API fetch)
+        for w in wallet_ids:
+            if not ObjectId.is_valid(w):
+                continue
+            doc = beehus_catalog.wallet_doc(w)
+            if not doc:
+                continue
+            wid = beehus_catalog.id_str(doc.get("_id")) or w
+            cid = str(doc.get("companyId") or "")
             if cf and cid not in cf:
                 continue
-            visible_wallets[wid] = w.get("name") or wid
+            visible_wallets[wid] = doc.get("name") or wid
+            company_to_wids.setdefault(cid, []).append(wid)
         if not visible_wallets:
             return jsonify({"results": [], "walletsScanned": 0, "securityCount": 0})
 
-        # Latest processedPosition per wallet. We sort once per wallet so a
-        # missing positionDate on the requested day falls back to the most
-        # recent prior snapshot — the operator usually wants "whatever the
-        # wallet last looked like" rather than an empty list.
-        query_base = {"walletId": {"$in": list(visible_wallets.keys())}}
-        if date:
-            query_base["positionDate"] = {"$lte": date}
+        # Latest processedPosition per wallet, via the processed-position API
+        # (no Mongo). The API is single-date, so `_latest_positions_by_wallet`
+        # reproduces the old `.sort(positionDate,-1)` "most recent <= date"
+        # fallback with a bounded backward scan. Default to today (BRT) when no
+        # date is supplied — the old "latest available" needs a concrete date
+        # without a server-side sort.
+        end_date = date or today_in_brt().isoformat()
+        positions = _latest_positions_by_wallet(company_to_wids, end_date)
 
         # {securityId: {pu, quantity, pricingType, walletIds[], walletNames[]}}
         by_security = {}
         wallets_with_snapshot = set()
-        seen_wallets = set()
-        for doc in db.processedPosition.find(
-            query_base,
-            {"walletId": 1, "positionDate": 1, "securities.securityId": 1,
-             "securities.pu": 1, "securities.quantity": 1,
-             "securities.pricingType": 1},
-        ).sort("positionDate", -1):
-            wid = str(doc.get("walletId") or "")
-            if not wid or wid in seen_wallets:
-                continue
-            seen_wallets.add(wid)
+        for wid, securities in positions.items():
             wallets_with_snapshot.add(wid)
             wname = visible_wallets.get(wid, wid)
-            for s in doc.get("securities") or []:
-                sid = str(s.get("securityId") or "")
+            for s in securities or []:
+                sid = beehus_catalog.id_str(s.get("securityId")) or ""
                 if not sid:
                     continue
                 entry = by_security.setdefault(sid, {
@@ -1526,8 +1565,6 @@ def wallet_positions():
                 if wid not in entry["walletIds"]:
                     entry["walletIds"].append(wid)
                     entry["walletNames"].append(wname)
-            if len(seen_wallets) >= len(visible_wallets):
-                break
 
         if not by_security:
             return jsonify({
@@ -1553,12 +1590,7 @@ def wallet_positions():
                 except (TypeError, ValueError):
                     continue
             if oids:
-                for s in db.securities.find(
-                    {"_id": {"$in": oids}},
-                    {"beehusName": 1, "mainId": 1, "ticker": 1, "taxId": 1,
-                     "isIn": 1, "selicCode": 1, "securityType": 1,
-                     "maturityDate": 1},
-                ):
+                for s in beehus_catalog.securities_by_ids(oids).values():
                     cache_by_id[str(s["_id"])] = {
                         "_id":          str(s["_id"]),
                         "beehusName":   s.get("beehusName", ""),
@@ -1567,6 +1599,7 @@ def wallet_positions():
                         "taxId":        s.get("taxId", ""),
                         "isIn":         s.get("isIn", ""),
                         "selicCode":    s.get("selicCode", ""),
+                        "indexer":      s.get("indexer", ""),
                         "securityType": s.get("securityType", ""),
                         "maturityDate": str(s.get("maturityDate") or ""),
                     }
@@ -1582,6 +1615,7 @@ def wallet_positions():
                 "taxId":        meta.get("taxId", ""),
                 "isIn":         meta.get("isIn", ""),
                 "selicCode":    meta.get("selicCode", ""),
+                "indexer":      meta.get("indexer", ""),
                 "securityType": meta.get("securityType", ""),
                 "maturityDate": str(meta.get("maturityDate", ""))[:10],
                 "pu":           info["pu"],
@@ -1645,12 +1679,15 @@ def last_price():
 def cache_status():
     """Return current cache state so the frontend can show refresh prompts."""
     cache = get_cache()
+    mcache = get_mapping_cache()
     return jsonify({
         "loaded":     cache.is_loaded,
         "stale":      cache.is_stale,
         "loadedDate": cache.loaded_date,
         "count":      cache.count,
         "classifierReady": _clf is not None,
+        "mappingLoaded": mcache.is_loaded,
+        "mappingCount":  mcache.count,
     })
 
 
@@ -1667,6 +1704,18 @@ def warmup():
             else:
                 cache.load_from_db(db)
                 actions.append("cache_from_db")
+
+        # Warm the security-mappings cache (drives Recalcular) — today's file or
+        # API. Best-effort: a failure here must never break the warmup.
+        try:
+            mcache = get_mapping_cache()
+            if mcache.ensure_loaded():
+                actions.append("mapping_cache_from_api")
+            elif mcache.is_loaded:
+                actions.append("mapping_cache_ready")
+        except Exception:
+            import logging
+            logging.warning("warmup: mapping cache warm failed", exc_info=True)
 
         # Train classifier if not ready
         if _get_classifier() is not None:
@@ -1766,7 +1815,12 @@ def export_c3():
 @bp.route("/api/controlpanel/rebuild-mapping", methods=["POST"])
 def rebuild():
     from security_type_classifier import rebuild_mapping
-    total, mapped = rebuild_mapping(db)
+    # The operator clicks Recalcular right after labelling new mappings, so pull
+    # a fresh copy from upstream before regenerating the corpus: drop the
+    # all_mappings TTL and force the MappingCache off its daily file.
+    beehus_catalog.invalidate("all_mappings")
+    get_mapping_cache().refresh()
+    total, mapped = rebuild_mapping()
     reset_classifier()
     _reset_matcher()
     # Also refresh cache since securities may have changed

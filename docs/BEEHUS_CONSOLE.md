@@ -47,12 +47,32 @@ expire upstream; a stale reload just yields a 401 on the next call and the
 operator re-pastes — persistence only saves the re-paste while the token is
 still valid (e.g. a mid-day restart). `clear_token` (DELETE) removes the file.
 
-- UI: clickable badge in the page header (`Token: …`) opens a modal where
-  the user pastes the JWT.
+- UI: the **`Token` button lives in the global sidebar** (`templates/shell.html`,
+  bottom nav block) — it opens a shell-owned modal that hits the API directly,
+  so it works on every screen hosted in the iframe regardless of that screen's
+  own markup. A coloured badge on the button shows state (green `Nm` = loaded /
+  red `—` = none). Screens that used to carry their own Token button hide it
+  when embedded in the shell (`?_frame=1`): `controlpanel.html` hides its
+  favorites-bar `#chip-token`, `beehus_console.html` hides its whole header.
+  Standalone pages outside the shell (e.g. direct `/correcoes`, direct `/beehus`)
+  keep their own in-page Token badge as the only affordance there.
 - Routes: `GET / POST / DELETE /api/beehus/token`.
-- Refresh policy: the badge is refreshed on page load and after **any
-  action that exercises the token** (create/delete txn, process/delete
-  positions, calculate/publish NAV, etc.). No periodic polling.
+- Refresh policy: the sidebar badge is refreshed on shell load, whenever the
+  modal opens, and after save/clear. In-frame screens also mirror their own
+  `Token.refresh()` to the sidebar via a `beehus-token-state` postMessage
+  (e.g. after a 401), so the badge stays current. No periodic polling.
+- **Global expiry banner** (`templates/partials/_token_banner.html`): because the
+  dashboard reads everything from the API with **no Mongo fallback**, an
+  expired/absent in-process token makes pages fail *silently* (empty lists, no
+  error). The banner closes that gap: a fixed red top bar that polls
+  `GET /api/beehus/token` on load, every 60 s, and on tab-focus, showing
+  "Token Beehus expirado/ausente — colar token →" (links to `/beehus`) until the
+  token is valid again. `token_status()` now returns `exp` (JWT `exp` claim,
+  decoded **without** signature verification) and `expired` (bool, computed from
+  the **in-process** token — so an instance whose in-memory token aged out is
+  detected even when the file already holds a fresh one a sibling process
+  pasted). Included by `shell.html` (top-level host) and by `base.html` only when
+  **not** framed (`?_frame=1`), so it never double-renders inside an iframe.
 
 ---
 
@@ -62,7 +82,7 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 
 | Route | Purpose |
 |---|---|
-| `GET /api/beehus/filters/companies` | Companies visible to the current user |
+| `GET /api/beehus/filters/companies` | Companies visible to the current user (API-backed via `list_companies` → `GET /beehus/partners/companies`). **Sempre devolve um array `[{id,name}]`** (vazio inclusive) — o shape nunca muda, então os consumidores que fazem `r.body.map(...)` não quebram. Quando o array vier **vazio**, o MOTIVO vai no header **`X-Companies-Empty-Reason`** (token expirado/ausente via `BeehusAuthError`, falha de rede, ou todas as empresas excluídas pelo filtro de visibilidade em Configurações). Só o dropdown Day-trade do Painel lê esse header para exibir a mensagem; as demais dropdowns o ignoram. O `{}` de falha **não** fica em cache (ver `beehus_catalog.company_names`), então re-colar o token recarrega na próxima chamada |
 | `GET /api/beehus/filters/groupings?companyId=` | Groupings of a company (uses `groupings.companyId`; `walletIds` extracted from embedded `wallets[].walletId`) |
 | `GET /api/beehus/filters/wallets?companyId=&groupingId=` | Wallets of a company, optionally narrowed by a grouping. Returns `{id, name, entityId, entityName}` per row |
 | `GET /api/beehus/filters/entities?companyId=` | Entities reachable through the company's wallets |
@@ -70,7 +90,6 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 | `GET /api/beehus/filters/wallets-with-position?companyId=&positionDate=` | Wallets that have a `processedPosition` for that company + date — drives the Excluir Posições "Disponíveis" pane in **data única** mode (range mode skips this pre-filter and lets the upstream resolve eligibility per day) |
 | `GET /api/beehus/filters/groupings-by-publish-state?companyId=&positionDate=&published=true\|false` | Groupings whose `navPackages.published` matches — drives Publicar / Despublicar Agrupamentos |
 | `GET /api/beehus/filters/grouping-return-deltas?companyId=&positionDate=&published=true\|false` | Per-grouping `{groupingId, groupingName, returnNavPerShare, returnContribution, deltaAbs}` from `navPackages` for that company + date. Aggregated as the **worst wallet** in each grouping (the navPackage doc with the largest `|returnNavPerShare − returnContribution|`); reported `returnNavPerShare`/`returnContribution` come from that worst-wallet doc. Sorted by `deltaAbs` desc, nulls last. Drives the Publicar Agrupamentos "Agrupamentos — diferença ≥ limite" table. `published` defaults to `false` |
-| `POST /api/beehus/filters/grouping-id-classify` | Body `{companyId, positionDate, groupingIds[]}`. Classifies each id by why it would be excluded from the publish-eligibility list — reasons (priority order): `not_found`, `trashed`, `wrong_company`, `not_calculated`, `navpackage_trashed`, `already_published`, `eligible` (anomaly). Returns `{summary, perId}`. Cap of 5000 ids per request. Used by the Publicar Agrupamentos upload diagnostic |
 
 **Schema notes (verified against production):**
 
@@ -91,7 +110,7 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 | `POST /api/beehus/transactions` | `POST /beehus/financial/transactions` | Create a financial transaction |
 | `DELETE /api/beehus/transactions/<id>` | `DELETE /beehus/financial/transactions/<id>` | Delete one transaction |
 | `PATCH /api/beehus/transactions/<id>` | `PATCH /beehus/financial/transactions/<id>` | Partial update — body keys filtered to the patchable set (`balance`, `beehusTransactionType`, `currencyId`, `description`, `entityId`, `liquidationDate`, `operationDate`, `securityId`); unknown keys are dropped server-side |
-| `POST /api/beehus/transactions/search` | — | **Local Mongo** search (no upstream call) for the Editar Transações and Identificar Transações tables. Accepts `groupingIds[]` (preferred, multi) or legacy `groupingId` (str), plus an optional `identified` filter (`'true'` = `beehusTransactionType` filled, `'false'` = empty/missing, anything else = both buckets). **Grouping scope is a union, not a narrowing:** a row matches if its `walletId` is in the (grouping-narrowed) wallet set **OR** its own `groupingId` is one of the selected groupings — so transactions attached directly to a grouping (whose `walletId` is outside the grouping's members, or null) are listed alongside the wallet-level rows. Selected groupings are validated against the company via `get_grouping_index()`; the `groupingId` IN-clause spans both string and ObjectId representations (the field is stored as ObjectId in production). Sort: **`liquidationDate` desc** (most recent settlement first). cap: 10 000 rows (`truncated: true` when reached) |
+| `POST /api/beehus/transactions/search` | `GET /beehus/financial/transactions` (endpoint G, via `beehus_catalog.transactions_search`) | Search for the Editar Transações and Identificar Transações tables. Accepts `groupingIds[]` (preferred, multi) or legacy `groupingId` (str), plus an optional `identified` filter (`'true'` = `beehusTransactionType` filled, `'false'` = empty/missing, anything else = both buckets). **Grouping scope is a union, not a narrowing:** a row matches if its `walletId` is in the (grouping-narrowed) wallet set **OR** its own `groupingId` is one of the selected groupings — so transactions attached directly to a grouping (whose `walletId` is outside the grouping's members, or null) are listed alongside the wallet-level rows. The endpoint ANDs its filters, so the wallet⋁grouping OR is run as two searches unioned by `_id`; the type/`identified`/`trashed` predicates, the `liquidationDate`-desc sort and the cap are reapplied client-side. Selected groupings are validated against the company via `get_grouping_index()`; the `groupingId` IN-clause spans both string and ObjectId representations (the field is stored as ObjectId in production). **`walletIds` is chunked to 150/request** in `list_transactions` (like the positions client) — an empty `walletIds` widens to the company's full wallet set (often hundreds–thousands of ids), whose CSV would otherwise blow the URL limit and the host would drop the connection (HTTP 414-class), silently returning `[]`. Sort: **`liquidationDate` desc** (most recent settlement first). cap: 10 000 rows (`truncated: true` when reached) |
 | `GET / PUT /api/beehus/identify-transactions/config` | — | Load / replace the `typesNeedingSecurity[]` list used by Identificar Transações to decide whether each row's security cell is editable. GET also returns `allTypes[]` (the full known catalogue of `beehusTransactionType` values) so the config modal can render every checkbox without a second round-trip. Persisted to `data/identify_transactions_config.json` via the same atomic-replace helper used by `conciliacao_config.json` |
 | `POST /api/beehus/identify-transactions/identify` | — | Body `{transactionIds: [str]}` (cap 5000). Returns one suggestion per id `{transactionId, beehusTransactionType, securityId, needsSecurity, securityAlternatives:[...]}`. Each alternative carries `source ∈ {level1, level2, collection}` so the security-edit modal can split them into three groups (L1 = carteira em T, L2 = carteira em T-1/T-2, L3 = cadastro completo). The identification heuristic itself is currently a **stub** — see `_suggest_for_transaction` in `pages/beehus_console.py`. Each suggestion is also enriched (one batch pass, `_compute_execution_extras`) with the **Preço exec. / IRRF** fields `{executionPrice, irrf, pu, amountDifference, securityType, formerDate, withinGate, execGroupKey}` — see the *Preço de execução & IRRF* subsection below |
 | `POST /api/beehus/identify-transactions/execution-extras` | `POST /beehus/financial/execution-prices` + `POST /beehus/financial/transactions` | Fired by **Implementar** after the per-row PATCHes. Body `{executionPrices:[{walletId, securityId, positionDate, executionPrice}], taxes:[{sourceTransactionId, balance}]}`. `companyId` is resolved server-side from the wallet (transactions carry none); each IRRF item creates a new `taxes` transaction copying entity/wallet/security/dates/currency from its source. Returns `{execOk, execFail, taxOk, taxFail, errors[]}`; an upstream 401 aborts the rest |
@@ -124,94 +143,81 @@ card → action card → result panel layout.
 
 | # | Group | Cards |
 |---|---|---|
-| 1 | **Lançamentos** | Editar Transações · Excluir Transações · Identificar Transações · Excluir Provisões |
+| 1 | **Lançamentos** | Transações (Identificar / Editar / Excluir) · Excluir Provisões |
 | 2 | **Posições** | Processar Posições · Excluir Posições (data única ou faixa) · Processar por datas |
 | 3 | **NAV Wallets, Explosões e NAV Groupings** | Calcular NAV Wallets · Proporcionalizar Explosão · Calcular NAV Groupings |
 | 4 | **Publicação** | Publicar Agrupamentos · Despublicar Agrupamentos · Publicar Agrupamentos por datas |
-| 5 | **Rotina Diária** | Fluxo diário · Reverter dia · Fluxo por datas · Reverter por datas |
 
-The "por datas" cards (groups 2–5) are single-step batch pipelines
-described later in this doc; **Rotina Diária** (group 6) holds the
-multi-step pipelines.
+The "por datas" cards (groups 2–4) are single-step batch pipelines
+described later in this doc. *(O grupo **Rotina Diária** — pipelines multi-step
+Fluxo diário / Reverter dia / Fluxo por datas / Reverter por datas — foi
+**removido em jun/2026**.)*
 
 ### Per-card behavior
 
-- **Editar Transações** — three collapsible filter cards (Empresa+datas /
-  Groupings transfer pane / Wallets transfer pane) plus a 2nd-layer
-  filter card with chip pickers for Entidade, Tipo and Security and the
-  "Buscar transações" / "Limpar" / "Mostrar filtros" actions. The
-  Empresa+datas card has a date-mode switch (data única vs faixa) so a
-  single liquidation date can be targeted without filling both ends.
-  Both the Groupings and Wallets cards have a "⬆ Subir Excel" button
-  (xlsx with one id per cell, no header). The full-width result table
-  has per-row checkboxes plus two action buttons: **Editar selecionadas**
-  (PATCH flow) and **Excluir selecionadas** (DELETE flow). Edit flow:
-  the operator first **ticks the rows** that should be edited (results
-  come pre-checked by default; use "Desmarcar todas" + manual ticks, or
-  uncheck individually). Picking a field from "Configurar edição" then
-  **snapshots the currently-checked txn ids into `_editScope`** and
-  **force-unchecks every row outside the snapshot** so the listing shows
-  exactly what the upcoming PATCH will touch. The modal that opens lists
-  every unique value found in **the scope** (not the full result set) and
-  lets the user map each old value to a new one (or leave blank to skip);
-  save closes the modal and shows a chip with the field name and the
-  count of mapped values. Inside the listing, each cell of the picked
-  field for in-scope rows is **rendered as an input/select** (date input,
-  text input, or the same Tipo/Entidade/Security pickers used in the
-  modal), letting the operator override individual rows without leaving
-  the table — those edits go into `_tempEdits` and win over the
-  bucket-level mapping at PATCH time. Picking another field via the
-  dropdown (or the chip ✎) resnapshots `_editScope` from the current
-  checkbox state and swaps the inline-edited column. Multiple fields can
-  be configured before clicking **Editar selecionadas**, which opens a
-  confirmation report with a per-field summary and per-row breakdown.
-  Confirming runs `PATCH /beehus/financial/transactions/<id>` per
-  affected row. Filter cards auto-collapse after a successful search;
-  "Mostrar filtros" re-expands all three. The result toolbar also
-  exposes **★ Reforço temporário**, a mirror of the same feature in
-  Identificar Transações: type a description snippet, pick a target
-  field (Data de liquidação / Entidade / Tipo / Security / Descrição)
-  and a new value, and the override is stored per matched txn id in
-  `_tempEdits[id][fieldKey]` — affected rows are highlighted amber with
-  a strikethrough "atual → novo" preview. The override is merged into
-  `_computePatches` on top of the bucket-level `_edits` (temp wins on
-  conflict) and is cleared on every new search, on the chip ×, after a
-  successful PATCH, and (for deleted rows) at the end of `runDelete`.
-  Match semantics are identical to the persisted reinforcement
-  (`temp_reinforcement` source on Identificar): mojibake → no accents →
-  UPPERCASE → collapsed spaces, exact-substring required. Two safety
-  guards protect the destructive flow: snippets normalize to **≥ 4
-  characters** (`TEMP_MIN_SNIPPET`) before apply, and batches that
-  touch **more than 20 rows** trigger a confirm() — declining rolls
-  back the just-written entries without leaving partial state.
-  Both long actions of this shared module lock the screen with the global
-  blocking overlay (`showBusy`/`hideBusy`): **Buscar transações** shows
-  "Buscando transações…" while Mongo runs (with an `_opGen` stamp so a
-  double-click's stale response can't clobber a newer one), and **Excluir
-  selecionadas** shows a progressive "Excluindo i/N…" through the per-row
-  DELETE loop. Mirrors Identificar Transações' Buscar / Implementar.
-- **Excluir Transações** — same view as Editar Transações entered through
-  a dedicated menu card (`#delete-only`). The edit-field configurator and
-  the **Editar selecionadas** button are hidden via the
-  `body.delete-only-mode .edit-only` CSS rule, the section title becomes
-  "Excluir Transações — Filtros", and any in-flight edit-field mappings
-  are dropped on entry. Filter, search, selection and the per-row
-  `DELETE /beehus/financial/transactions/<id>` flow are identical to the
-  delete path of Editar Transações.
+- **Transações (Identificar / Editar / Excluir)** — uma tela única
+  (view `#identify`, controlador `IdentifyTxn`) faz as três operações sobre o
+  **mesmo grid**. *(As antigas views "Editar Transações" / "Excluir Transações"
+  — `#delete` / `#delete-only`, controlador `DeleteTxn` — e o body-class
+  `delete-only-mode` foram **removidos em jun/2026**; tudo vive agora na tela de
+  Identificar.)* Os filtros (Empresa + data única/faixa, painéis de
+  transferência de Groupings e Wallets, chips de Entidade/Tipo/Security) e o
+  radio **Não identificadas / Identificadas / Todas** servem aos três fluxos —
+  para editar/excluir transações já identificadas, troque o radio para
+  "Todas"/"Identificadas".
 
-  Above the result table the toolbar exposes a **Filtrar por descrição**
-  text input — a client-side, case-insensitive substring filter over the
-  already-loaded result set (`DeleteTxn._descFilter` / `_visibleTxns`).
-  The typed text must appear **exactly as a substring** of `description`
-  (no accent stripping, no normalisation — the "100% match" contract
-  promised by the placeholder). The filter narrows the visible rows
-  without re-querying Mongo, and "Marcar todas" / "Desmarcar todas" /
-  `DELETE` calls naturally scope to whatever is rendered. The filter
-  resets on every new `search()` and on **Limpar filtros**, and the
-  inline × button next to the input clears it on demand. A
-  `· mostrando X de Y` hint appears whenever the filter is active.
-- **Identificar Transações** — same three-card filter shape as Editar
-  Transações (Empresa+datas / Groupings / Wallets), with a date-mode
+  **Modelo de seleção (importante).** A seleção vive num **conjunto persistente
+  de ids** (`_selSet`), independente do filtro — um checkbox está marcado sse o id
+  ∈ `_selSet`. Uma **busca nova** seleciona todas as linhas; filtros
+  (descrição/tipo/fonte/confiança) e ordenação só mudam **o que é visível**, nunca
+  a seleção. Assim, estreitar e depois alargar um filtro **não** perde marcações
+  (nem re-seleciona silenciosamente — o gatilho de exclusão em massa). As ações
+  (Identificar / Implementar / Editar / Excluir) agem em **visível ∩ selecionado**
+  (`_selectedIds()` = linhas visíveis que estão no `_selSet`), então uma ação sob
+  filtro nunca toca linhas que o operador não vê; os contadores dos botões
+  refletem esse mesmo conjunto, e o modal de exclusão avisa quando há linhas
+  selecionadas fora do filtro (que não serão excluídas).
+
+  **Editar** — escolha um campo em **Configurar edição** (Data de liquidação /
+  Entidade / Tipo / Security / Descrição). O modal lista os valores únicos das
+  linhas **marcadas** e mapeia cada valor atual → novo (em branco = manter); salvar
+  mostra uma pílula com o campo e a contagem de valores mapeados. As células do
+  campo escolhido, **nas linhas marcadas**, viram input/select inline (limitado a
+  `INLINE_EDIT_MAX_ROWS` = 200 linhas; acima disso a coluna inline é omitida e usa-se
+  só o mapeamento por valor). Não há "force-uncheck": a célula editável == linha que
+  irá no PATCH, porque ambas seguem o mesmo checkbox. Overrides por linha vão para
+  `_tempEdits` e vencem o mapeamento por valor; reverter uma célula ao valor atual
+  quando há mapeamento por valor grava um **sentinela de "manter"** (marcado com ⊘)
+  que cancela o bucket só naquela linha. **Editar selecionadas** abre um relatório
+  (resumo por campo + detalhe por transação) e roda
+  `PATCH /beehus/financial/transactions/<id>` por linha afetada
+  (`_computeEditPatches` / `_pendingEditPatches` / `runEdit`). A pílula
+  "✎ Edições por linha" resume os overrides e o × (`clearInlineEdits`) os limpa.
+  Os mapeamentos por valor (`_edits`) são descartados em cada busca nova (sobrevivem
+  só no refresh pós-Implementar). O configurador edita o valor do **banco** (colunas "atual"), separado
+  do fluxo de sugestão (colunas "sugerido"). O botão **★ Reforço temporário
+  (edição)** (no painel "Configurar edição") aplica um valor a um campo em todas
+  as linhas cujo `description` casa com um trecho — grava override por linha em
+  `_tempEdits` (mesmo caminho da edição inline; só as linhas **selecionadas** vão
+  no PATCH, o preview aparece em todas as que casam), com guardas de trecho ≥ 4
+  caracteres e confirmação acima de 20 linhas (`applyEditReinforce`, modal
+  `#i-edit-reinforce-modal`, reusando `_tempNorm`/`_tempScore`). É **distinto** do
+  **★ Reforço temporário** de identificação (que escreve `_suggestions`); os dois
+  coexistem na tela.
+
+  **Excluir** — **Excluir selecionadas** confirma num modal e roda
+  `DELETE /beehus/financial/transactions/<id>` por linha (`confirmDelete` /
+  `runDelete`), removendo as linhas do grid ao final.
+
+  Editar e Excluir usam os **mesmos** endpoints PATCH/DELETE que o "Implementar
+  selecionadas" do Identificar já chamava — a unificação foi só de UI. As ações
+  longas travam a tela com o overlay global (`showBusy`/`hideBusy`): "Editando
+  i/N…" / "Excluindo i/N…". A coluna **TXN** do Painel de Controle continua
+  abrindo esta tela inline e pré-filtrando company+date (`prefillFromPainel`,
+  via `Funcoes.openIdentifyWith`).
+
+- **Identificar Transações** — the same three-card filter shape
+  (Empresa+datas / Groupings / Wallets), with a date-mode
   switch (data única vs faixa) so the user can target a single
   liquidation date without filling both ends. The "Filtros adicionais"
   card carries the usual entity/tipo/security chip pickers plus an
@@ -237,7 +243,7 @@ multi-step pipelines.
   substring filter applied inside `_visibleTxns()` before the confidence
   buckets and the sort. The typed text must appear exactly as a
   substring of `description` (no accent stripping, no normalisation —
-  same "100% match" semantics as the Excluir Transações filter). The
+  same "100% match" semantics as the bulk-edit description filter). The
   filter resets on every new search and on **Limpar filtros**; the ×
   button next to the input clears it on demand. Next to it, a **Tipo**
   dropdown surfaces every distinct **effective type** found in the
@@ -424,11 +430,21 @@ multi-step pipelines.
     leva identificada, de modo que múltiplas execuções parciais no mesmo ativo/dia
     compartilham **um único preço**; `maturity` é por linha. `amountDifference` é o
     `quantity` da própria transação e, **quando ausente**, cai para o Δquantidade
-    entre a posição anterior e a mais recente (`processedPosition`).
+    entre a posição anterior e a mais recente.
   - **IRRF** — para `buySell` de `securityType == brazilianFund` com `balance > 0`
     (resgate de fundo): `IRRF = balance + amountDifference × PU` (resulta ≈ `−imposto`,
-    negativo). **PU** = `processedPosition.securities.pu` da posição mais recente com
+    negativo). **PU** = `securities.pu` da posição mais recente com
     `positionDate ≤ liquidationDate`.
+  - **Fonte das posições (sem Mongo).** PU e Δquantidade vêm da **API
+    processed-position** (endpoint A, `beehus_catalog.processed_doc`), **não do
+    Mongo**. Como A é **data-exata** (sem range/«≤ data»), `_compute_execution_extras`
+    caminha dias úteis para trás a partir do `liquidationDate` até a posição
+    `≤ liq` (d0, p/ o PU) e — só quando o Δqty é realmente necessário (txn **sem**
+    `quantity`) — até a posição anterior (d1), com teto de **25 dias úteis** e cache
+    por `(carteira, data)`. Carteiras de posição **diária** resolvem em 1-2 chamadas
+    e batem 100 % com o Mongo (validado); carteiras com gap > 25 d.u. degradam de
+    forma graciosa (PU `None` / Δqty = quantidade absoluta), como a antiga janela de
+    40 posições já fazia para `liq` fora do seu alcance.
   - **Gate temporal** (ambos): só calcula quando
     `biz_days_between(operationDate, liquidationDate) < 3` (dias úteis seg–sex;
     **feriados não são excluídos** — aproximação, ver `db.biz_days_between`). Fora
@@ -444,10 +460,13 @@ multi-step pipelines.
   - **No Implementar.** Após os PATCHes de tipo/security, o front dispara
     `POST /api/beehus/identify-transactions/execution-extras`: sobe os
     **preços de execução** (deduplicados por wallet/security/data, `positionDate =
-    liquidationDate`) e cria uma transação **`taxes`** por IRRF (copiando
-    company/entity/wallet/security/datas/moeda da transação de origem,
-    `description = "IRRF — <descrição origem>"`). O modal de confirmação lista
-    tudo que será enviado antes do disparo. ⚠ Os valores refletem a identificação
+    liquidationDate`) e cria uma transação **`taxes`** por IRRF (entity/wallet/
+    security/datas/moeda da transação de origem, `description = "IRRF — <descrição
+    origem>"`). Esses campos da origem **vêm do cliente** (a grade já os carregou
+    via `/search`) — o backend **não** re-busca a transação por `_id` no Mongo
+    (mesmo padrão do `/identify`); `companyId` é resolvido da carteira e validado
+    por visibilidade (autorização por carteira visível, não por posse do `_id`).
+    O modal de confirmação lista tudo que será enviado antes do disparo. ⚠ Os valores refletem a identificação
     **no momento do Identificar**; alterar tipo/security depois exige reidentificar
     para recomputar.
 
@@ -470,23 +489,37 @@ multi-step pipelines.
       Cada linha L3 deveria ser revisada com mais cautela: é o sinal de
       que a carteira nunca segurou esse papel.
 
+  **Fonte da posição (L1/L2 e "Expandir posição completa")** — a busca é
+  por data **exata** (T, e T-1/T-2 para L2), preferindo a posição
+  **processada**. Quando a carteira **não tem posição processada** naquela
+  data — típico de carteiras em **tombamento**, que só têm a foto-base
+  processada — cai na posição **bruta (unprocessed)** da **mesma data**,
+  lendo o `preProcessingData.securityId` já resolvido de cada ativo. Assim o
+  cenário L1 (carteira em T) aparece mesmo antes de a posição ser
+  processada. Continua sendo data exata — **sem scan para trás** em datas
+  esparsas; só quando nem processada nem bruta existem é que o nível fica
+  vazio e a cascata desce para L3.
+
   Abaixo das três tabelas o operador ainda tem o campo **Buscar outra
   security**, que pesquisa o **cadastro completo da empresa** (o
-  `SecurityCache` em memória, mesmo universo do L3). O escopo L1∪L2 da
-  carteira já está exposto nos grupos do topo, então restringir a busca
-  textual a esse mesmo recorte só duplicaria a visão e impediria pegar
-  ativos legítimos fora dele (transferências entre carteiras, ativos
-  recém-cadastrados, etc.).
-- **Excluir Provisões** — same shape as Excluir Transações; date filter
+  `SecurityCache` em memória, mesmo universo do L3). Os resultados trazem as
+  colunas **mainId** (id legível — ticker/CNPJ/código), **beehusName** e
+  **securityId**, e a busca textual casa contra mainId **ou** beehusName; o
+  pick carrega o mainId, então a célula de sugestão renderiza `mainId ·
+  nome`. O escopo L1∪L2 da carteira já está exposto nos grupos do topo,
+  então restringir a busca textual a esse mesmo recorte só duplicaria a
+  visão e impediria pegar ativos legítimos fora dele (transferências entre
+  carteiras, ativos recém-cadastrados, etc.).
+- **Excluir Provisões** — same shape as the Transações search; date filter
   is **interval-overlap**.
 - **Processar Posições** — Empresa / data row, then an optional
-  two-pane **Groupings (opcional)** transfer (mirrors Excluir Txn) and
+  two-pane **Groupings (opcional)** transfer (mirrors the Transações picker) and
   a two-pane **Wallets** picker (Available ↔ Selected). Selecting
   groupings filters the available wallets pane to the **union** of
   those groupings' `walletIds`. If no wallet is moved to "Selecionadas"
   but at least one grouping is selected, the upstream call is
   restricted to the **union** of those grouping walletIds (matches the
-  Excluir Txn semantics); empty groupings + empty wallets ⇒ "all
+  Transações picker semantics); empty groupings + empty wallets ⇒ "all
   wallets in company".
 - **Excluir Posições** — same shape as **Processar Posições**: **Data única
   / Faixa de datas** toggle, optional explicit-dates picker (range mode),
@@ -571,19 +604,25 @@ multi-step pipelines.
 - **Despublicar Agrupamentos** — mirror of Publicar but
   `published=true`. Action button is red/danger.
 
-### Rotina Diária (group 6) — sequential pipelines
+### Pipelines "por datas" (single-step)
 
-Each step starts only after the previous returns `ok`; failure halts
-the chain. Step icons: `·` pending, `⟳` running, `✓` done, `✗` error,
-`—` skipped.
+> **Removido (jun/2026):** as pipelines multi-step **Fluxo diário**, **Reverter
+> dia**, **Fluxo por datas** e **Reverter por datas** (grupo "Rotina Diária")
+> foram **removidas** — views (`daily-flow`/`revert-flow`/`flow-dates`/
+> `revert-dates`), controladores JS (`Fluxo`/`RevertFlow`/`FlowDates`/
+> `RevertDates`), os 2 chips do favorites-bar, a init/allowlist do View router,
+> o CSS `.fx-*` e a rota exclusiva `flow/latest-position-date` (último
+> `publishedPositionSecurities` — fechou o item #7 do Mongo). As rotas
+> compartilhadas (`process`/`nav/*`/`publish`/`unpublish`) **permanecem** para as
+> pipelines single-step abaixo (grupos 2–4).
+
+Cada pipeline single-step itera dias úteis (ou uma lista explícita de datas) e
+dispara uma chamada upstream por dia. Step icons: `·` pending, `⟳` running,
+`✓` done, `✗` error, `—` skipped.
 
 | Card | Pipeline | Notes |
 |---|---|---|
-| **Fluxo diário** | Processar Posições + 8 outras etapas (apontamentos) | Mirrors **Processar por datas**' selection structure: **Data única / Faixa de datas** toggle, optional **Groupings (opcional)** dual-pane (union-filters the wallet picker), **Wallets** dual-pane, and (range mode only) an optional explicit date list. In single-date mode runs the 9-step pipeline once; in range mode iterates over the resolved business days (or the explicit list) and re-runs the 9 steps per day — every day completes (errors in one day don't abort the loop). The 9-card **Apontamentos** panel shows the **last iteration**; a per-day strip above it summarises each day's outcome. The `process` step forwards the resolved `walletIds` (explicit selection wins; otherwise the union of selected groupings' walletIds; otherwise `[]` = all wallets in the company). The remaining 8 steps are still placeholders pending spec. |
-| **Reverter** | Despublicar Agrupamentos → Excluir Posições (per day) | Mirrors **Fluxo**'s selection structure: **Data única / Faixa de datas** toggle, **Groupings (opcional)** dual-pane (union-filters the wallet picker), **Wallets** dual-pane, and (range mode only) an optional explicit date list. Per day: pre-flight pulls **published groupings** for that date, intersects with the user's grouping selection (if any), and feeds the result into the unpublish step. If nothing remains to unpublish on a given day, that step reports **"nada a fazer"** and the day continues into Excluir Posições. Aborts within a day if unpublish errors (don't delete positions if despublish crashed — safer for destructive ops); per-day errors do NOT abort the outer loop (matches Fluxo's day-level resilience). |
-| **Fluxo por datas** | Same as Fluxo diário | Iterated over every business day (Mon-Fri) in `[initialDate, finalDate]`. Wallet steps target the user-selected wallets; grouping steps target the **groupings derived from those wallets** (union of every grouping whose `walletIds` intersect the selection). Empty selection ⇒ "all". Per-day grid shows 4 step icons per row plus elapsed time. |
-| **Reverter por datas** | Same as Reverter dia | Iterated over business days. **Per day** the published-groupings lookup runs first and feeds the unpublish step; days with nothing published skip unpublish and proceed to Excluir Posições. |
-| **Processar por datas** | Processar Posições only | Single-step variant. Iterated over business days (or an explicit date list). Optional **Groupings (opcional)** two-pane transfer (mirrors Excluir Txn) above the wallet picker — selecting groupings filters available wallets to the union of their `walletIds`; if no wallet is moved to "Selecionadas" but at least one grouping is, the upstream call is restricted to that wallet union. Empty groupings + empty wallets ⇒ "all wallets". |
+| **Processar por datas** | Processar Posições only | Single-step variant. Iterated over business days (or an explicit date list). Optional **Groupings (opcional)** two-pane transfer (mirrors the Transações picker) above the wallet picker — selecting groupings filters available wallets to the union of their `walletIds`; if no wallet is moved to "Selecionadas" but at least one grouping is, the upstream call is restricted to that wallet union. Empty groupings + empty wallets ⇒ "all wallets". |
 | **NAV Wallets por datas** | Calcular NAV Wallets only | Same shape as Processar por datas, different endpoint — including the optional **Groupings (opcional)** dual-pane transfer with the same union-fallback semantics (if no wallet picked but groupings are, union of grouping walletIds is sent). **Skip-on-error**: days where upstream replies *"Nenhuma posição processada foi encontrada para as carteiras e a data informada"* are marked `—` and the loop continues to the next date (common when the range spans days that haven't been processed yet). |
 | **NAV Groupings por datas** | Calcular NAV Groupings only | Single-step variant with a grouping picker (no wallet/grouping derivation). Empty selection ⇒ "all groupings". Iterated over business days or explicit date list. |
 | **Publicar Agrupamentos por datas** | Publicar (per-day eligibility) | No picker. **Per day** looks up groupings with `navPackages.published=false` and publishes those. Days with nothing eligible are marked `—` (skipped) and the loop continues. Iterated over business days or explicit date list. |
@@ -616,21 +655,22 @@ Publicar Agrupamentos both empresa **and** data must be set so the
 non-published catalogue is loaded. Otherwise the upload bails with a
 hint.
 
-On Publicar Agrupamentos, when at least one id is dropped, the upload
-handler fires a follow-up `POST /api/beehus/filters/grouping-id-classify`
-with the unmatched ids and rewrites the status line with a per-reason
-breakdown (e.g. `590 adicionado(s) · 32 ignorado(s) (já publicado 18 ·
-não calculado 10 · outra empresa 4)`). A **"Copiar lista"** button next
-to the status copies the full per-id classification to the clipboard as
-TSV (`groupingId⇥motivo⇥nome`) so the user can paste it straight into
-Excel/Sheets.
+On Publicar Agrupamentos, when at least one id is dropped, the status
+line reports the counts (e.g. `590 adicionado(s) · 32 ignorado(s)`). It
+does **not** break the ignored ids down by reason: the diagnostic
+endpoints that produced that breakdown (`grouping-id-classify` and the
+manual `grouping-id-probe`) were the last direct `db.navPackages` reads
+in the runtime and were removed — they needed trashed-inclusive,
+cross-company, raw-typed docs that the API deliberately normalizes away.
+If the raw per-id diagnosis is ever needed again, it returns as an
+offline script alongside the ETL classifiers.
 
 ---
 
 ## Session-state preservation
 
 The page has its own internal view router (`#create`, `#delete`,
-`#flow-dates`, …). To keep that state across sidebar round-trips and
+`#process-dates`, …). To keep that state across sidebar round-trips and
 full reloads, the parent shell mirrors it:
 
 1. The child's `View.show(name)` writes its own `location.hash` **and**
@@ -794,9 +834,6 @@ constant per-security / per-rule work once** instead of per transaction.
   to 5 min to appear in the dropdowns — consistent with the pre-existing
   5-min TTL on `get_wallet_names()` / `get_entity_names()`. Returned lists are
   shared-immutable; do not mutate them in place.
-
-Regression guard: `scripts/test_scoring_memoization.py` asserts the memoised
-scoring path is byte-identical to a fresh (non-memoised) computation.
 
 ---
 

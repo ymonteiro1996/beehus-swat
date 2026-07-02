@@ -16,23 +16,27 @@ This version drops the type-classifier step entirely:
         ↓ extract features (run ALL type-specific extractors and merge —
                             each one only matches what it can recognise)
         ↓
-    Score against the wallet's L1 holdings (current processedPosition)
+    Score against the wallet's L1 holdings (processedPosition at D, the
+    liquidationDate, fetched via the Beehus API at the EXACT date)
         ↓ if best L1 score < threshold:
-    Score against L2 (T-1, T-2 holdings)
+    Score against L2 (holdings at D-1 ∪ D-2 business days, also exact-date API)
         ↓ if best (L1 ∪ L2) score < threshold:
     Score against L3 (entire SecurityCache)
         ↓
     Top-3 → ambiguity check → buySell tie-breaker → return
 
-The buySell tie-breaker (unchanged) walks the wallet's processedPositions
-and picks the candidate whose `qty_T − qty_(T−1)` is non-zero on a NAV
+Position lookups are fixed-offset and exact-date: a date with no position
+contributes nothing (no backward scan over sparse dates). The buySell
+tie-breaker walks the wallet's processedPositions **via the Beehus API**
+(`beehus_catalog.processed_doc`, exact-date — no Mongo) and picks the candidate
+whose `qty_T − qty_(T−1)` is non-zero on a NAV
 date such that `navDate + offset ≈ liquidationDate`, where
 `offset = settlementDays − navDays` (subscription/redemption fields on
 the security, depending on the sign of the delta).
 """
 import logging
 import re
-from datetime import date as _date, datetime, timedelta
+from datetime import date as _date, datetime
 from typing import Optional
 
 from bson import ObjectId
@@ -248,57 +252,86 @@ def _name_substring_bonus(desc_compressed, sec):
 # ── Wallet-scoped candidate pool ──────────────────────────────────────────────
 
 class _WalletCandidatePool:
-    """Lazily-loaded per-wallet sets of held security ids.
+    """Per-wallet sets of held security ids at FIXED business-day offsets from
+    the transaction's liquidationDate (D), fetched via the Beehus API at the
+    EXACT date — no backward scan over sparse position dates:
 
-    Cache keys are ``(wallet_id, ref_date)`` rather than ``wallet_id`` alone:
-    the pool is shared via the singleton classifier (one instance for the
-    process), and concurrent requests can target the same wallet at
-    different reference dates. Keying by both fields lets parallel requests
-    co-exist without overwriting each other's cached candidate set."""
+        L1 = holdings at D             (the liquidationDate itself)
+        L2 = holdings at D-1 ∪ D-2     (1 and 2 business days before D)
 
-    def __init__(self, db):
+    A date with no processedPosition falls back to the RAW (unprocessed)
+    position of the SAME date (resolved `preProcessingData.securityId`) so that
+    carteiras em tombamento — which only have the processed base snapshot — still
+    yield L1/L2 candidates in D; only when neither exists does the level
+    contribute nothing and the cascade fall back to L3 (the full securities
+    catalog). Still EXACT-date — no backward scan over sparse dates. Business
+    days are weekday-only (no holiday calendar), matching `db.business_days_before`.
+
+    Cache keys are ``(wallet_id, ref_date)`` so concurrent requests targeting
+    the same wallet at different liquidation dates don't clobber each other."""
+
+    def __init__(self, db=None):
+        # `db` kept for call-site/signature compatibility; positions now come
+        # from the Beehus API (beehus_catalog.processed_doc), not Mongo.
         self._db = db
         self._l1_by_wallet = {}
         self._l2_by_wallet = {}
+        self._by_date = {}   # (wallet_id, date_iso) -> set(securityId str)
 
-    def _load_l1(self, wallet_id, on_or_before):
-        if not wallet_id:
-            return set()
-        cursor = self._db.processedPosition.find(
-            {"walletId": wallet_id, "positionDate": {"$lte": on_or_before},
-             "trashed": {"$ne": True}},
-            {"securities.securityId": 1, "positionDate": 1},
-        ).sort("positionDate", -1).limit(1)
-        for doc in cursor:
-            return {str(s.get("securityId", ""))
-                    for s in (doc.get("securities") or [])
-                    if s.get("securityId")}
-        return set()
+    def _securities_on(self, wallet_id, date_iso):
+        """Set of securityId strings held by `wallet_id` on the EXACT
+        `date_iso` (via the API). Empty when there is no position that date.
 
-    def _load_l2(self, wallet_id, on_or_before):
-        """Union of securityIds in T-1 ∪ T-2 (positions just before the most
-        recent on/before `on_or_before`). Excludes T itself."""
-        if not wallet_id:
+        Prefers the PROCESSED position (resolved securityId direto). When the
+        wallet has no processed position on that date — typical of carteiras em
+        tombamento, que só têm a foto-base processada — falls back to the RAW
+        (unprocessed) position of the SAME date, reading each item's already
+        resolved `preProcessingData.securityId`. The held-security SET is the
+        same either way, so the L1/L2 cascade gets the right candidates in D
+        even before the position is processed."""
+        if not wallet_id or not date_iso:
             return set()
-        dates = [d.get("positionDate") for d in self._db.processedPosition.find(
-            {"walletId": wallet_id, "positionDate": {"$lte": on_or_before},
-             "trashed": {"$ne": True}},
-            {"positionDate": 1},
-        ).sort("positionDate", -1).limit(3)]
-        if len(dates) <= 1:
-            return set()
-        prior = dates[1:]   # T-1, T-2
+        key = (wallet_id, date_iso)
+        cached = self._by_date.get(key)
+        if cached is not None:
+            return cached
         ids = set()
-        for doc in self._db.processedPosition.find(
-            {"walletId": wallet_id, "positionDate": {"$in": prior},
-             "trashed": {"$ne": True}},
-            {"securities.securityId": 1},
-        ):
-            for s in (doc.get("securities") or []):
-                sid = str(s.get("securityId", ""))
-                if sid:
-                    ids.add(sid)
+        try:
+            import beehus_catalog
+            doc = beehus_catalog.processed_doc(wallet_id, date_iso)
+            if doc:
+                for s in (doc.get("securities") or []):
+                    raw = s.get("securityId")
+                    sid = beehus_catalog.id_str(raw) if raw else ""
+                    if sid:
+                        ids.add(sid)
+            if not ids:
+                udoc = beehus_catalog.unprocessed_doc(wallet_id, date_iso)
+                if udoc:
+                    for s in (udoc.get("securities") or []):
+                        ppd = s.get("preProcessingData") if isinstance(s, dict) else None
+                        raw = ppd.get("securityId") if isinstance(ppd, dict) else None
+                        sid = beehus_catalog.id_str(raw) if raw else ""
+                        if sid:
+                            ids.add(sid)
+        except Exception as exc:
+            log.warning("position lookup failed (wallet=%s date=%s): %s",
+                        wallet_id, date_iso, exc)
+        self._by_date[key] = ids
         return ids
+
+    def _load_l1(self, wallet_id, ref_date):
+        # L1 = holdings at D (the liquidationDate exactly).
+        return self._securities_on(wallet_id, str(ref_date)[:10])
+
+    def _load_l2(self, wallet_id, ref_date):
+        # L2 = holdings 1 and 2 business days before D (union). Disjoint from D
+        # by construction (different dates); predict() also subtracts L1.
+        from db import business_days_before
+        d = str(ref_date)[:10]
+        d1 = business_days_before(d, 1)
+        d2 = business_days_before(d, 2)
+        return self._securities_on(wallet_id, d1) | self._securities_on(wallet_id, d2)
 
     def get_l1(self, wallet_id, ref_date):
         key = (wallet_id, ref_date)
@@ -344,9 +377,7 @@ class _SecLookup:
         return self._cache._securities
 
 
-# ── amountDifference + offset tie-breaker ─────────────────────────────────────
-
-_DATE_TOLERANCE_DAYS = 3
+# ── amountDifference tie-breaker (fixed-date, via Beehus API) ─────────────────
 
 
 def _to_date(yyyy_mm_dd):
@@ -358,89 +389,69 @@ def _to_date(yyyy_mm_dd):
         return None
 
 
-def _fetch_offsets(db, security_ids):
-    """{securityId: {sub_offset, red_offset}} from db.securities."""
-    if not security_ids:
-        return {}
-    oid_query, str_query = [], []
-    for s in security_ids:
-        str_query.append(s)
-        try:
-            oid_query.append(ObjectId(s))
-        except (InvalidId, TypeError):
-            pass
+def _qty_on(wallet_id, date_iso):
+    """{securityId: quantity} held by `wallet_id` on the EXACT `date_iso`
+    (Beehus API). Empty when there is no position on that date."""
     out = {}
-    for sec in db.securities.find(
-        {"_id": {"$in": oid_query + str_query}},
-        {"subscriptionSettlementDays": 1, "subscriptionNavDays": 1,
-         "redemptionSettlementDays": 1, "redemptionNavDays": 1},
-    ):
-        sid = str(sec["_id"])
-        out[sid] = {
-            "sub_offset": (sec.get("subscriptionSettlementDays") or 0)
-                          - (sec.get("subscriptionNavDays") or 0),
-            "red_offset": (sec.get("redemptionSettlementDays") or 0)
-                          - (sec.get("redemptionNavDays") or 0),
-        }
+    if not wallet_id or not date_iso:
+        return out
+    try:
+        import beehus_catalog
+        doc = beehus_catalog.processed_doc(wallet_id, date_iso)
+        if doc:
+            for s in (doc.get("securities") or []):
+                sid = beehus_catalog.id_str(s.get("securityId")) if s.get("securityId") else ""
+                if sid:
+                    out[sid] = s.get("quantity") or 0
+    except Exception as exc:
+        log.warning("processed_doc API failed (tiebreak, wallet=%s date=%s): %s",
+                    wallet_id, date_iso, exc)
     return out
 
 
 def _amountdiff_tiebreak(db, candidate_ids, wallet_id, liquidation_date, balance):
+    """Desempate buySell — data fixa, via API Beehus (sem Mongo).
+
+    Entre candidatos ambíguos, escolhe aquele cuja quantidade MUDOU entre
+    D-1 e D dias úteis (D = liquidationDate), com o sinal compatível com o
+    fluxo de caixa:
+
+        compra → balance < 0 (sai caixa)   → quantidade SOBE (delta > 0)
+        venda  → balance > 0 (entra caixa) → quantidade CAI  (delta < 0)
+
+    delta = qty(D) − qty(D-1 dia útil). Sem varredura de janela e sem
+    casamento por offset de liquidação; empate por |delta| (maior vence).
+    `db` é mantido na assinatura por compatibilidade (não é mais usado).
+    Retorna (winner_securityId, detail) ou (None, motivo)."""
     target = _to_date(liquidation_date)
     if not target or not wallet_id or not candidate_ids:
         return None, "no_target_or_wallet_or_candidates"
+    if balance is None or balance == 0:
+        return None, "no_balance_direction"
 
-    horizon_lo = (target - timedelta(days=45)).isoformat()
-    horizon_hi = (target + timedelta(days=10)).isoformat()
-    positions_by_date = {}
-    for doc in db.processedPosition.find(
-        {"walletId": wallet_id, "trashed": {"$ne": True},
-         "positionDate": {"$gte": horizon_lo, "$lte": horizon_hi}},
-        {"positionDate": 1, "securities.securityId": 1, "securities.quantity": 1},
-    ).sort("positionDate", 1):
-        d = str(doc.get("positionDate", ""))[:10]
-        if not d:
-            continue
-        positions_by_date[d] = {
-            str(s.get("securityId", "")): (s.get("quantity") or 0)
-            for s in (doc.get("securities") or [])
-        }
-    sorted_dates = sorted(positions_by_date.keys())
-    if len(sorted_dates) < 2:
-        return None, "need_two_positions"
+    from db import business_days_before
+    d0 = str(liquidation_date)[:10]
+    d1 = business_days_before(d0, 1)
+    qty_d0 = _qty_on(wallet_id, d0)
+    qty_d1 = _qty_on(wallet_id, d1)
+    if not qty_d0 and not qty_d1:
+        return None, "no_positions"
 
-    offsets = _fetch_offsets(db, candidate_ids)
-    best = None
+    best = None   # (abs_delta, sid, detail)
     for sid in candidate_ids:
-        off = offsets.get(sid, {"sub_offset": 0, "red_offset": 0})
-        for i in range(1, len(sorted_dates)):
-            d_prev, d_curr = sorted_dates[i - 1], sorted_dates[i]
-            qty_prev = positions_by_date[d_prev].get(sid, 0)
-            qty_curr = positions_by_date[d_curr].get(sid, 0)
-            delta = (qty_curr or 0) - (qty_prev or 0)
-            if not delta:
-                continue
-            offset = off["sub_offset"] if delta > 0 else off["red_offset"]
-            curr_d = _to_date(d_curr)
-            if not curr_d:
-                continue
-            expected_settlement = curr_d + timedelta(days=offset)
-            if balance is not None and balance != 0:
-                # Buy → cash leaves (balance < 0); sell → cash arrives (> 0).
-                if (delta > 0 and balance > 0) or (delta < 0 and balance < 0):
-                    continue
-            day_gap = abs((expected_settlement - target).days)
-            if day_gap > _DATE_TOLERANCE_DAYS:
-                continue
-            if best is None or day_gap < best[0]:
-                best = (day_gap, sid, {
-                    "navDate":            d_curr,
-                    "amountDifference":   delta,
-                    "offset":             offset,
-                    "expectedSettlement": expected_settlement.isoformat(),
-                    "actualSettlement":   target.isoformat(),
-                    "dayGap":             day_gap,
-                })
+        delta = (qty_d0.get(sid, 0) or 0) - (qty_d1.get(sid, 0) or 0)
+        if not delta:
+            continue
+        # Sinal: compra (balance<0) → delta>0 ; venda (balance>0) → delta<0.
+        if (delta > 0 and balance > 0) or (delta < 0 and balance < 0):
+            continue
+        if best is None or abs(delta) > best[0]:
+            best = (abs(delta), sid, {
+                "navDate":          d0,
+                "priorDate":        d1,
+                "amountDifference": delta,
+                "rule":             "d_vs_d1_business",
+            })
     if best:
         return best[1], best[2]
     return None, "no_candidate_matches_amountdiff"
@@ -533,12 +544,12 @@ class TransactionSecurityClassifier:
 
         ref_date = liquidation_date or _date.today().isoformat()
 
-        # ── L1: wallet's current holdings ─────────────────────────────────
+        # ── L1: wallet's holdings at D (liquidationDate) ──────────────────
         # We tag L1 candidates with source="level1" (and L2 with "level2"
         # below) so the security-edit modal can group alternatives by their
-        # provenance — L1 (carteira hoje), L2 (carteira T-1/T-2), L3
-        # (cadastro completo) — instead of mixing them into a single
-        # "processedPosition" bucket. The cascade itself is unchanged.
+        # provenance — L1 (carteira em D), L2 (carteira em D-1/D-2 dias
+        # úteis), L3 (cadastro completo) — instead of mixing them into a
+        # single "processedPosition" bucket. The cascade itself is unchanged.
         l1_ids = self._pool.get_l1(wallet_id, ref_date) if wallet_id else set()
         l1_docs = self._lookup.get_many(l1_ids)
         l1_scored = self._score_pool(l1_docs, features, desc_compressed,
@@ -547,7 +558,7 @@ class TransactionSecurityClassifier:
         top_score = l1_scored[0]["score"] if l1_scored else 0
         used_source = "level1" if l1_scored else "level3"  # default until proven
 
-        # ── L2: T-1, T-2 holdings (additive when L1 is weak) ──────────────
+        # ── L2: D-1, D-2 business-day holdings (additive when L1 is weak) ──
         l2_scored = []
         merged = list(l1_scored)
         if top_score < HIGH_THRESHOLD:

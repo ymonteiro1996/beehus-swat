@@ -1,0 +1,1264 @@
+{% extends "base.html" %}
+{% set active = "conciliacao_mov" %}
+{% block title %}Conciliação (Mov.){% endblock %}
+
+{% block head %}
+<style>
+  {% include 'partials/_repetir_styles.html' %}
+  .table-wrap     { overflow: auto; max-height: calc(100vh - 200px); }
+  .wallet-loader  { display: inline-flex; align-items: center; gap: 8px; color: #6b7280; }
+  .wallet-loader .spin { width: 16px; height: 16px; border: 2px solid #e5e7eb;
+    border-top-color: #3b82f6; border-radius: 9999px; animation: wl-spin .7s linear infinite; }
+  @keyframes wl-spin { to { transform: rotate(360deg); } }
+  .cols-collapsed .col-opt { display: none; }
+  #main-table { font-size: 11px; }
+  #det-body .rp-tbl thead th { position: static; }
+  #det-body .rp-preview-scroll .rp-tbl thead th { position: sticky; top: 0; z-index: 3; }
+  #det-body .rp-tbl { font-size: 11px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col">
+  <header class="bg-white shadow px-6 py-3 flex items-center justify-between shrink-0 z-10">
+    <h1 class="font-semibold text-gray-700">Conciliação — Movimentação (posição projetada)</h1>
+    <span class="text-[11px] text-gray-400">Projeta da <code>unprocessed</code> origem → data-alvo · NAV/GAP simulados calculados aqui</span>
+  </header>
+
+  <!-- Filtros (escondidos no detalhe por carteira) -->
+  <div id="mov-filters" class="px-6 pt-5 pb-3 flex items-center gap-3 flex-wrap shrink-0">
+    <select id="company-select" onchange="onCompanyChange()" title="Empresa"
+      class="rp-input" style="width:auto; min-width:280px">
+      <option value="">Selecione uma empresa...</option>
+      {% for c in companies %}
+      <option value="{{ c.id }}">{{ c.name }}</option>
+      {% endfor %}
+    </select>
+    <label class="flex items-center gap-1.5 text-[11px] text-gray-500">Origem
+      <input type="date" id="end-date-input" onchange="onSourceDateChange()" title="Data origem (base da projeção)"
+        class="rp-input rp-input-date" /></label>
+    <label class="flex items-center gap-1.5 text-[11px] text-gray-500">Alvo
+      <input type="date" id="target-date-input" onchange="onTargetDateChange()" title="Data-alvo da projeção (default: D+1 dia útil) · define o navPackage do sistema exibido"
+        class="rp-input rp-input-date" /></label>
+    <div class="flex items-center gap-2">
+      <input type="number" id="threshold-input" step="0.001" min="0" max="10" onchange="onThresholdChange()"
+        placeholder="Destaque |Δ| %" title="Destaca em vermelho o GAP % do sistema acima deste limiar (não esconde carteiras)" class="rp-input" style="width:8rem" />
+      <span id="threshold-status" class="text-[10px] text-gray-400"></span>
+    </div>
+    <input id="wallet-filter" type="text" oninput="filterWallets()" placeholder="Filtrar carteira..." title="Filtrar carteira"
+      class="rp-input" style="width:auto; min-width:220px" />
+  </div>
+
+  <!-- Tabela -->
+  <div id="table-section" class="hidden px-6 pb-6 mt-2">
+    <div class="flex items-center gap-2 mb-2">
+      <span id="sel-count" class="text-[11px] text-gray-500"></span>
+      <span id="mov-progress" class="text-[11px] text-gray-400"></span>
+      <div class="ml-auto flex items-center gap-2">
+        <button id="movimentar-btn" onclick="movimentarSelected()" disabled class="rp-btn rp-btn-primary">Movimentar</button>
+        <button id="implementar-btn" onclick="openImplementModal()" disabled class="rp-btn rp-btn-success" title="Revisar e aplicar no Beehus: preços de execução, IRRF, transações de ajuste, provisões e o upload da unprocessed">Implementar</button>
+        <button id="report-btn" onclick="gerarRelatorioErros()" disabled class="rp-btn rp-btn-muted" title="Gerar relatório de erros de conciliação (texto) das carteiras selecionadas — para enviar ao cliente">Relatório de erros</button>
+        <button id="cols-btn" onclick="toggleCols()" class="fb-chip" data-kind="nav" title="Mostrar/ocultar Cota e Quantidade">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+          Mostrar colunas
+        </button>
+      </div>
+    </div>
+    <div id="wallet-table-body" class="bg-white rounded-xl shadow overflow-hidden">
+      <div class="table-wrap">
+        <table class="rp-tbl" id="main-table" style="display:none">
+          <thead>
+            <tr>
+              <th style="width:40px; min-width:40px; max-width:40px; text-align:center; position:sticky; left:0; top:0; z-index:5" title="Selecionar todas">
+                <input type="checkbox" id="sel-all-cb" onclick="toggleSelectAll(this.checked)">
+              </th>
+              <th class="rp-tbl-left" style="min-width:180px; position:sticky; left:40px; top:0; z-index:5">Carteira</th>
+              <!-- ── navPackage do SISTEMA na data-alvo (oficial) ── -->
+              <th style="text-align:right; min-width:110px" title="NAV oficial (navPackage do sistema) na data-alvo">NAV</th>
+              <th class="col-opt" style="text-align:right; min-width:90px" title="Cota oficial na data-alvo">Cota</th>
+              <th style="text-align:right; min-width:110px" title="GAP em R$ oficial na data-alvo">GAP $</th>
+              <th style="text-align:right; min-width:100px" title="GAP em % oficial (returnNavPerShare − returnContribution) na data-alvo">GAP %</th>
+              <!-- ── Resultado da projeção (preenchido por "Movimentar") ── -->
+              <th style="text-align:right; min-width:110px; border-left:2px solid #c7d2fe" title="NAV simulado na data-alvo (calculado aqui)">NAV sim.</th>
+              <th style="text-align:right; min-width:100px" title="Cota (navPerShare) simulada na data-alvo">Cota sim.</th>
+              <th style="text-align:right; min-width:110px" title="GAP em R$ simulado na data-alvo">GAP $ sim.</th>
+              <th style="text-align:right; min-width:100px" title="GAP em % simulado na data-alvo">GAP % sim.</th>
+              <th style="text-align:center; min-width:70px" title="Diagnóstico: comparar com a unprocessed real do alvo">Diag.</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <p id="table-msg" class="text-center text-gray-400 text-sm py-8">Selecione uma empresa e uma data.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+  <!-- ══════════ DETALHAMENTO DA CARTEIRA (aba de detalhe) ══════════ -->
+  <div id="mov-detail" class="hidden px-6 pb-10">
+    <div class="flex items-center gap-3 mb-3">
+      <button onclick="backToGrid()" class="fb-chip" data-kind="nav" title="Voltar à grade de carteiras">← Voltar à grade</button>
+      <div>
+        <h2 class="text-sm font-semibold text-gray-800" id="det-wallet"></h2>
+        <p class="text-[10px] text-gray-400" id="det-sub"></p>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        <span id="det-status" class="hidden text-[11px]" aria-live="polite"></span>
+        <button onclick="gerarRelatorioErrosDetalhe()" class="rp-btn rp-btn-muted" title="Relatório de erros de conciliação (texto) desta carteira — para enviar ao cliente">Relatório de erros</button>
+      </div>
+    </div>
+    <div id="det-body" class="space-y-4"></div>
+  </div>
+
+  <!-- ══════════ MODAL: Relatório de erros de conciliação (texto puro) ══════════ -->
+  <div id="report-modal" class="hidden" style="display:none; position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.4); align-items:center; justify-content:center; padding:24px" onclick="if(event.target===this)closeReportModal()">
+    <div style="background:#fff; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,.25); width:min(920px,100%); max-height:88vh; display:flex; flex-direction:column">
+      <div style="display:flex; align-items:center; gap:8px; padding:12px 16px; border-bottom:1px solid #eee">
+        <span style="font-weight:600; font-size:14px; color:#374151">Relatório de erros de conciliação</span>
+        <span id="report-modal-sub" style="font-size:11px; color:#9ca3af"></span>
+        <div style="margin-left:auto; display:flex; gap:8px">
+          <button id="report-copy-btn" onclick="copyReport()" class="rp-btn rp-btn-muted" title="Copiar o texto para a área de transferência">Copiar</button>
+          <button onclick="exportReport()" class="rp-btn rp-btn-primary" title="Baixar o relatório em arquivo .txt">Exportar .txt</button>
+          <button onclick="closeReportModal()" class="fb-chip" data-kind="nav" title="Fechar (Esc)">✕</button>
+        </div>
+      </div>
+      <textarea id="report-text" readonly spellcheck="false"
+        style="flex:1; margin:0; border:0; padding:14px 16px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; color:#111827; resize:none; outline:none; white-space:pre; overflow:auto; min-height:320px"></textarea>
+    </div>
+  </div>
+
+  <!-- ══════════ MODAL: Implementar (preview + aplicação em lote) ══════════ -->
+  <div id="implement-modal" class="hidden" style="display:none; position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.4); align-items:center; justify-content:center; padding:24px" onclick="if(event.target===this)closeImplementModal()">
+    <div style="background:#fff; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,.25); width:min(920px,100%); max-height:88vh; display:flex; flex-direction:column">
+      <div style="display:flex; align-items:center; gap:8px; padding:12px 16px; border-bottom:1px solid #eee">
+        <span style="font-weight:600; font-size:14px; color:#374151">Implementar no Beehus</span>
+        <span id="implement-modal-sub" style="font-size:11px; color:#9ca3af"></span>
+        <div style="margin-left:auto; display:flex; gap:8px">
+          <button onclick="closeImplementModal()" class="fb-chip" data-kind="nav" title="Fechar (Esc)">✕</button>
+        </div>
+      </div>
+      <div id="implement-body" style="flex:1; overflow:auto; padding:14px 16px"></div>
+      <div style="display:flex; align-items:center; gap:8px; padding:12px 16px; border-top:1px solid #eee">
+        <span id="implement-status" class="text-[11px] text-gray-500"></span>
+        <div style="margin-left:auto; display:flex; gap:8px">
+          <button id="implement-dl-btn" onclick="downloadImplementXlsx()" class="rp-btn rp-btn-muted" title="Baixar a posição projetada (.xlsx)">Baixar .xlsx</button>
+          <button id="implement-confirm-btn" onclick="confirmImplement()" class="rp-btn rp-btn-success" title="Aplicar tudo no Beehus, na ordem">Confirmar tudo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ── State ──────────────────────────────────────────────────────────────────── */
+let _company = "", _companyName = "", _date = "", _rows = [];
+let _selWallets = new Set(), _anchorIdx = null, _renderedRows = [];
+let _movResults = {};          // walletId -> {state, ...movement}
+let _colsCollapsed = true;
+let _detSecFilter = true, _detWid = null;   // detalhe: filtro de ativos (igual à Conciliação) + carteira ativa
+let _thresholdPct = 0.01, _thresholdTimer = null, _sourceTimer = null;
+
+const companyNames = {};
+{% for c in companies %}companyNames["{{ c.id }}"] = {{ c.name|tojson }};
+{% endfor %}
+
+/* ── Formatting (pt-BR) ─────────────────────────────────────────────────────── */
+function fmtNum(v, dec = 2) { if (v === null || v === undefined || v === "") return "—";
+  return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: dec, maximumFractionDigits: dec }); }
+function fmtMoney(v) { return fmtNum(v, 2); }
+function fmtPct(v) { if (v === null || v === undefined || v === "") return "—";
+  return (Number(v) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + "%"; }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function nz(v) { return v === null || v === undefined ? 0 : Number(v); }
+function _cssEsc(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : s; }
+
+/* ── Datas: alvo default = D+1 dia útil da origem ───────────────────────────── */
+function _nextBizDay(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if (!m) return iso;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function _syncTargetDefault() {
+  // Ao (re)selecionar a origem, o alvo é SEMPRE reposicionado para +1 dia útil
+  // (sobrescreve qualquer valor anterior). O operador ainda pode editar o alvo
+  // manualmente depois — só volta a +1 du quando a origem mudar de novo.
+  const src = document.getElementById("end-date-input").value;
+  const tin = document.getElementById("target-date-input");
+  if (src && /^\d{4}-\d{2}-\d{2}$/.test(src)) tin.value = _nextBizDay(src);
+}
+
+document.getElementById("end-date-input").value = new Date().toISOString().slice(0, 10);
+_syncTargetDefault();
+
+fetch("/api/conciliacao/config").then(r => r.json()).then(cfg => {
+  _thresholdPct = Number(cfg.diffThresholdPct ?? 0.01);
+  document.getElementById("threshold-input").value = _thresholdPct;
+}).catch(() => { document.getElementById("threshold-input").value = _thresholdPct; });
+
+function _setThresholdStatus(t, c) { const el = document.getElementById("threshold-status"); if (el) { el.textContent = t || ""; el.style.color = c || ""; } }
+function onThresholdChange() {
+  const raw = document.getElementById("threshold-input").value;
+  const v = raw === "" ? 0 : Number(raw);
+  if (!isFinite(v) || v < 0 || v > 10) { _setThresholdStatus("inválido (0–10)", "#b91c1c"); return; }
+  _thresholdPct = v; _applyFilters();   // filtro de divergência é client-side (sem recarregar)
+  _setThresholdStatus("salvando…", "#9ca3af");
+  clearTimeout(_thresholdTimer);
+  _thresholdTimer = setTimeout(() => {
+    fetch("/api/conciliacao/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ diffThresholdPct: _thresholdPct }) })
+      .then(r => r.json().then(j => ({ ok: r.ok, j }))).then(({ ok, j }) => {
+        if (!ok) { _setThresholdStatus((j && j.error) || "erro", "#b91c1c"); return; }
+        _setThresholdStatus("✓ salvo", "#059669"); setTimeout(() => _setThresholdStatus("", ""), 1500);
+      }).catch(() => _setThresholdStatus("erro", "#b91c1c"));
+  }, 300);
+}
+
+function onCompanyChange() {
+  document.getElementById("mov-detail").classList.add("hidden");   // sai do detalhe
+  _company = document.getElementById("company-select").value;
+  _companyName = companyNames[_company] || _company;
+  _date = ""; _rows = [];
+  document.getElementById("table-section").classList.add("hidden");
+  document.getElementById("tbody").innerHTML = "";
+  document.getElementById("main-table").style.display = "none";
+  if (!_company) return;
+  const v = document.getElementById("end-date-input").value;
+  if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) selectDate(v);
+}
+
+function onSourceDateChange() {
+  _syncTargetDefault();
+  if (!_company) return;
+  clearTimeout(_sourceTimer);
+  _sourceTimer = setTimeout(() => {
+    const v = document.getElementById("end-date-input").value;
+    if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) { _rows = []; backToGrid(); selectDate(v); }
+  }, 400);
+}
+
+function _loaderHTML(t) { return `<span class="wallet-loader"><span class="spin"></span>${esc(t || "Carregando...")}</span>`; }
+
+function selectDate(date) {
+  _date = date;
+  _selWallets.clear(); _anchorIdx = null; _movResults = {};
+  document.getElementById("table-section").classList.remove("hidden");
+  document.getElementById("main-table").style.display = "none";
+  document.getElementById("table-msg").innerHTML = _loaderHTML("Carregando carteiras...");
+  document.getElementById("table-msg").style.display = "block";
+  document.getElementById("tbody").innerHTML = "";
+  const tgt = _targetDate();
+  fetch(`/api/conciliacao-mov/rows?companyId=${encodeURIComponent(_company)}&date=${encodeURIComponent(_date)}&targetDate=${encodeURIComponent(tgt || "")}`)
+    .then(r => r.json()).then(({ rows }) => {
+      if (!rows || !rows.length) { document.getElementById("table-msg").textContent = "Nenhuma carteira com posição não-processada na origem."; return; }
+      rows.sort((a, b) => Math.abs(nz(b.sysGapPct)) - Math.abs(nz(a.sysGapPct)));   // divergentes (sistema) no topo
+      _rows = rows;
+      document.getElementById("wallet-filter").value = "";
+      _applyFilters();
+      document.getElementById("table-msg").style.display = "none";
+      document.getElementById("main-table").style.display = "";
+    }).catch(() => { document.getElementById("table-msg").textContent = "Erro ao carregar carteiras."; });
+}
+
+/* ── Render ──────────────────────────────────────────────────────────────────── */
+function renderRow(r, i) {
+  const on = _selWallets.has(r.walletId);
+  const _th = _gapThreshDec();
+  const sysGapBad = r.sysGapPct != null && Math.abs(nz(r.sysGapPct)) > (_th > 0 ? _th : 1e-6);
+  return `<tr data-wid="${esc(r.walletId)}" class="${on ? "bg-blue-50" : ""}">
+    <td style="text-align:center; position:sticky; left:0; z-index:2; background:#fff; width:40px; min-width:40px; max-width:40px">
+      <input type="checkbox" class="row-cb" data-idx="${i}" ${on ? "checked" : ""} onclick="onRowCbClick(event, ${i})">
+    </td>
+    <td class="rp-tbl-left whitespace-nowrap" style="position:sticky; left:40px; z-index:2; background:#fff">
+      <div class="flex items-center gap-1.5">
+        <span class="font-medium text-gray-700">${esc(r.walletName || r.walletId)}</span>
+        <button type="button" onclick="copyWalletId('${esc(r.walletId)}', this)" title="Copiar Wallet ID" class="shrink-0 text-gray-400 hover:text-blue-600 p-0.5 rounded leading-none">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        </button>
+      </div>
+    </td>
+    <td class="whitespace-nowrap">${fmtMoney(r.sysNav)}</td>
+    <td class="whitespace-nowrap col-opt">${fmtNum(r.sysNavPerShare, 6)}</td>
+    <td class="whitespace-nowrap">${fmtMoney(r.sysGapCash)}</td>
+    <td class="whitespace-nowrap ${sysGapBad ? "text-red-600" : (r.sysGapPct == null ? "text-gray-300" : "text-green-600")}">${fmtPct(r.sysGapPct)}</td>
+    ${_simCells(r.walletId)}
+  </tr>`;
+}
+function renderRows(rows) {
+  _renderedRows = rows;
+  document.getElementById("tbody").innerHTML = rows.map((r, i) => renderRow(r, i)).join("");
+  _applyCols(); _syncSelHeader();
+}
+function _updateRow(wid) {
+  const tr = document.querySelector(`#tbody tr[data-wid="${_cssEsc(wid)}"]`);
+  const i = _renderedRows.findIndex(r => r.walletId === wid);
+  if (tr && i >= 0) tr.outerHTML = renderRow(_renderedRows[i], i);
+}
+function _gapThreshDec() {
+  const v = Number(document.getElementById("threshold-input").value || 0);
+  return (isFinite(v) && v > 0) ? v / 100 : 0;   // limiar em % → decimal
+}
+function _applyFilters() {
+  // Mostra TODAS as carteiras projetáveis (inclui GAP=0); o limiar só DESTACA
+  // divergentes em vermelho (não esconde) — senão a grade some num dia conciliado.
+  const q = (document.getElementById("wallet-filter").value || "").trim().toLowerCase();
+  renderRows(q ? _rows.filter(r => (r.walletName || r.walletId).toLowerCase().includes(q)) : _rows);
+}
+function filterWallets() { _applyFilters(); }
+function onTargetDateChange() {
+  // alvo mudou → recarrega o navPackage do sistema do alvo (colunas do sistema)
+  if (_company && /^\d{4}-\d{2}-\d{2}$/.test(_date)) { backToGrid(); selectDate(_date); }
+}
+
+function _simCells(wid) {
+  const r = _movResults[wid];
+  const dash = `<span class="text-gray-300">—</span>`;
+  const bl = "border-left:2px solid #c7d2fe";
+  if (!r) return `<td style="${bl}">${dash}</td><td>${dash}</td><td>${dash}</td><td>${dash}</td><td style="text-align:center">${dash}</td>`;
+  if (r.state === "loading") return `<td colspan="5" class="rp-tbl-left" style="${bl}"><span class="wallet-loader"><span class="spin"></span>Movimentando…</span></td>`;
+  if (r.state === "error") return `<td colspan="5" class="rp-tbl-left" style="${bl}"><span class="text-red-500 text-[11px]" title="${esc(r.error || "")}">erro: ${esc(r.error || "falha")}</span></td>`;
+  const gapBad = r.simGapPct != null && Math.abs(nz(r.simGapPct)) > 1e-6;
+  return `
+    <td class="whitespace-nowrap" style="${bl}">${fmtMoney(r.simNav)}</td>
+    <td class="whitespace-nowrap">${fmtNum(r.simNavPerShare, 6)}</td>
+    <td class="whitespace-nowrap">${fmtMoney(r.simGapCash)}</td>
+    <td class="whitespace-nowrap ${gapBad ? "text-red-600" : "text-green-600"}">${fmtPct(r.simGapPct)}</td>
+    <td style="text-align:center"><button type="button" onclick="openDetail('${esc(wid)}')" title="Abrir detalhamento (securities, provisões, transações, caixa)" class="text-[11px] px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100">🔍</button></td>`;
+}
+
+/* ── Seleção múltipla ───────────────────────────────────────────────────────── */
+function onRowCbClick(ev, idx) {
+  const row = _renderedRows[idx]; if (!row) return;
+  if (ev.shiftKey && _anchorIdx != null) {
+    ev.preventDefault();
+    const lo = Math.min(_anchorIdx, idx), hi = Math.max(_anchorIdx, idx);
+    for (let i = lo; i <= hi; i++) { const w = _renderedRows[i]; if (w) _selWallets.add(w.walletId); }
+  } else {
+    if (_selWallets.has(row.walletId)) _selWallets.delete(row.walletId); else _selWallets.add(row.walletId);
+    _anchorIdx = idx;
+  }
+  _syncSelection();
+}
+function toggleSelectAll(on) {
+  _renderedRows.forEach(r => { if (on) _selWallets.add(r.walletId); else _selWallets.delete(r.walletId); });
+  _anchorIdx = null; _syncSelection();
+}
+function _syncSelection() {
+  document.querySelectorAll("#tbody tr").forEach(tr => {
+    const wid = tr.getAttribute("data-wid"); const on = _selWallets.has(wid);
+    const cb = tr.querySelector(".row-cb"); if (cb) cb.checked = on;
+    tr.classList.toggle("bg-blue-50", on);
+  });
+  _syncSelHeader();
+}
+function _syncSelHeader() {
+  const total = _renderedRows.length;
+  const visSel = _renderedRows.filter(r => _selWallets.has(r.walletId)).length;
+  const all = document.getElementById("sel-all-cb");
+  if (all) { all.checked = total > 0 && visSel === total; all.indeterminate = visSel > 0 && visSel < total; }
+  const n = _selWallets.size;
+  const mv = document.getElementById("movimentar-btn");
+  if (mv && mv.textContent !== "Movimentando...") mv.disabled = n === 0;
+  const cnt = document.getElementById("sel-count");
+  if (cnt) cnt.textContent = n ? `${n} carteira(s) selecionada(s)` : "";
+  // Implementar (revisar+aplicar tudo) e Relatório: dependem de carteiras JÁ movimentadas.
+  const done = _renderedRows.filter(r => _selWallets.has(r.walletId) && (_movResults[r.walletId] || {}).state === "done");
+  const imp = document.getElementById("implementar-btn"); if (imp) imp.disabled = done.length === 0;
+  const rep = document.getElementById("report-btn"); if (rep) rep.disabled = done.length === 0;
+}
+function copyWalletId(wid, btn) {
+  navigator.clipboard.writeText(wid).then(() => {
+    if (!btn) return; const old = btn.innerHTML;
+    btn.innerHTML = `<span class="text-[11px] text-green-600 font-semibold">✓</span>`;
+    setTimeout(() => { btn.innerHTML = old; }, 1200);
+  }).catch(() => {});
+}
+
+/* ── Colunas opcionais ──────────────────────────────────────────────────────── */
+function _applyCols() {
+  const wrap = document.querySelector("#wallet-table-body .table-wrap");
+  if (wrap) wrap.classList.toggle("cols-collapsed", _colsCollapsed);
+}
+function toggleCols() {
+  _colsCollapsed = !_colsCollapsed; _applyCols();
+  const btn = document.getElementById("cols-btn");
+  if (btn) { btn.lastChild.textContent = _colsCollapsed ? " Mostrar colunas" : " Ocultar colunas"; btn.classList.toggle("active", !_colsCollapsed); }
+}
+
+/* ── Movimentar (projeção) ──────────────────────────────────────────────────── */
+function _targetDate() { return document.getElementById("target-date-input").value; }
+function _post(url, body) {
+  return fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" }, body: JSON.stringify(body) }).then(r => r.json());
+}
+function _runPool(items, limit, fn) {
+  let i = 0;
+  const next = () => (i < items.length) ? Promise.resolve(fn(items[i++])).then(next) : Promise.resolve();
+  return Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
+}
+function _movProgress(t) { const el = document.getElementById("mov-progress"); if (el) el.textContent = t ? `movimentando ${t}` : ""; }
+/* Status no cabeçalho do detalhamento p/ o usuário acompanhar ações que levam
+   alguns segundos (reprojeção, criação) e não achar que travou.
+   kind: "" = em andamento (com spinner) · "ok" = sucesso · "error" = falha. */
+function _detStatus(msg, kind) {
+  const el = document.getElementById("det-status"); if (!el) return;
+  if (!msg) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.style.color = kind === "error" ? "#b91c1c" : kind === "ok" ? "#166534" : "#6b7280";
+  const spin = (kind === "ok" || kind === "error") ? "" : `<span class="spin" style="display:inline-block;vertical-align:-2px;margin-right:4px"></span>`;
+  el.innerHTML = spin + esc(msg);
+  el.classList.remove("hidden");
+}
+
+/* Reprojeta EM LOTE as carteiras dadas (mesma rota da grade) e atualiza _movResults +
+   as linhas. Usado pelo botão Movimentar E p/ refrescar o preview após uma escrita
+   (envio de provisões/IRRF/transações/preços/upload) — a projeção reflete o que acabou
+   de ser gravado. Resultados marcados `_lite` (sem fluxos-alvo do navPackage, só
+   exibição); o detalhe recarrega a carteira completa ao abrir (openDetail).
+   UMA requisição p/ TODO o conjunto: o servidor faz o prefetch em LOTE (1 chamada por
+   endpoint Beehus em vez de ~10 por carteira). Sempre resolve (erros viram state:error
+   por carteira) p/ poder encadear `.then`. */
+function _reprojectWids(wids) {
+  if (!wids.length) return Promise.resolve();
+  return _post("/api/conciliacao-mov/movimentar-batch", { companyId: _company, walletIds: wids, sourceDate: _date, targetDate: _targetDate() })
+    .then(resp => {
+      const byId = {};
+      ((resp && resp.results) || []).forEach(d => { if (d && d.walletId) byId[d.walletId] = d; });
+      wids.forEach(w => {
+        const d = byId[w];
+        if (d && !d.error) _movResults[w] = { state: "done", _lite: true, ...d };
+        else _movResults[w] = { ..._movResults[w], state: "error",
+                                error: (d && d.error) || (resp && resp.error) || "falha ao projetar" };
+        _updateRow(w);
+      });
+    })
+    .catch(() => { wids.forEach(w => { _movResults[w] = { ..._movResults[w], state: "error", error: "falha ao projetar" }; _updateRow(w); }); });
+}
+
+function movimentarSelected() {
+  const td = _targetDate();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(td) || !(td > _date)) { alert("Data-alvo inválida (deve ser posterior à origem)."); return; }
+  const wids = _renderedRows.filter(r => _selWallets.has(r.walletId)).map(r => r.walletId);
+  if (!wids.length) return;
+  const btn = document.getElementById("movimentar-btn");
+  btn.disabled = true; btn.textContent = "Movimentando...";
+  _movProgress(`0/${wids.length}`);
+  wids.forEach(w => { _movResults[w] = { state: "loading" }; _updateRow(w); });
+  _reprojectWids(wids)
+    .then(() => { btn.textContent = "Movimentar"; _movProgress(""); _syncSelHeader(); });
+}
+function _movimentarOne(wid, td) {
+  return _post("/api/conciliacao-mov/movimentar", { companyId: _company, walletId: wid, sourceDate: _date, targetDate: td })
+    .then(d => {
+      // Em erro, preserva os dados anteriores (targetDate etc.) — uma reprojeção que
+      // falha (ex.: 429) não deve apagar o detalhe já carregado.
+      if (d && d.error) _movResults[wid] = { ..._movResults[wid], state: "error", error: d.error };
+      else _movResults[wid] = { state: "done", ...d };
+    })
+    .catch(() => { _movResults[wid] = { ..._movResults[wid], state: "error", error: "falha ao projetar" }; })
+    .finally(() => _updateRow(wid));
+}
+
+function _selectedDoneWids() {
+  return _renderedRows.filter(r => _selWallets.has(r.walletId) && (_movResults[r.walletId] || {}).state === "done").map(r => r.walletId);
+}
+
+/* ══════════ Implementar — modal de preview + aplicação em LOTE ══════════
+   Um único botão substitui os antigos envios verdes + "Baixar .xlsx". O modal mostra o
+   resumo do que será aplicado (5 grupos) + o preview do upload; "Confirmar tudo" aplica
+   na ORDEM: preços de execução → IRRF → transações de ajuste → provisões → upload da
+   unprocessed. Cada rota reprojeta no servidor (vê o passo anterior); ao final reprojeta
+   a grade. Erro de backend num passo é registrado e segue; falha de rede aborta o resto. */
+let _implementWids = [];
+function _provCount(r) { return ((r.provisions || []).length + (r.reconProvisions || []).length); }
+function _implementPlan(wids) {
+  let exec = 0, irrf = 0, recon = 0, prov = 0, uprows = 0;
+  wids.forEach(w => {
+    const r = _movResults[w] || {};
+    exec += (r.executionPriceFixes || []).length;
+    irrf += (r.irrf || []).filter(e => !e.covered).length;
+    recon += (r.reconTransactions || []).length;
+    prov += _provCount(r);
+    uprows += (r.rows || []).length + 1;   // +1 = linha de caixa
+  });
+  return { exec, irrf, recon, prov, uprows };
+}
+function _renderImplementBody(wids) {
+  const p = _implementPlan(wids);
+  const sline = (label, n, suffix) =>
+    `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #f3f4f6">
+       <span class="${n ? "text-gray-700" : "text-gray-400"}">${esc(label)}</span>
+       <strong class="${n ? "" : "text-gray-300"}">${n ? n + (suffix || "") : "—"}</strong></div>`;
+  const summary = `<div class="mb-3" style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px">
+    <div class="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Será aplicado no Beehus — nesta ordem</div>
+    ${sline("1 · Preços de execução", p.exec, " a corrigir")}
+    ${sline("2 · IRRF (taxes) ausente", p.irrf, " a criar")}
+    ${sline("3 · Transações de ajuste", p.recon, " a criar")}
+    ${sline("4 · Provisões", p.prov, " a criar")}
+    ${sline("5 · Upload da unprocessed (data-alvo)", p.uprows, " linha(s)")}
+  </div>`;
+  const head = `<th class="rp-tbl-left">Carteira</th><th class="rp-tbl-left">Ativo</th><th style="text-align:right">Qtd</th><th style="text-align:right">PU</th><th style="text-align:right">Saldo</th>`;
+  const body = [];
+  wids.forEach(w => {
+    const r = _movResults[w] || {};
+    const wn = esc(r.walletName || w);
+    (r.rows || []).forEach(rw => body.push(`<tr>
+      <td class="rp-tbl-left text-[10px] text-gray-500">${wn}</td>
+      <td class="rp-tbl-left">${esc(rw.securityName || rw.unprocessedId || "—")}</td>
+      <td>${rw.quantity == null ? _DASH : fmtNum(rw.quantity, 4)}</td>
+      <td>${rw.pu == null ? _DASH : fmtNum(rw.pu, 6)}</td>
+      <td class="${nz(rw.balance) < 0 ? "rp-diff-neg" : ""}">${fmtMoney(rw.balance)}</td></tr>`));
+    body.push(`<tr style="background:#fafafa">
+      <td class="rp-tbl-left text-[10px] text-gray-500">${wn}</td>
+      <td class="rp-tbl-left">Caixa</td><td>${_DASH}</td><td>${_DASH}</td>
+      <td>${fmtMoney((r.cash || {}).new)}</td></tr>`);
+  });
+  const preview = `<div class="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Preview do upload — ${p.uprows} linha(s)</div>
+    <div style="overflow:auto;max-height:340px"><table class="rp-tbl"><thead><tr>${head}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
+  return summary + preview;
+}
+function openImplementModal() {
+  const wids = _selectedDoneWids();
+  if (!wids.length) return;
+  _implementWids = wids;
+  document.getElementById("implement-modal-sub").textContent = `${wids.length} carteira(s) · ${_date} → ${_targetDate()}`;
+  document.getElementById("implement-body").innerHTML = _renderImplementBody(wids);
+  document.getElementById("implement-status").textContent = "";
+  const cb = document.getElementById("implement-confirm-btn");
+  cb.textContent = "Confirmar tudo"; cb.disabled = false; cb.onclick = confirmImplement;
+  const dl = document.getElementById("implement-dl-btn"); if (dl) dl.disabled = false;
+  const m = document.getElementById("implement-modal");
+  m.style.display = "flex"; m.classList.remove("hidden");
+}
+function closeImplementModal() {
+  const m = document.getElementById("implement-modal");
+  m.style.display = "none"; m.classList.add("hidden");
+}
+function downloadImplementXlsx() {
+  const wids = _implementWids; if (!wids.length) return;
+  const btn = document.getElementById("implement-dl-btn"); const old = btn.textContent; btn.disabled = true; btn.textContent = "Gerando...";
+  fetch("/api/conciliacao-mov/xlsx", { method: "POST", headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" },
+    body: JSON.stringify({ companyId: _company, sourceDate: _date, targetDate: _targetDate(), walletIds: wids }) })
+    .then(async res => {
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob); const a = document.createElement("a");
+      a.href = url; a.download = `conciliacao_mov_${_company}_${_targetDate()}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }).catch(err => alert("Falha ao baixar: " + err.message))
+    .finally(() => { btn.textContent = old; btn.disabled = false; });
+}
+function _implStep(label, d, okFmt) {
+  if (!d || d.error) return `<div style="color:#b91c1c">✗ ${esc(label)}: ${esc((d && d.error) || "falha")}</div>`;
+  const extra = d.failed ? ` <span style="color:#b45309">(${d.failed} falha(s))</span>` : "";
+  return `<div style="color:#166534">✓ ${esc(label)}: ${esc(okFmt(d))}${extra}</div>`;
+}
+async function confirmImplement() {
+  const wids = _implementWids; if (!wids.length) return;
+  const cb = document.getElementById("implement-confirm-btn"); cb.disabled = true; cb.textContent = "Implementando...";
+  const dl = document.getElementById("implement-dl-btn"); if (dl) dl.disabled = true;
+  const stat = document.getElementById("implement-status");
+  const base = { companyId: _company, sourceDate: _date, targetDate: _targetDate() };
+  const log = [];
+  try {
+    const execW = wids.filter(w => ((_movResults[w] || {}).executionPriceFixes || []).length);
+    if (execW.length) { stat.textContent = "Preços de execução…"; const d = await _post("/api/conciliacao-mov/execution-prices", { ...base, walletIds: execW }); log.push(_implStep("Preços de execução", d, x => `${x.updated || 0} atualizado(s), ${x.created || 0} criado(s)`)); }
+    const irrfW = wids.filter(w => ((_movResults[w] || {}).irrf || []).some(e => !e.covered));
+    if (irrfW.length) { stat.textContent = "IRRF…"; const d = await _post("/api/conciliacao-mov/irrf", { ...base, walletIds: irrfW }); log.push(_implStep("IRRF", d, x => `${x.created || 0} criado(s)`)); }
+    const reconW = wids.filter(w => ((_movResults[w] || {}).reconTransactions || []).length);
+    if (reconW.length) { stat.textContent = "Transações de ajuste…"; const d = await _post("/api/conciliacao-mov/reconcile-txn", { ...base, walletIds: reconW }); log.push(_implStep("Transações de ajuste", d, x => `${x.created || 0} criada(s)`)); }
+    const provW = wids.filter(w => _provCount(_movResults[w] || {}));
+    if (provW.length) { stat.textContent = "Provisões…"; const d = await _post("/api/conciliacao-mov/provisions", { ...base, walletIds: provW }); log.push(_implStep("Provisões", d, x => `${x.created || 0} criada(s)${x.skipped ? `, ${x.skipped} ignorada(s)` : ""}`)); }
+    stat.textContent = "Upload da unprocessed…"; const du = await _post("/api/conciliacao-mov/apply", { ...base, walletIds: wids }); log.push(_implStep("Upload da unprocessed", du, x => `${x.wallets || 0} carteira(s), ${x.rows || 0} linha(s)`));
+  } catch (err) {
+    log.push(`<div style="color:#b91c1c">✗ Falha de rede durante a implementação — passos seguintes não executados.</div>`);
+  }
+  stat.textContent = "";
+  document.getElementById("implement-body").innerHTML =
+    `<div class="text-[10px] uppercase tracking-widest text-gray-400 mb-2">Resultado</div><div style="display:flex;flex-direction:column;gap:4px;font-size:12px">${log.join("") || '<div class="text-gray-400">Nada a aplicar.</div>'}</div>`;
+  cb.textContent = "Atualizando…";
+  await _reprojectWids(wids);
+  _syncSelHeader();
+  cb.textContent = "Fechar"; cb.disabled = false; cb.onclick = closeImplementModal;
+}
+
+/* Opção 1 (liquidação stockETF/B3): cria um AJUSTE DE CONTRIBUIÇÃO
+   (securityContributionAdjustment) p/ o resíduo. Esse tipo é CASH-NEUTRO (não entra no
+   caixa projetado, só na contribuição), então NÃO há prompt de "omitir do caixa": o caixa
+   oficial já reflete só o líquido da B3 e o ajuste não o desbalanceia. Botão na linha-resumo. */
+function createGainsExpenses(wid) {
+  const r = _movResults[wid]; if (!r || !r.stockEtfLiquidation) return;
+  const se = r.stockEtfLiquidation;
+  const value = -nz(se.residual);   // ajuste a lançar = -(resíduo)
+  if (Math.abs(value) < 0.01) { alert("Sem resíduo a lançar (já reconciliado)."); return; }
+  const expl = `A B3 liquidou o valor líquido (${fmtMoney(se.b3Balance)}), mas as provisões dos stockETF somavam ${fmtMoney(se.provisionsTotal)}`
+    + (Math.abs(nz(se.gainsExpensesTotal)) >= 0.01 ? ` (já há ${fmtMoney(se.gainsExpensesTotal)} de gainsExpenses lançado)` : "")
+    + `. A diferença residual (${fmtMoney(se.residual)}) é o custo de execução — será lançada como um ajuste de contribuição (securityContributionAdjustment) de ${fmtMoney(value)} em ${r.targetDate}. Esse tipo NÃO move o caixa projetado (entra só na contribuição).`;
+  if (!confirm(`Criar ajuste de contribuição de ${fmtMoney(value)} em ${r.targetDate}?\n\n${expl}\n\nAção destrutiva (cria a transação no Beehus).`)) return;
+  _detStatus("Criando ajuste de contribuição e reprojetando…");
+  _post("/api/conciliacao-mov/gains-expenses", { companyId: _company, walletId: wid, date: r.targetDate, balance: value, currencyId: r.currencyId })
+    .then(d => {
+      if (d && d.error) { _detStatus("Falha ao criar o ajuste de contribuição.", "error"); alert("Erro: " + d.error); return; }
+      // reprojeta na MESMA data do detalhe aberto (não no campo de data, que pode ter mudado).
+      return _movimentarOne(wid, r.targetDate).then(() => {
+        if (_movResults[wid] && _movResults[wid].state === "done" && _detWid === wid) openDetail(wid);
+        _detStatus("✓ ajuste de contribuição criado (securityContributionAdjustment — fora do caixa).", "ok");
+      });
+    }).catch(() => { _detStatus("Falha ao criar o ajuste de contribuição.", "error"); alert("Falha ao criar o ajuste de contribuição."); });
+}
+
+/* ── Detalhamento da carteira (aba master→detail) ───────────────────────────── */
+function backToGrid() {
+  _detStatus(""); _detWid = null;
+  document.getElementById("mov-detail").classList.add("hidden");
+  document.getElementById("mov-filters").classList.remove("hidden");
+  document.getElementById("table-section").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+function _tbl(head, bodyRows, empty) {
+  if (!bodyRows.length) return `<p class="text-[12px] text-gray-400">${empty}</p>`;
+  return `<div style="overflow-x:auto"><table class="rp-tbl"><thead><tr>${head}</tr></thead><tbody>${bodyRows.join("")}</tbody></table></div>`;
+}
+const _DASH = '<span class="text-gray-300">—</span>';
+
+/* Banda vermelha de alerta — "a gerar" (mesmo padrão do bloco de provisões
+   esperadas da Posição Projetada). */
+function _alertBand(title, sub) {
+  return `<div class="mb-3" style="border:1px solid #fca5a5; border-radius:0.5rem; overflow:hidden">
+    <div style="background:#fef2f2; color:#7f1d1d; padding:6px 10px; font-size:11px; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+      <span class="rp-expected-prov-pill">${esc(title)}</span>
+      <span>${esc(sub)}</span>
+    </div>
+  </div>`;
+}
+function _mDetails(title, headerRight, inner) {
+  return `<details class="bg-white rounded-xl shadow p-4" open>
+    <summary class="cursor-pointer list-none">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="text-sm font-semibold text-gray-800">${esc(title)}</span>
+        <span class="ml-auto">${headerRight || ""}</span>
+      </div>
+    </summary>
+    <div class="mt-3">${inner}</div>
+  </details>`;
+}
+
+/* ── Bloco NAV (3 snapshots: Anterior / Atual / Projetada) — igual à
+      Posição Projetada ─────────────────────────────────────────────────── */
+function _mNavCell(label, val, kind) {
+  if (val === null || val === undefined) return `<div class="text-[10px] text-gray-300">${esc(label)}: —</div>`;
+  const f = kind === "money" ? fmtMoney(val) : kind === "nps" ? fmtNum(val, 6)
+          : kind === "amt" ? fmtNum(val, 6) : kind === "pct" ? fmtPct(val) : fmtNum(val, 2);
+  let cls = "";
+  if (kind === "pct" && Math.abs(nz(val)) >= 1e-6) cls = val > 0 ? "text-green-700" : "text-red-700";
+  return `<div class="text-[10px]"><span class="text-gray-500">${esc(label)}:</span> <strong class="${cls}">${f}</strong></div>`;
+}
+/* Célula de GAP por etapa: verde quando ≈0 (etapa auto-contida — não gera GAP),
+   âmbar quando há resíduo. `—` quando a etapa não se aplica (ex.: caixa sem oficial). */
+function _mGapStageCell(label, val, title) {
+  if (val === null || val === undefined)
+    return `<div class="text-[10px] text-gray-300" title="${esc(title || "")}">${esc(label)}: —</div>`;
+  const cls = Math.abs(nz(val)) < 0.01 ? "text-green-700" : "text-amber-700";
+  return `<div class="text-[10px]" title="${esc(title || "")}"><span class="text-gray-500">${esc(label)}:</span> <strong class="${cls}">${fmtMoney(val)}</strong></div>`;
+}
+function _mNavBlock(r) {
+  const d = r.diff || {}, real = d.real || {};
+  const aRetNps = real.returnNavPerShare, aRetC = real.returnContribution;
+  const aGap = (aRetNps != null && aRetC != null) ? (nz(aRetNps) - nz(aRetC)) : null;
+  const aGapCash = (aGap != null && r.formerNav) ? aGap * nz(r.formerNav) : null;
+  // Sub-coluna: aproveita o espaço HORIZONTAL (posição | retornos | GAP lado a
+  // lado) pra reduzir a altura do cabeçalho. white-space:nowrap dá à sub-coluna
+  // a largura do conteúdo, e o container abaixo é nowrap — assim o grupo GAP
+  // nunca cai pra baixo de posição/retornos (o card cresce ou, em tela estreita,
+  // o card inteiro quebra de linha pelo flex-wrap do rp-nav-content).
+  const subCol = (titulo, cells) => `<div style="padding:0 6px; white-space:nowrap">
+    ${titulo ? `<div class="text-[9px] uppercase tracking-wide text-gray-400" style="border-bottom:1px dashed #e5e7eb;padding-bottom:1px;margin-bottom:1px">${esc(titulo)}</div>` : ""}${cells.join("")}</div>`;
+  const card = (titulo, subcols) => `<div style="flex:1 0 auto; min-width:230px; padding:5px 10px; border-right:1px solid #f3f4f6">
+    <div class="text-[10px] uppercase tracking-wide text-gray-500" style="font-weight:600;margin-bottom:2px">${esc(titulo)}</div>
+    <div style="display:flex; gap:4px; flex-wrap:nowrap">${subcols.join("")}</div></div>`;
+  const anterior = card("Anterior (origem)", [
+    subCol("", [_mNavCell("NAV", r.formerNav, "money"), _mNavCell("cota", r.formerNavPerShare, "nps"), _mNavCell("amount", r.shares, "amt")]),
+  ]);
+  const atual = d.hasTarget ? card("Atual (alvo real)", [
+    subCol("posição", [_mNavCell("NAV", real.nav, "money"), _mNavCell("cota", real.navPerShare, "nps"), _mNavCell("fluxos", real.inAndOutFlows, "money")]),
+    subCol("retornos", [_mNavCell("rent. NAV", aRetNps, "pct"), _mNavCell("rent. contrib.", aRetC, "pct")]),
+    subCol("GAP", [_mNavCell("GAP %", aGap, "pct"), _mNavCell("GAP R$", aGapCash, "money")]),
+  ]) : card("Atual (alvo real)", [subCol("", [`<div class="text-[10px] text-gray-300 italic">sem navPackage / unprocessed do alvo</div>`])]);
+  const projetada = card("Projetada (sim.)", [
+    subCol("posição", [_mNavCell("NAV", r.simNav, "money"), _mNavCell("cota", r.simNavPerShare, "nps"), _mNavCell("fluxos", r.inflows, "money")]),
+    subCol("retornos", [_mNavCell("rent. NAV", r.simReturnNavPerShare, "pct"), _mNavCell("rent. contrib.", r.simReturnContribution, "pct")]),
+    subCol("GAP", [_mNavCell("GAP %", r.simGapPct, "pct"), _mNavCell("GAP R$", r.simGapCash, "money")]),
+  ]);
+  // GAPs por ETAPA — verifica que cada etapa da projeção é "auto-contida" (não gera GAP)
+  // e localiza de ONDE vem um GAP: mov (projeção) · amDiff (≈0, NAV-neutro) · caixa (proj−oficial).
+  const gs = r.gapStages || {};
+  const etapas = card("GAPs por etapa", [
+    subCol("", [
+      _mGapStageCell("mov", gs.mov,
+        "GAP da projeção: posição-origem + movimentos + provisões (derivadas/oficiais), ANTES da adoção amDiff. É o resíduo da projeção em si (estimativa de qtd, IRRF de fundo, etc.)."),
+      _mGapStageCell("amDiff", gs.amDiff,
+        "Incremento de GAP da etapa amountDifference (adoção da qtd-alvo: reconProvision / coberta por provisão oficial). DEVE ser ~0 — a adoção é NAV-neutra (cota +Δq×PU compensada pela provisão −Δq×PU). ≠0 indicaria quebra dessa neutralidade."),
+      _mGapStageCell("caixa", gs.cash,
+        "Caixa PROJETADO − caixa OFICIAL (regra caixa-âncora). Não é GAP de retorno: 0 = caixa bate; ≠0 = transação ausente/errada no caixa. — quando não há caixa oficial no alvo (forward)."),
+    ]),
+  ]);
+  return `<div class="rp-nav-bar" style="border-bottom:1px solid #e5e7eb; background:#fafafa">
+    <div class="rp-nav-content" style="display:flex; flex-wrap:wrap; padding:3px 10px 4px">${anterior}${atual}${projetada}${etapas}</div>
+  </div>`;
+}
+
+/* ── Tabela de securities (estilo prévia da Posição Projetada) ──────────── */
+function _mDeltaQty(d) {
+  if (Math.abs(d) < 1e-6) return `<span class="rp-diff-zero">0</span>`;
+  return `<span class="${d > 0 ? "rp-diff-pos" : "rp-diff-neg"}">${d > 0 ? "+" : ""}${fmtNum(d, 4)}</span>`;
+}
+function _mDiffCell(rw, real, dqty, dpu, dbal) {
+  if (!real) return `<span class="rp-diff-na">—</span>`;
+  const CENT = 0.01;
+  const puRef = Math.max(Math.abs(nz(rw.pu)), Math.abs(nz(real.pu)));
+  const qtyRef = Math.max(Math.abs(nz(rw.quantity)), Math.abs(nz(real.q)));
+  const cls = v => (v > 0 ? "rp-diff-pos" : "rp-diff-neg");
+  const parts = [];
+  if (Math.abs(dqty) * puRef >= CENT) parts.push(`<div class="${cls(dqty)}">qtd: ${fmtNum(dqty, 4)}</div>`);
+  if (Math.abs(dpu) * qtyRef >= CENT) parts.push(`<div class="${cls(dpu)}">pu: ${fmtNum(dpu, 6)}</div>`);
+  if (Math.abs(dbal) >= CENT) parts.push(`<div class="${cls(dbal)}">sld: ${fmtMoney(dbal)}</div>`);
+  if (!parts.length) return `<span class="rp-diff-zero" title="Projetada bate com a unprocessed do alvo (impacto < R$ 0,01)">—</span>`;
+  return `<div class="text-[11px]">${parts.join("")}</div>`;
+}
+/* Botão de copiar securityId (reusa copyWalletId — cópia genérica + feedback ✓). */
+function _copyBtn(text) {
+  if (!text) return "";
+  return `<button type="button" onclick="copyWalletId('${esc(text)}', this)" title="Copiar securityId (${esc(text)})" class="shrink-0 text-gray-400 hover:text-blue-600 p-0.5 rounded leading-none align-middle"><svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
+}
+function _mSecRow(rw, real, isOnlyCalc, coveredByProv, onlyCalcInfo) {
+  const sid = rw.securityId;
+  let dqty = 0, dpu = 0, dbal = 0;
+  if (real) { dqty = nz(rw.quantity) - nz(real.q); dpu = nz(rw.pu) - nz(real.pu); dbal = nz(rw.balance) - nz(real.bal); }
+  let cls = "";
+  if (rw.matured) cls = "rp-row-matured";
+  if (real && Math.abs(dqty) > 1e-6) cls = "rp-row-qty-mismatch";
+  else if (!cls && real && Math.abs(dbal) > 0.01) cls = "rp-row-has-diff";
+  else if (!cls && isOnlyCalc) cls = "rp-row-has-diff";
+  const flags = [];
+  if (!rw.mapped) flags.push(`<span class="rp-flag rp-flag-missingB1Price">não mapeado</span>`);
+  if (rw.matured) flags.push(`<span class="rp-flag rp-flag-buysell">vencido</span>`);
+  if (isOnlyCalc) {
+    flags.push(`<span class="rp-flag rp-flag-missingB1Price" title="${esc((onlyCalcInfo && onlyCalcInfo.because) || "Ativo só na carteira movimentada")}">só no movimentado</span>`);
+    // onlyCalc é FLAG-ONLY → pílula de revisão manual + confiança (sem escrita).
+    flags.push(_reviewBadge(onlyCalcInfo && onlyCalcInfo.because).trim());
+    if (onlyCalcInfo && onlyCalcInfo.confidence) { const b = _confBadge(onlyCalcInfo.confidence, onlyCalcInfo.because); if (b) flags.push(b.trim()); }
+  }
+  if (coveredByProv) flags.push(`<span class="rp-flag rp-flag-buysell" style="background:#dcfce7;color:#166534" title="Divergência de qtd já coberta por provisão existente no sistema">coberto por provisão</span>`);
+  if (real && real.adopted) flags.push(`<span class="rp-flag rp-flag-buysell" style="background:#dbeafe;color:#1e40af" title="Qtd projetada ADOTADA da posição-alvo (liquidação futura, sem transaction na janela): a provisão de ajuste casa o caixa pendente — NAV-neutro, não altera o GAP">qtd adotada do alvo</span>`);
+  if (rw.adoptedFromTarget) flags.push(`<span class="rp-flag rp-flag-buysell" style="background:#dbeafe;color:#1e40af" title="Ativo presente SÓ na posição-ALVO (confirmado na processed-position oficial, qtd ≠ 0; entrou por transferência/reestruturação sem transação na janela). Copiado p/ a projeção — sem P&L (contribuição 0), entra no NAV pelo saldo.">copiado do alvo</span>`);
+  // (Não há mais flag "preço divergente": o saldo-alvo é avaliado ao PU em uso, então
+  //  divergência só-de-PU da unprocessed não ocorre — o saldo-alvo segue o PU em uso.)
+  if (real && real.conf) { const b = _confBadge(real.conf, real.because); if (b) flags.push(b.trim()); }
+  return `<tr class="${cls}">
+    <td data-col="ativo" class="rp-tbl-left"><span class="inline-flex items-center gap-1">${esc(rw.securityName || sid || "—")}${_copyBtn(sid)}</span></td>
+    <td>${esc(rw.pricingType || "—")}</td>
+    <td data-col="qtyOriginal">${fmtNum(rw.formerQuantity, 4)}</td>
+    <td>${fmtNum(rw.formerPu, 6)}</td>
+    <td>${fmtMoney(rw.formerBalance)}</td>
+    <td data-col="qtyTarget">${real ? fmtNum(real.q, 4) : _DASH}</td>
+    <td>${real ? fmtNum(real.pu, 6) : _DASH}</td>
+    <td>${real ? fmtMoney(real.bal) : _DASH}</td>
+    <td data-col="qtyRep">${fmtNum(rw.quantity, 4)}</td>
+    <td>${fmtNum(rw.pu, 6)}</td>
+    <td>${fmtMoney(rw.balance)}</td>
+    <td>${real ? _mDeltaQty(dqty) : _DASH}</td>
+    <td data-col="diff" class="rp-tbl-left">${_mDiffCell(rw, real, dqty, dpu, dbal)}</td>
+    <td class="rp-tbl-left">${flags.join(" ") || _DASH}</td>
+  </tr>`;
+}
+function _mOnlyRealRow(x) {
+  // onlyReal é FLAG-ONLY → "só no alvo" + revisão manual + confiança (tooltip
+  // com o "porquê"); nenhuma escrita é gerada automaticamente p/ este caso.
+  const flags = [`<span class="rp-flag rp-flag-missingB1Price" title="${esc(x.because || "Ativo só na unprocessed do alvo")}">só no alvo</span>`,
+                 _reviewBadge(x.because).trim()];
+  if (x.confidence) { const b = _confBadge(x.confidence, x.because); if (b) flags.push(b.trim()); }
+  return `<tr class="rp-row-has-diff">
+    <td data-col="ativo" class="rp-tbl-left"><span class="inline-flex items-center gap-1">${esc(x.securityName || x.securityId || "—")}${_copyBtn(x.securityId)}</span></td>
+    <td>${_DASH}</td>
+    <td data-col="qtyOriginal">${_DASH}</td><td>${_DASH}</td><td>${_DASH}</td>
+    <td data-col="qtyTarget">${fmtNum(x.quantity, 4)}</td><td>${_DASH}</td><td>${fmtMoney(x.balance)}</td>
+    <td data-col="qtyRep">${_DASH}</td><td>${_DASH}</td><td>${_DASH}</td>
+    <td>${_DASH}</td>
+    <td data-col="diff" class="rp-tbl-left"><span class="rp-diff-neg text-[11px]">só no alvo</span></td>
+    <td class="rp-tbl-left">${flags.join(" ")}</td>
+  </tr>`;
+}
+function _mCashRow(r) {
+  const c = r.cash || {}, d = r.diff || {}, oc = d.officialCash;
+  // cashStatus: match / mismatch / unknown (sem caixa oficial no alvo).
+  const cs = d.cashStatus || null;
+  const cd = (c.new != null && oc != null) ? nz(c.new) - nz(oc) : null;
+  const cdSig = cd != null && Math.abs(cd) >= 0.01;
+  const cdCls = cdSig ? (cd >= 0 ? "rp-diff-pos" : "rp-diff-neg") : "rp-diff-zero";
+  const cdHTML = cdSig ? (cd >= 0 ? "+" : "") + fmtMoney(cd) : "—";
+  const csLabel = cs === "match" ? "BATE" : cs === "mismatch" ? "NÃO bate" : cs === "unknown" ? "INDETERMINADO" : "—";
+  const csCls = cs === "match" ? "bg-green-50 text-green-700" : cs === "mismatch" ? "bg-red-50 text-red-700"
+    : cs === "unknown" ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-500";
+  const csTitle = cs === "unknown" ? "Sem caixa oficial no alvo (alvo ainda não processado) — divergências ficam sem classificação automática e sem ajustes a gerar" : "Δ = caixa movimentado − caixa oficial (alvo)";
+  const badge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold ${csCls}" title="${esc(csTitle)}">caixa ${csLabel}</span>`;
+  return `<tr class="rp-row-cash">
+    <td class="rp-tbl-left">Caixa</td>
+    <td class="text-gray-400">—</td>
+    <td data-col="qtyOriginal" class="text-gray-400">—</td><td class="text-gray-400">—</td><td>${fmtMoney(c.former)}</td>
+    <td data-col="qtyTarget" class="text-gray-400">—</td><td class="text-gray-400">—</td><td>${oc != null ? fmtMoney(oc) : _DASH}</td>
+    <td data-col="qtyRep" class="text-gray-400">—</td><td class="text-gray-400">—</td><td>${fmtMoney(c.new)}</td>
+    <td class="text-gray-400">—</td>
+    <td data-col="diff" class="rp-tbl-left ${cdCls}" title="Δ = caixa movimentado − caixa oficial (alvo)">${cdHTML}</td>
+    <td class="rp-tbl-left">${badge}</td>
+  </tr>`;
+}
+/* Pílula de confiança da classificação (alta/média/baixa) + o "porquê" no tooltip.
+   Usada nas linhas a gerar (recon prov/txn) e nas divergências da tabela de ativos. */
+function _confBadge(conf, because) {
+  const m = { high: ["alta", "#dcfce7", "#166534"], medium: ["média", "#fef9c3", "#854d0e"], low: ["baixa", "#fee2e2", "#991b1b"] };
+  const x = m[conf]; if (!x) return "";
+  return ` <span class="rp-flag" style="background:${x[1]};color:${x[2]}" title="${esc(because || "")}">conf. ${x[0]}</span>`;
+}
+/* Pílula "⚠ revisar manual": achados de onlyCalc/onlyReal/PU-only que são
+   FLAG-ONLY — diagnóstico, sem geração de escrita automática (precisam validação
+   com dado real). O "porquê" vai no tooltip. */
+function _reviewBadge(because) {
+  return ` <span class="rp-flag" style="background:#fef3c7;color:#92400e" title="${esc(because || "Requer revisão manual — nenhuma escrita é gerada automaticamente")}">⚠ revisar manual</span>`;
+}
+/* Critério de "atividade" do ativo — mesmo espírito do filtro da tela de
+   Conciliação (`_secHasActivity`): divergência REAL vs alvo (qtd/PU/saldo
+   além da tolerância), movimento por transação na janela, vencimento,
+   cupom/amort, não-mapeado ou ativo só de um lado. */
+function _mRowActive(rw, real, isOnlyCalc, tx) {
+  if (!rw.mapped) return true;
+  if (rw.matured) return true;
+  if (isOnlyCalc) return true;
+  if (rw.couponAmort != null && Math.abs(nz(rw.couponAmort)) > 0.005) return true;
+  if (tx && (tx.c > 0 || Math.abs(tx.b) > 0.005)) return true;
+  // Movimento entre datas: a QUANTIDADE mudou da posição anterior (origem) para a
+  // atual (alvo real quando há; senão a projetada). PU/saldo variam todo dia por
+  // marcação a mercado — por isso o critério aqui é só quantidade (movimento real).
+  if (Math.abs(nz(rw.formerQuantity) - nz(real ? real.q : rw.quantity)) > 1e-6) return true;
+  if (real) {
+    if (Math.abs(nz(rw.quantity) - nz(real.q)) > 1e-6) return true;
+    if (Math.abs(nz(rw.balance) - nz(real.bal)) > 0.01) return true;
+    const qtyRef = Math.max(Math.abs(nz(rw.quantity)), Math.abs(nz(real.q)));
+    if (Math.abs(nz(rw.pu) - nz(real.pu)) * qtyRef > 0.01) return true;
+  }
+  return false;
+}
+function _mSecRowsModel(r) {
+  const d = r.diff || {}, hasTarget = !!d.hasTarget;
+  const divMap = {}; (d.diverged || []).forEach(x => divMap[x.securityId] = x);
+  const onlyCalcMap = {}; (d.onlyCalc || []).forEach(x => onlyCalcMap[x.securityId] = x);
+  const txnBySid = {};
+  (r.transactions || []).forEach(t => {
+    const s = t.securityId || ""; if (!s) return;
+    const o = txnBySid[s] || { c: 0, b: 0 }; o.c++; o.b += nz(t.balance); txnBySid[s] = o;
+  });
+  return (r.rows || []).map(rw => {
+    let real = null, isOnlyCalc = false, coveredByProv = false, onlyCalcInfo = null;
+    if (hasTarget && rw.securityId) {
+      const dv = divMap[rw.securityId];
+      if (dv) { real = { q: dv.realQuantity, pu: dv.realPu, bal: dv.realBalance, conf: dv.confidence, because: dv.because, needsManualReview: dv.needsManualReview, adopted: !!dv.adoptedTargetQty }; coveredByProv = !!dv.coveredByProvision; }
+      else if (onlyCalcMap[rw.securityId]) { isOnlyCalc = true; onlyCalcInfo = onlyCalcMap[rw.securityId]; }   // só no movimentado
+      else real = { q: rw.quantity, pu: rw.pu, bal: rw.balance }; // bate
+    }
+    // Linha com qtd ADOTADA do alvo fica com Δqty≈0 (projetada=alvo) → o critério de
+    // atividade não a pegaria; mantém visível sob o filtro (foi um evento de provisão).
+    const active = _mRowActive(rw, real, isOnlyCalc, txnBySid[rw.securityId || ""]) || coveredByProv || !!(real && real.adopted);
+    return { rw, real, isOnlyCalc, active, coveredByProv, onlyCalcInfo };
+  });
+}
+function _mSecTable(r, model) {
+  const d = r.diff || {};
+  const secModel = _detSecFilter ? model.filter(m => m.active) : model;
+  const body = [];
+  secModel.forEach(m => body.push(_mSecRow(m.rw, m.real, m.isOnlyCalc, m.coveredByProv, m.onlyCalcInfo)));
+  (d.onlyReal || []).forEach(x => body.push(_mOnlyRealRow(x)));   // só no alvo = sempre relevante
+  body.push(_mCashRow(r));
+  // Provisões NÃO entram na tabela de securities — aparecem no bloco dedicado de
+  // Provisões (_mProvBlock) logo abaixo, evitando duplicação.
+  if (_detSecFilter && !secModel.length) {
+    body.unshift(`<tr><td colspan="14" class="rp-tbl-left" style="text-align:center;color:#9ca3af;padding:10px 0">Nenhum ativo com divergência/movimento (filtro ligado). Veja Caixa/Provisões abaixo ou clique em "Filtrado" para mostrar todos.</td></tr>`);
+  }
+  const head = `<th data-col="ativo" class="rp-tbl-left">Ativo</th>
+    <th>Pricing</th>
+    <th data-col="qtyOriginal">Qtd anterior</th><th>PU anterior</th><th>Saldo anterior</th>
+    <th data-col="qtyTarget" title="Quantidade do alvo (unprocessed do alvo — autoritativa)">Qtd alvo</th><th title="PU EM USO — oficial da processed-position quando o alvo está processado; o PU bruto da unprocessed não é mais usado nem comparado">PU alvo</th><th title="Saldo do alvo avaliado ao PU em uso (Qtd alvo × PU em uso)">Saldo alvo</th>
+    <th data-col="qtyRep">Qtd projetada</th><th title="PU em uso (mesma fonte do 'PU alvo')">PU projetada</th><th>Saldo projetada</th>
+    <th title="projetada − alvo">Δ Qtd</th>
+    <th data-col="diff" class="rp-tbl-left" title="Diferença projetada − alvo (ambos avaliados ao PU em uso) → reflete só a quantidade">Diff vs alvo</th>
+    <th class="rp-tbl-left">Flags</th>`;
+  const note = d.hasTarget ? ""
+    : `<p class="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-2">${esc(d.note || "Sem unprocessed do alvo para comparar — colunas 'alvo' e 'diff vs alvo' ficam vazias.")}</p>`;
+  // A unprocessed do alvo não estava pré-processada (sem securityId) — a posição-alvo veio da
+  // processed-position (oficial). Sinaliza a procedência p/ o operador não confundir com defeito.
+  const srcNote = (r.targetSource === "processed-fallback")
+    ? `<p class="text-[12px] text-sky-800 bg-sky-50 border border-sky-200 rounded px-3 py-2 mb-2">⚙ Posição-alvo obtida da <b>processed-position</b> (a unprocessed do alvo ainda não estava pré-processada). Comparação válida; sem isso a tela apontaria toda a carteira para revisão.</p>`
+    : "";
+  return note + srcNote + `<table class="rp-tbl"><thead><tr>${head}</tr></thead><tbody>${body.join("")}</tbody></table>`;
+}
+function _mSecFilterBtn(shown, total) {
+  const funnel = _detSecFilter
+    ? `<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/></svg>`
+    : `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/></svg>`;
+  return `<button id="det-sec-filter-btn" type="button" onclick="toggleDetSecFilter()" class="fb-chip${_detSecFilter ? " active" : ""}" data-kind="nav"
+    title="Mostra só ativos com divergência/movimento (mesmo critério da Conciliação)">${funnel}${_detSecFilter ? " Filtrado" : " Filtrar"}</button>`;
+}
+function toggleDetSecFilter() {
+  _detSecFilter = !_detSecFilter;
+  if (_detWid) openDetail(_detWid);
+}
+
+/* ── Bloco Provisões — JÁ NO SISTEMA (verde) + LIQUIDANDO na data (amarelo, fora
+      do NAV) + do movimento + A GERAR (vermelho). stockETF marcado; linha-resumo
+      da liquidação consolidada B3 ao final. ─────────────────────────────────── */
+function _etfTag(p) {
+  return p.isStockEtf ? ` <span class="rp-flag" style="background:#e0e7ff;color:#3730a3" title="stockETF — liquidação consolidada na B3">stockETF</span>` : "";
+}
+// Item 1 — pill do casamento provisão-que-liquida ↔ liquidação de caixa.
+// verde = ativo+valor batem · amarelo = só o valor · vermelho = nada semelhante.
+const _LIQ_MATCH = {
+  green:  ["#dcfce7", "#166534", "caixa casado"],
+  yellow: ["#fef9c3", "#854d0e", "caixa provável"],
+  red:    ["#fee2e2", "#991b1b", "sem caixa"],
+};
+function _liqMatchPill(p) {
+  const [bg, fg, label] = _LIQ_MATCH[p.matchStatus] || _LIQ_MATCH.red;
+  return `<span class="rp-flag" style="background:${bg};color:${fg}" title="${esc(p.matchBecause || "")}">${label}</span>`;
+}
+const _LIQ_BORDER = { green: "#16a34a", yellow: "#ca8a04", red: "#dc2626" };
+function _mProvBlock(r) {
+  const provs = r.provisions || [], rp = r.reconProvisions || [], offp = r.officialProvisions || [], liq = r.liquidatingProvisions || [];
+  const head = `<th>Início</th><th>Liquidação</th><th class="rp-tbl-left">Tipo</th><th class="rp-tbl-left">Descrição</th><th class="rp-tbl-left">Ativo</th><th style="text-align:right">Δ Qtd</th><th style="text-align:right">PU</th><th style="text-align:right">Saldo</th><th class="rp-tbl-left">Origem</th>`;
+  const body = [];
+  offp.forEach(p => body.push(`<tr>
+    <td>${esc(p.initialDate || "—")}</td><td>${esc(p.liquidationDate || "—")}</td>
+    <td class="rp-tbl-left text-[10px] text-gray-500">${esc(p.provisionType || "—")}</td>
+    <td class="rp-tbl-left" title="${esc(p.provisionSource || "")}">${esc(p.description || p.provisionSource || "—")}</td>
+    <td class="rp-tbl-left"><span class="inline-flex items-center gap-1">${esc(p.securityName || p.securityId || "—")}${_copyBtn(p.securityId)}</span></td>
+    <td class="text-gray-300">—</td><td class="text-gray-300">—</td>
+    <td class="${nz(p.balance) < 0 ? "rp-diff-neg" : ""}">${fmtMoney(p.balance)}</td>
+    <td class="rp-tbl-left"><span class="rp-flag rp-flag-buysell" style="background:#dcfce7;color:#166534">no sistema</span>${_etfTag(p)}</td></tr>`));
+  liq.forEach(p => body.push(`<tr class="rp-row-provision" style="border-left:3px solid ${_LIQ_BORDER[p.matchStatus] || _LIQ_BORDER.red}">
+    <td>${esc(p.initialDate || "—")}</td><td>${esc(p.liquidationDate || "—")}</td>
+    <td class="rp-tbl-left text-[10px] text-gray-500">${esc(p.provisionType || "—")}</td>
+    <td class="rp-tbl-left" title="${esc(p.provisionSource || "")}">${esc(p.description || p.provisionSource || "—")}</td>
+    <td class="rp-tbl-left"><span class="inline-flex items-center gap-1">${esc(p.securityName || p.securityId || "—")}${_copyBtn(p.securityId)}</span></td>
+    <td class="text-gray-300">—</td><td class="text-gray-300">—</td>
+    <td class="${nz(p.balance) < 0 ? "rp-diff-neg" : ""}">${fmtMoney(p.balance)}</td>
+    <td class="rp-tbl-left">${_liqMatchPill(p)} <span class="rp-flag" style="background:#fef9c3;color:#854d0e" title="Liquida nesta data — o saldo já virou caixa, NÃO está no NAV do alvo (vem do envelope da origem)">liquida na data · fora do NAV</span>${_etfTag(p)}</td></tr>`));
+  provs.forEach(p => body.push(`<tr>
+    <td>${esc(p.initialDate || "—")}</td><td>${esc(p.liquidationDate || "—")}</td>
+    <td class="rp-tbl-left text-[10px] text-gray-500">${esc(p.provisionType || "buySell")}</td>
+    <td class="rp-tbl-left">${esc(p.description || "—")}</td>
+    <td class="rp-tbl-left">${esc(p.securityName || p.securityId || "—")}</td>
+    <td class="text-gray-300">—</td><td class="text-gray-300">—</td>
+    <td class="${nz(p.balance) < 0 ? "rp-diff-neg" : ""}">${fmtMoney(p.balance)}</td>
+    <td class="rp-tbl-left"><span class="rp-flag rp-flag-buysell">liq. futura</span></td></tr>`));
+  rp.forEach(p => body.push(`<tr class="rp-row-qty-mismatch">
+    <td>${esc(p.initialDate || "—")}</td><td>${esc(p.liquidationDate || "—")}</td>
+    <td class="rp-tbl-left text-[10px] text-gray-500">${esc(p.provisionType || "buySell")}</td>
+    <td class="rp-tbl-left">${esc(p.description || "—")}</td>
+    <td class="rp-tbl-left">${esc(p.securityName || p.securityId || "—")}</td>
+    <td>${fmtNum(p.amountDifference, 2)}</td><td title="${esc(p.priceSource === "pu-alvo" ? "PU em uso (oficial da processed-position quando disponível) — proxy do execPrice do trade ausente/futuro, que não é conhecido" : "")}">${fmtNum(p.executionPrice, 4)}${p.priceSource === "pu-alvo" ? ' <span class="text-gray-400 text-[9px]">PU</span>' : ""}</td>
+    <td class="rp-diff-neg">${fmtMoney(p.balance)}</td>
+    <td class="rp-tbl-left"><span class="rp-expected-prov-pill">a gerar · ajuste</span>${_confBadge(p.confidence, p.because)}</td></tr>`));
+  // A liquidação consolidada stockETF/B3 NÃO tem mais bloco-resumo aqui — a correção
+  // sugerida virou uma transação "a gerar" no bloco de Transações (_mTxnBlock), com botão
+  // de aprovar; o texto explicativo está no tooltip dessa linha.
+  const liqRed = liq.filter(p => (p.matchStatus || "red") === "red").length;
+  const liqLbl = `${liq.length} liquidando na data` + (liqRed ? ` <span style="color:#991b1b">(${liqRed} sem caixa)</span>` : "");
+  const chips = `<span class="text-[11px] text-gray-500">${offp.length} no sistema · ${liqLbl} · ${provs.length} liq. futura · ${rp.length} a gerar</span>`;
+  return _mDetails("Provisões", chips, _tbl(head, body, "Sem provisões."));
+}
+
+/* ── Bloco Transações — transações da janela + transações/IRRF A GERAR,
+      tudo no mesmo bloco; as geradas pintadas para alertar ──────────────── */
+function _mTxnBlock(r) {
+  const txns = r.transactions || [], rtx = r.reconTransactions || [], irrf = r.irrf || [];
+  const irrfMissing = irrf.filter(e => !e.covered);
+  const head = `<th>Liq.</th><th>Op.</th><th class="rp-tbl-left">Tipo</th><th class="rp-tbl-left">Ativo</th><th class="rp-tbl-left">Descrição</th><th style="text-align:right">Qtd</th><th style="text-align:right">Saldo</th><th class="rp-tbl-left">Origem</th>`;
+  const body = [];
+  txns.forEach(t => {
+    body.push(`<tr>
+    <td class="text-[10px]">${esc(t.liquidationDate)}</td><td class="text-[10px]">${esc(t.operationDate)}</td>
+    <td class="rp-tbl-left text-[10px] text-gray-500">${esc(t.type)}</td>
+    <td class="rp-tbl-left">${esc(t.securityName || t.securityId || "—")}</td>
+    <td class="rp-tbl-left" title="${esc(t.description || "")}" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.description ? esc(t.description) : '<span class="text-gray-300">—</span>'}</td>
+    <td>${t.quantity == null ? _DASH : fmtNum(t.quantity, 4)}</td>
+    <td class="${nz(t.balance) < 0 ? "rp-diff-neg" : ""}">${fmtMoney(t.balance)}</td>
+    <td class="rp-tbl-left"><span class="rp-flag rp-flag-buysell">janela</span></td></tr>`);
+  });
+  rtx.forEach(x => body.push(`<tr class="rp-row-qty-mismatch">
+    <td class="text-[10px]">${esc(x.liquidationDate)}</td><td class="text-[10px]">${esc(x.operationDate)}</td>
+    <td class="rp-tbl-left text-[10px] text-gray-500">${esc(x.beehusTransactionType || "buySell")}</td>
+    <td class="rp-tbl-left">${esc(x.securityName || x.securityId || "—")}</td>
+    <td class="rp-tbl-left">${esc(x.description || "—")}</td>
+    <td>${fmtNum(x.quantity, 4)}</td>
+    <td class="${nz(x.balance) < 0 ? "rp-diff-neg" : "rp-diff-pos"}">${fmtMoney(x.balance)}</td>
+    <td class="rp-tbl-left"><span class="rp-expected-prov-pill">a gerar · ${x.matured ? "resgate venc." : "ajuste"}</span>${_confBadge(x.confidence, x.because)}</td></tr>`));
+  irrf.forEach(e => {
+    const gen = !e.covered;
+    body.push(`<tr class="${gen ? "rp-row-qty-mismatch" : ""}">
+      <td class="text-[10px]">${esc(e.liquidationDate)}</td><td class="text-[10px]">${esc(e.operationDate)}</td>
+      <td class="rp-tbl-left text-[10px] text-gray-500">taxes (IRRF)</td>
+      <td class="rp-tbl-left">${esc(e.securityName || e.securityId || "—")}</td>
+      <td class="rp-tbl-left">${esc(e.description || "IRRF resgate de fundo")}</td>
+      <td class="text-gray-300">—</td>
+      <td class="${gen ? "rp-diff-neg" : ""}">${fmtMoney(e.irrf)}</td>
+      <td class="rp-tbl-left" title="${esc(e.because || "")}">${gen ? `<span class="rp-expected-prov-pill">a gerar · IRRF</span>` : `<span class="rp-flag rp-flag-buysell" style="background:#dcfce7;color:#166534">já lançado</span>`}${e.multiEvent ? ` <span class="rp-flag" style="background:#fee2e2;color:#991b1b" title="Múltiplos resgates na janela (datas/PUs diferentes) — IRRF agregado pouco confiável; revisar antes de criar">⚠ revisar</span>` : ""}</td></tr>`);
+  });
+  // (stockETF/B3) correção SUGERIDA = securityContributionAdjustment no ativo "Liquidação B3"
+  // (cash-neutro; já entra no returnContribution simulado). Texto explicativo FIXO no tooltip
+  // (sem números). Aprovação inline (botão na própria linha → rota /gains-expenses).
+  const se = r.stockEtfLiquidation;
+  const b3Sug = (se && Math.abs(nz(se.residual)) >= 0.01) ? 1 : 0;
+  if (b3Sug) {
+    const toCreate = -nz(se.residual);
+    const TIP = "A B3 consolida a liquidação dos stockETF numa única transação; a diferença entre as "
+      + "provisões que liquidam e o líquido recebido é o custo de execução. É lançado como ajuste de "
+      + "contribuição (securityContributionAdjustment) no ativo \"Liquidação B3\": não move o caixa, "
+      + "entra no returnContribution. Alternativa manual: voltar à data inicial das provisões, lançar o "
+      + "executionPrice correto e recalcular o NAV.";
+    body.push(`<tr class="rp-row-qty-mismatch">
+      <td class="text-[10px]">${esc(r.targetDate)}</td><td class="text-[10px]">${esc(r.targetDate)}</td>
+      <td class="rp-tbl-left text-[10px] text-gray-500">securityContributionAdjustment</td>
+      <td class="rp-tbl-left">Liquidação B3</td>
+      <td class="rp-tbl-left" title="${esc(TIP)}">Ajuste de contribuição — custo de execução stockETF <span style="cursor:help;color:#9ca3af">ⓘ</span></td>
+      <td class="text-gray-300">—</td>
+      <td class="rp-diff-neg">${fmtMoney(toCreate)}</td>
+      <td class="rp-tbl-left"><span class="rp-expected-prov-pill" title="${esc(TIP)}">a gerar · stockETF</span> <button type="button" onclick="createGainsExpenses('${esc(r.walletId)}')" class="rp-btn rp-btn-success" style="padding:0.15rem 0.5rem" title="Aprovar e lançar o ajuste de contribuição no Beehus">Aprovar</button></td></tr>`);
+  }
+  const genN = rtx.length + irrfMissing.length + b3Sug;
+  const chips = `<span class="text-[11px] text-gray-500">${txns.length} na janela · ${genN} a gerar</span>`;
+  return _mDetails("Transações", chips, _tbl(head, body, "Sem transações na janela."));
+}
+
+/* ── Bloco Preços de execução — lista TODOS os preços de execução (capturados do
+      sistema) dos ativos com record/trade; os que apenas repetiam o PU (==PU) ou
+      estavam ausentes são recalculados e pintados como "a corrigir". O bloco
+      aparece SEMPRE (mesmo sem nada a corrigir). ─────────────────────────────── */
+function _mExecBlock(r) {
+  const items = r.executionPrices || [];
+  const head = `<th class="rp-tbl-left">Ativo</th><th>Data</th><th style="text-align:right">execPrice atual</th><th style="text-align:right">PU</th><th style="text-align:right">execPrice calculado</th><th style="text-align:right" title="Impacto na contribuição: intraday = (qtd − qtd anterior) × (PU − execPrice). É quanto este preço de execução acrescenta ao returnContribution (num placeholder ≈PU o intraday era ~0; já refletido no GAP do preview).">Δ Contrib. (intraday)</th><th class="rp-tbl-left">Situação</th>`;
+  const body = items.map(f => {
+    const fix = f.isFix;
+    const actLbl = f.action === "update" ? "atualizar" : "criar";
+    const sit = f.status === "placeholder" ? `<span class="rp-expected-prov-pill">== PU → ${actLbl}</span>`
+      : f.status === "ausente" ? `<span class="rp-expected-prov-pill">ausente → ${actLbl}</span>`
+      : `<span class="rp-flag rp-flag-buysell" style="background:#dcfce7;color:#166534">ok</span>`;
+    const ic = nz(f.intradayContribution);
+    const icCell = Math.abs(ic) < 0.005 ? '<span class="rp-diff-zero">—</span>'
+      : `<span class="${ic >= 0 ? "rp-diff-pos" : "rp-diff-neg"}">${fmtMoney(ic)}</span>`;
+    return `<tr class="${fix ? "rp-row-qty-mismatch" : ""}">
+      <td class="rp-tbl-left"><span class="inline-flex items-center gap-1">${esc(f.securityName || f.securityId)}${_copyBtn(f.securityId)}</span></td>
+      <td class="text-[10px]">${esc(f.positionDate)}</td>
+      <td>${f.capturedPrice == null ? '<span class="text-gray-300">ausente</span>' : fmtNum(f.capturedPrice, 6)}</td>
+      <td>${fmtNum(f.pu, 6)}</td>
+      <td>${f.calculatedPrice == null ? '<span class="text-gray-300">—</span>' : `<span class="${fix ? "rp-diff-neg" : "text-gray-400"}">${fmtNum(f.calculatedPrice, 6)}</span>`}</td>
+      <td>${icCell}</td>
+      <td class="rp-tbl-left">${sit}</td></tr>`;
+  });
+  const nFix = items.filter(x => x.isFix).length;
+  const band = nFix ? _alertBand(`A corrigir: ${nFix} preço(s) de execução`,
+    `executionPrice == PU (apenas repetiu o PU) ou ausente → recalculado por -Σbalance/amountDifference. Enviar via "Enviar preços de execução" na grade.`) : "";
+  const chips = `<span class="text-[11px] text-gray-500">${items.length} ativo(s) · ${nFix} a corrigir</span>`;
+  return _mDetails("Preços de execução", chips, band + _tbl(head, body, "Nenhum preço de execução nesta carteira/janela."));
+}
+
+function openDetail(wid) {
+  const r = _movResults[wid]; if (!r || r.state !== "done") return;
+  // Resultado do LOTE (`_lite`): recarrega a carteira COMPLETA uma vez (projeção individual,
+  // sem cache → nav fresco com fluxos-alvo) e re-renderiza. Bulk fica barato; o detalhe é
+  // autoritativo. Só acontece ao abrir o detalhe, não na grade.
+  if (r._lite) {
+    _detWid = wid;
+    _detStatus("carregando detalhe completo...", "");
+    _movimentarOne(wid, r.targetDate).then(() => {
+      const rr = _movResults[wid] || {};
+      if (rr.state === "done") { _detStatus(""); if (_detWid === wid) openDetail(wid); }
+      else _detStatus(rr.error || "falha ao carregar detalhe", "error");
+    });
+    return;
+  }
+  if (_detWid !== wid) _detStatus("");   // limpa status ao trocar de carteira
+  _detWid = wid;
+  const d = r.diff || {};
+  const cs = d.cashStatus || null;
+  document.getElementById("det-wallet").textContent = r.walletName || wid;
+  const cmTxt = cs === "match" ? "caixa BATE → ajustes viram PROVISÃO"
+    : cs === "mismatch" ? "caixa NÃO bate → ajustes viram TRANSAÇÃO"
+    : cs === "unknown" ? "caixa INDETERMINADO (alvo não processado) → ajuste de qtd (provisão/transação) suspenso; IRRF/preços/liquidação seguem"
+    : "caixa —";
+  document.getElementById("det-sub").textContent = `${r.sourceDate} → ${r.targetDate} · projetada × unprocessed do alvo · ${cmTxt}`;
+  const model = _mSecRowsModel(r);
+  const total = model.length, shown = _detSecFilter ? model.filter(m => m.active).length : total;
+  const secBar = `<div style="display:flex; align-items:center; gap:8px; padding:4px 12px; border-bottom:1px solid #f3f4f6; background:#fff">
+    <span class="text-[10px] uppercase tracking-widest text-gray-400">Ativos</span>
+    <span class="text-[11px] text-gray-500">${shown}/${total}${_detSecFilter ? " (com divergência/movimento)" : ""}</span>
+    ${(r.diff && r.diff.counts && r.diff.counts.manualReview) ? `<span class="rp-flag" style="background:#fef3c7;color:#92400e" title="Achados (só no movimentado / só no alvo / divergência só de PU) que precisam de revisão manual — diagnóstico, sem escrita automática">⚠ ${r.diff.counts.manualReview} p/ revisão manual</span>` : ""}
+    <span class="ml-auto">${_mSecFilterBtn(shown, total)}</span>
+  </div>`;
+  let h = `<div class="bg-white rounded-xl shadow overflow-hidden rp-preview-pane">
+    ${_mNavBlock(r)}
+    ${secBar}
+    <div class="rp-preview-scroll" style="padding:8px 12px; max-height:560px; overflow:auto">${_mSecTable(r, model)}</div>
+  </div>`;
+  h += _mProvBlock(r);
+  h += _mTxnBlock(r);
+  h += _mExecBlock(r);
+  document.getElementById("det-body").innerHTML = h;
+  document.getElementById("mov-filters").classList.add("hidden");
+  document.getElementById("table-section").classList.add("hidden");
+  document.getElementById("mov-detail").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  const imp = document.getElementById("implement-modal");
+  if (imp && !imp.classList.contains("hidden")) { closeImplementModal(); return; }
+  const modal = document.getElementById("report-modal");
+  if (modal && !modal.classList.contains("hidden")) { closeReportModal(); return; }
+  if (!document.getElementById("mov-detail").classList.contains("hidden")) backToGrid();
+});
+
+/* ══════════ Relatório de erros de conciliação (texto puro) ══════════
+   Montado 100% no front a partir do resultado da projeção em memória. Separa em DOIS
+   tipos pelo discriminador `diff.hasTarget` (existe posição-alvo?):
+     • Tipo A (Conciliação, hasTarget=true): reconciliação + referência + insumo.
+     • Tipo B (Forward, hasTarget=false): SÓ insumo (defeitos de origem/transação que
+       independem do alvo); lacunas de dado-de-referência (PU repetido etc.) são esperadas
+       e omitidas. Ver docs/REPORT_ERROS_CONCILIACAO.md. */
+const _KNOWN_TXN_TYPES = new Set(["buySell", "withdrawalDeposit", "taxes", "bzFundTaxes",
+  "coupon", "amortization", "maturity", "dividend", "interestOnEquity", "cashDividend",
+  "securityTransfer", "gainsExpenses", "rebate", "securityContributionAdjustment",
+  "contributionAdjustment", "split", "inplit"]);
+
+// Devolve [{nature:'insumo'|'reconciliacao'|'referencia', tag, text}] de uma carteira.
+function _collectReportIssues(r) {
+  const d = r.diff || {}, out = [];
+  // ── INSUMO (independe do alvo) ───────────────────────────────────────────────
+  (r.rows || []).forEach(rw => {
+    if (!rw.mapped) out.push({ nature: "insumo", tag: "Não mapeado",
+      text: `${rw.securityName || rw.unprocessedId || "—"} — ativo sem securityId resolvido na origem` });
+  });
+  (r.transactions || []).forEach(t => {
+    const sid = String(t.securityId || "").trim(), typ = t.type || "";
+    if (!sid) {
+      const isCoupon = typ === "coupon" || typ === "amortization";
+      out.push({ nature: "insumo", tag: isCoupon ? "Cupom/amort. sem ativo" : "Transação órfã",
+        text: `tipo=${typ || "?"} sem securityId · ${t.liquidationDate || t.operationDate || ""} · ${fmtMoney(t.balance)}${t.description ? " · " + t.description : ""}` });
+    } else if (typ && !_KNOWN_TXN_TYPES.has(typ)) {
+      out.push({ nature: "insumo", tag: "Tipo desconhecido",
+        text: `${t.securityName || sid} · tipo="${typ}" não tratado · ${fmtMoney(t.balance)}` });
+    }
+  });
+  // ── RECONCILIAÇÃO (só com alvo) ──────────────────────────────────────────────
+  if (d.cashStatus === "mismatch") {
+    out.push({ nature: "reconciliacao", tag: "Caixa diverge",
+      text: `projetado ${fmtMoney(r.cash && r.cash.new)} × oficial ${fmtMoney(d.officialCash)} (resíduo ${fmtMoney(d.cashResidual)})` });
+  }
+  (r.reconTransactions || []).forEach(x => {
+    out.push({ nature: "reconciliacao", tag: "Transação ausente",
+      text: `${x.securityName || x.securityId} — ${x.direction || ""} qtd ${fmtNum(x.quantity, 4)} @ ${fmtNum(x.price, 6)} (${fmtMoney(x.balance)}); caixa não bate` });
+  });
+  // Divergência só-de-PU não existe mais: o saldo-alvo é avaliado ao PU em uso, então
+  // qualquer divergência de saldo vem de quantidade (já reportada via reconTransactions/
+  // reconProvisions / Só na projetada/alvo abaixo). Nada a emitir aqui.
+  (d.onlyCalc || []).forEach(x => out.push({ nature: "reconciliacao", tag: "Só na projetada",
+    text: `${x.securityName || x.securityId} — presente na projetada, ausente no alvo (qtd ${fmtNum(x.quantity, 4)})` }));
+  (d.onlyReal || []).forEach(x => out.push({ nature: "reconciliacao", tag: "Só no alvo",
+    text: `${x.securityName || x.securityId} — presente no alvo, ausente na projetada (qtd ${fmtNum(x.quantity, 4)})` }));
+  (r.irrf || []).forEach(e => {
+    if (e.covered) return;
+    out.push({ nature: "reconciliacao", tag: e.multiEvent ? "IRRF (revisar — multi-resgate)" : "IRRF ausente",
+      text: `${e.securityName || e.securityId} — IRRF estimado ${fmtMoney(e.irrf)}` });
+  });
+  const se = r.stockEtfLiquidation;
+  if (se && Math.abs(nz(se.residual)) >= 1) out.push({ nature: "reconciliacao", tag: "Liquidação stockETF/B3",
+    text: `resíduo ${fmtMoney(se.residual)} (provisões ${fmtMoney(se.provisionsTotal)} × B3 ${fmtMoney(se.b3Balance)})` });
+  // ── REFERÊNCIA (erro no Tipo A; suprimida no forward) ────────────────────────
+  (r.rows || []).forEach(rw => {
+    if ((rw.pricingType || "") === "REPETIDO") out.push({ nature: "referencia", tag: "PU repetido",
+      text: `${rw.securityName || rw.securityId} — sem PU na data-alvo; repetiu o PU da origem (${fmtNum(rw.pu, 6)})` });
+  });
+  (r.executionPriceFixes || []).forEach(f => out.push({ nature: "referencia", tag: "Preço de execução a corrigir",
+    text: `${f.securityName || f.securityId} — ${f.status === "ausente" ? "execPrice ausente" : "execPrice = PU (placeholder)"} → ${f.action || "corrigir"} (calc ${fmtNum(f.calculatedPrice, 6)})` }));
+  return out;
+}
+
+function _buildErrorReportText(results) {
+  const A = [], B = [];
+  results.forEach(r => {
+    const fwd = !(r.diff && r.diff.hasTarget);
+    let issues = _collectReportIssues(r);
+    if (fwd) issues = issues.filter(i => i.nature === "insumo");  // forward: só insumo
+    (fwd ? B : A).push({ r, issues });
+  });
+  const first = results[0] || {};
+  const L = [];
+  L.push("RELATÓRIO DE ERROS DE CONCILIAÇÃO");
+  L.push(`Empresa: ${_companyName || ""}${_company ? " (" + _company + ")" : ""}`);
+  L.push(`Janela: ${first.sourceDate || ""} -> ${first.targetDate || _date || ""}`);
+  L.push(`Gerado em: ${new Date().toLocaleString("pt-BR")}`);
+  L.push(`Carteiras: ${results.length}`);
+  L.push("");
+  const sec = (title, list, fwd) => {
+    L.push("=".repeat(64));
+    L.push(title);
+    L.push("=".repeat(64));
+    if (fwd) L.push("(posição-alvo NÃO processada — lacunas de dado são esperadas e omitidas; só defeitos de insumo)");
+    L.push("");
+    if (!list.length) { L.push("(nenhuma carteira)"); L.push(""); return; }
+    list.forEach(({ r, issues }) => {
+      const gap = (r.simGapCash != null) ? ` · GAP sim. ${fmtMoney(r.simGapCash)}` : "";
+      L.push(`> ${r.walletName || r.walletId}${gap}`);
+      if (!issues.length) L.push("   OK — sem erros detectados");
+      else issues.forEach(i => L.push(`   - [${i.tag}] ${i.text}`));
+      L.push("");
+    });
+  };
+  sec("TIPO A — CONCILIAÇÃO (posição-alvo existe)", A, false);
+  sec("TIPO B — FORWARD / PREPARAÇÃO (posição-alvo não processada)", B, true);
+  const totalIssues = A.concat(B).reduce((a, e) => a + e.issues.length, 0);
+  L.push("-".repeat(64));
+  L.push(`Total de itens reportados: ${totalIssues}`);
+  return L.join("\n");
+}
+
+function _openReportModal(text, sub) {
+  document.getElementById("report-text").value = text;
+  document.getElementById("report-modal-sub").textContent = sub || "";
+  const m = document.getElementById("report-modal");
+  m.style.display = "flex"; m.classList.remove("hidden");
+}
+function closeReportModal() {
+  const m = document.getElementById("report-modal");
+  m.style.display = "none"; m.classList.add("hidden");
+}
+function copyReport() {
+  const t = document.getElementById("report-text").value;
+  navigator.clipboard.writeText(t).then(() => {
+    const b = document.getElementById("report-copy-btn"), o = b.textContent;
+    b.textContent = "Copiado!"; setTimeout(() => { b.textContent = o; }, 1500);
+  });
+}
+function exportReport() {
+  const t = document.getElementById("report-text").value;
+  const blob = new Blob([t], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `erros_conciliacao_${_company || "export"}_${_date || ""}.txt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function gerarRelatorioErros() {
+  const results = _selectedDoneWids().map(w => _movResults[w]).filter(r => r && r.state === "done");
+  if (!results.length) return;
+  _openReportModal(_buildErrorReportText(results), `${results.length} carteira(s) selecionada(s)`);
+}
+function gerarRelatorioErrosDetalhe() {
+  const r = _movResults[_detWid];
+  if (!r || r.state !== "done") return;
+  _openReportModal(_buildErrorReportText([r]), r.walletName || _detWid);
+}
+</script>
+{% endblock %}

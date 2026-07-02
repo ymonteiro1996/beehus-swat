@@ -51,7 +51,7 @@ data/excecoes/<companyId>/<exceptionId>.json
 - `sourceWalletId` é a carteira **sinalizada como exceção**. Sua posição diária é a fonte dos valores que migram para as carteiras de saída.
 - `outputWalletIds` é a lista de carteiras alvo. A origem **não** é incluída automaticamente — só aparece como destino se o usuário a escolher explicitamente em uma regra.
 - `kind` é o tipo de exceção. Hoje só existe `position_strip`; futuros tipos vão coexistir no mesmo arquivo.
-- `rules[].unprocessedId` referencia um ativo agregado da posição da origem (mesmo agrupamento usado em `pages/excecoes._aggregate_unprocessed`).
+- `rules[].unprocessedId` referencia um ativo agregado da posição da origem (mesmo agrupamento usado em `pages/posicoes._group_unprocessed`).
 - Cada regra deve ter `addToWalletId` e/ou `removeFromWalletId`. Ambas precisam pertencer a `{sourceWalletId} ∪ outputWalletIds`. Regras sem nenhum dos dois lados são silenciosamente descartadas no save.
 - `caixa` controla a coluna `Caixa` (Sim/Não) do Excel enviado. Default `false`.
 - Validação rígida de path: `[A-Za-z0-9_-]+` para ids e `YYYY-MM-DD` para datas. Outros valores → 400.
@@ -99,7 +99,7 @@ Acima do passo 3 há um checkbox **"Utilizar preços na curva"** (campo `useCurv
 - No preview a UI mostra (a) um banner topo com a contagem `N via curva · M via unprocessedPosition · K baseline (sem curva)` cobrindo o plano inteiro e (b) uma coluna **"Fonte PU"** com pill `curva` (azul) / `unprocessed` (cinza) / `baseline` (cinza) por linha.
 - Falhas da engine (load_lists exception, calculate_curva exception, templates vazios) caem silenciosamente para o caminho `unprocessedPosition` — não bloqueiam o `/preview` nem o `/apply`.
 
-Escopo: implementado **apenas para `position_strip`**. `wallet_slice`, `class_strip` e `managed_portfolio` não consultam a curva (o checkbox fica oculto pelo `_applySetupKindVisibility`).
+Escopo: implementado **apenas para `position_strip`**. `wallet_slice` e `class_strip` não consultam a curva (o checkbox fica oculto pelo `_applySetupKindVisibility`).
 
 ### Edição
 
@@ -119,7 +119,7 @@ para que o usuário possa ajustar destinos sem precisar acessar a posição orig
 A partir desta iteração, a aplicação no Painel de Controle é **em lote, com aprovação explícita via tela de resumo**. A coluna de ações da linha tem apenas `Editar` e `Excluir`; a antiga coluna `Aplicar` foi substituída por:
 
 - **Checkbox por linha** (com checkbox master no header — `marcar/desmarcar todos`, com tri-state `indeterminate` quando algumas estão marcadas). O master opera **apenas sobre as linhas visíveis** (respeita o filtro de empresa abaixo).
-- **Data Base por linha** (`<input type=date>` na coluna `Data Base`) — semeada do `latestProcessedDate` da carteira de origem retornado pelo `/api/excecoes` (max `processedPosition.positionDate` para `sourceWalletId`). Edits do operador são persistidos em `Strip._rowDates[exceptionId]` e sobrevivem a re-renders até o operador sair da view ou clicar em **Reiniciar**.
+- **Data Base por linha** (`<input type=date>` na coluna `Data Base`) — **data informada pelo operador**, com padrão **hoje** (`_todayISO()`) na primeira renderização. Edits do operador são persistidos em `Strip._rowDates[exceptionId]` e sobrevivem a re-renders até o operador sair da view ou clicar em **Reiniciar**. (Antes era semeada do `latestProcessedDate` da carteira de origem — `max(processedPosition.positionDate)` — mas essa leitura no Mongo foi removida no desligamento do Mongo; o fluxo de apply só precisava da data escolhida pelo operador.)
 - **Toolbar global** acima da tabela com:
   - **+ Nova Exceção** — abre a modal de setup.
   - **Filtro de empresa** (popover com checkboxes) — limita as linhas visíveis às empresas marcadas. Quando o operador tica uma empresa, **todas as linhas visíveis dessa empresa são pré-selecionadas** (a request foi "filtro para marcar quais serão executadas"); o operador pode então destigar individualmente. **Marcar todas** seleciona toda a base; **Limpar** zera o filtro e a seleção. Linhas escondidas pelo filtro são removidas de `_selectedIds` para que **Aplicar selecionadas** nunca pegue uma linha invisível.
@@ -203,15 +203,13 @@ O endpoint `GET /api/excecoes/<id>/excel?date=...` continua disponível para ins
 
 A coluna **Ações** de cada linha tem um botão **Aplicar** (além de `Editar` / `Excluir`). Para `position_strip`, `wallet_slice` e `class_strip`, clicar em **Aplicar** **não** dispara o `/preview` imediatamente — abre primeiro o modal **`#sp-apply-dates`** ("Aplicar — selecionar datas"), que reusa o mesmo padrão de datas do **Painel de Controle > Processar**:
 
-- **Data única / Faixa de datas** (radios). Em data única o campo nasce semeado com a `Data Base` da linha (`_rowDates[id] || latestProcessedDate || hoje`).
+- **Data única / Faixa de datas** (radios). Em data única o campo nasce semeado com a `Data Base` da linha (`_rowDates[id] || hoje`).
 - Em faixa, aparece o card **"Selecionar datas específicas (opcional)"** (checkbox `#sp-apply-dates-uselist`) — quando marcado, mostra o filtro **"Apenas fim de mês útil"**, o botão **⬆ Subir Excel de datas** (`POST /api/beehus/util/parse-dates-excel`, uma data por célula, sem cabeçalho) e o dual-pane **Disponíveis / Selecionadas**. Sem marcar, a faixa é expandida em dias úteis (seg–sex) por `_businessDays`.
 
 Ao confirmar (**Continuar**), o front resolve a lista de datas (`_resolveApplyDates`) e bifurca:
 
 - **1 data** → mantém o fluxo rico atual: abre o painel inline `#sp-apply-inline` com a pré-visualização (`/preview`) e o botão **Confirmar e enviar** (`_startApplyInline` → `runApply`).
 - **>1 datas** → pede `confirm()` e roda o painel **`#sp-apply-multi`**: um **`POST /api/excecoes/<id>/apply` por data, sequencialmente** (mesma semântica de auth-break do bulk — um 401 interrompe o restante). Cada linha da tabela atualiza `pendente → enviando → ok/erro`, com um detalhe compacto por data (`_applyDaySummary`: contagens `ok/total` por bucket de resultado) e um resumo agregado no header. **Não há preview por data** (seria pesado). Ao final, `loadList()` reflete o `lastApplied`.
-
-`managed_portfolio` continua com seu próprio prompt de faixa (`#sp-managed-daterange` → relatório A4), inalterado.
 
 ---
 
@@ -222,7 +220,7 @@ Blueprint: `pages/excecoes.py`. Todas as rotas aplicam `company_visible` no `com
 | Método | Rota | Propósito |
 |--------|------|-----------|
 | GET    | `/excecoes` | Página HTML |
-| GET    | `/api/excecoes` | Lista todas as exceções visíveis (sem corpo). Resposta: `{exceptions: [...]}`. Cada item inclui `latestProcessedDate` = max(`positionDate`) em `processedPosition` para a `sourceWalletId` (string `YYYY-MM-DD`, vazio se não houver) — usado pela coluna **Data Base** do painel. |
+| GET    | `/api/excecoes` | Lista todas as exceções visíveis (sem corpo). Resposta: `{exceptions: [...]}`. A coluna **Data Base** do painel não vem do backend — é editável no front, padrão **hoje** (o campo `latestProcessedDate` e a leitura `processedPosition` foram removidos no desligamento do Mongo). |
 | GET    | `/api/excecoes/wallets?companyId=` | Carteiras de uma empresa: `[{id, name, currencyId}]` |
 | GET    | `/api/excecoes/source-position?companyId=&walletId=&date=` | Ativos agregados da origem em uma data: `{date, walletId, securities: [{unprocessedId, quantity, pu, balance}]}` |
 | GET    | `/api/excecoes/<id>?companyId=` | Lê uma exceção + nomes das wallets envolvidas |
@@ -585,7 +583,7 @@ Regra do **"Ativo"** das rows day-trade: usa o `beehusName` da security (lido de
 
 Para cada `(walletId, date)` com pelo menos uma security day-traded:
 
-1. Lê o `unprocessedSecurityPositions` correspondente e agrega por `unprocessedId` (mesmo agrupamento de `pages/excecoes._aggregate_unprocessed`).
+1. Lê o `unprocessedSecurityPositions` correspondente e agrega por `unprocessedId` (mesmo agrupamento de `pages/posicoes._group_unprocessed`).
 2. Identifica os `unprocessedId`s do baseline que mapeiam (via `securityMappings.from→to`) para alguma security day-traded — esses são **removidos** do upload (`replacedUnprocessedIds[]`) para evitar dois nomes para a mesma security lógica no payload.
 3. Adiciona **uma** row sintética por `securityId` day-traded, com `quantity = pu = balance = 0` e `Ativo = beehusName`. Currency: a registrada na carteira (`db.wallets.currencyId`); fallback: a `currencyId` da transação.
 4. Securities cujo `securityId` não tem `beehusName` em `db.securities` ficam em `unmappedSecurityIds[]` (aviso amarelo) — sem nome não dá para construir a row.
