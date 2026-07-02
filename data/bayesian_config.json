@@ -1,0 +1,32 @@
+{
+  "_comment": "Bayesian optimization configuration. All values below are defaults — uncomment and change to override.",
+
+  "tolerance": 0.01,
+  "gaussian_sigma": 0.001,
+  "monte_carlo_samples": 200,
+
+  "confidence_overrides": {
+    "MISSING_TRANSACTION":      0.95,
+    "MISSING_PROVISION":        0.90,
+    "MISSING_EVENT":            0.85,
+    "WRONG_EVENT_BALANCE":      0.85,
+    "WRONG_PROVISION_AMOUNT":   0.80,
+    "MISSING_EXECUTION_PRICE":  0.70,
+    "WITHHOLDING_TAX":          0.75,
+    "WRONG_TRANSACTION_VALUE":  0.65,
+    "UNCLASSIFIED_TRANSACTION": 0.85,
+    "CASH_MISMATCH":            0.90,
+    "MISCLASSIFIED":            0.40,
+    "ANOMALY":                  0.20,
+    "WRONG_SECURITY":           0.30
+  },
+
+  "exec_price_margin": 0.05,
+
+  "withholding_tax_rates": {
+    "15.0": 0.6,
+    "22.5": 0.4
+  },
+
+  "wrong_txn_relative_error": 0.02
+}
