@@ -58,15 +58,13 @@ if (Test-Path $noMongoMarker) {
 # Garante que todas as dependências do requirements.txt estão instaladas.
 # Roda silenciosamente; só exibe saída se houver pacote faltando/atualizado.
 Write-Host "[SWAT] Verificando dependências..."
-$pipOut = python -m pip install -r requirements.txt --quiet 2>&1
+$pipResult = & python -m pip install -r requirements.txt --quiet
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[SWAT] Erro ao instalar dependências:" -ForegroundColor Red
-    $pipOut | ForEach-Object { Write-Host $_ }
+    Write-Host "[SWAT] Erro ao instalar dependências. Verifique o requirements.txt." -ForegroundColor Red
     exit 1
 }
-$installed = $pipOut | Where-Object { $_ -match "^Successfully installed" }
-if ($installed) {
-    Write-Host "[SWAT] Dependências instaladas: $installed" -ForegroundColor Green
+if ($pipResult) {
+    Write-Host "[SWAT] Dependências instaladas/atualizadas." -ForegroundColor Green
 } else {
     Write-Host "[SWAT] Dependências OK." -ForegroundColor Green
 }
