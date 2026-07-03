@@ -1846,7 +1846,7 @@ def diagnose():
     # STEP 5 — Cash Validation
     # ═══════════════════════════════════════════════════════════════════════════
     # Batch both dates into one `cashAccounts` scan (no index on walletId).
-    _cash = _sum_cash_by_dates(wallet_id, [former_date, date])
+    _cash = beehus_catalog.cash_sums_by_dates(wallet_id, [former_date, date], company_id)
     former_cash  = _cash[former_date]
     current_cash = _cash[date]
     total_txn_balance = round(sum(float(t.get("balance", 0) or 0) for t in all_txns_flat), 2)
