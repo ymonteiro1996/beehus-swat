@@ -68,6 +68,10 @@ def _get_matcher():
     global _matcher
     if _matcher is not None:
         return _matcher
+    # Call _get_classifier() BEFORE acquiring _init_lock: both functions share
+    # the same non-reentrant Lock, so calling it inside the lock causes a
+    # deadlock on the first request when _clf is also None.
+    clf = _get_classifier()
     with _init_lock:
         if _matcher is None:
             # SecurityMatcher is API/file-backed: its cache loads from the daily
@@ -75,7 +79,7 @@ def _get_matcher():
             # for signature compatibility (never dereferenced). So the matcher
             # builds even with Mongo disconnected — do NOT gate on db._ready(),
             # or POST /api/controlpanel/match 500s on a Mongo-free instance.
-            _matcher = SecurityMatcher(db, classifier=_get_classifier())
+            _matcher = SecurityMatcher(db, classifier=clf)
         return _matcher
 
 def _reset_matcher():
