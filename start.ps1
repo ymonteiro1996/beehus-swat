@@ -55,6 +55,22 @@ if (Test-Path $noMongoMarker) {
     Write-Host "[SWAT] .swat\no-mongo presente -> SWAT_IDENTIFICAR=0 (Mongo desligado nesta instancia)"
 }
 
+# Garante que todas as dependências do requirements.txt estão instaladas.
+# Roda silenciosamente; só exibe saída se houver pacote faltando/atualizado.
+Write-Host "[SWAT] Verificando dependências..."
+$pipOut = python -m pip install -r requirements.txt --quiet 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[SWAT] Erro ao instalar dependências:" -ForegroundColor Red
+    $pipOut | ForEach-Object { Write-Host $_ }
+    exit 1
+}
+$installed = $pipOut | Where-Object { $_ -match "^Successfully installed" }
+if ($installed) {
+    Write-Host "[SWAT] Dependências instaladas: $installed" -ForegroundColor Green
+} else {
+    Write-Host "[SWAT] Dependências OK." -ForegroundColor Green
+}
+
 Write-Host "[SWAT] Iniciando servidor em http://127.0.0.1:$port ..."
 $proc = Start-Process -FilePath "python" -ArgumentList "app.py" -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog
