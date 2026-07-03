@@ -6,5 +6,7 @@
   "US TREASURY N/B 4,625% 2028-09-30": "sovereignBonds",
   "US TREASURY N/B 3,500% 2030-04-30": "sovereignBonds",
   "US TREASURY N/B 4,625% 2026-09-15": "sovereignBonds",
-  "Sports Media Futebol Brasileiro - Classe A - Advisory FIP": "brazilianFund"
+  "Sports Media Futebol Brasileiro - Classe A - Advisory FIP": "brazilianFund",
+  "test": "brazilianGovernmentBond",
+  "BACEN-NTN-B": "brazilianGovernmentBond"
 }
