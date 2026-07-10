@@ -21,6 +21,19 @@ def list_securities(*, timeout: int = 60) -> list:
     return out if isinstance(out, list) else []
 
 
+def get_security(*, security_id: str, timeout: int = 60) -> dict | None:
+    """GET /beehus/securities/{id} — READ de UM ativo pelo `_id`.
+
+    Usado quando o catálogo cacheado (`beehus_catalog.security_doc`) não tem o
+    campo necessário (ex.: `correspondingWallet` de um ativo de explosão) e
+    vale a pena um GET pontual em vez de esperar o próximo refresh do catálogo
+    inteiro. Retorna o doc cru, ou None se `security_id` for vazio.
+    """
+    if not security_id:
+        return None
+    return request("GET", f"/beehus/securities/{security_id}", timeout=timeout)
+
+
 def create_security(
     *,
     beehus_name: str,

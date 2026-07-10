@@ -28,6 +28,8 @@ from .provisions import (create_provision, delete_provision, update_provision,
 from .execution_prices import (create_execution_price, list_execution_prices,
                                update_execution_price)
 from .consolidation import (
+    get_company_variables,
+    list_company_variables,
     calculate_nav_wallets,
     calculate_nav_groupings,
     proportion_explosion,
@@ -39,7 +41,7 @@ from .consolidation import (
 )
 from .grouping import list_groupings
 from .security_mappings import update_security_mappings, get_security_mappings
-from .securities import create_security, list_securities, filtered_security_price, security_events
+from .securities import create_security, get_security, list_securities, filtered_security_price, security_events
 
 __all__ = [
     "set_token",
@@ -69,6 +71,8 @@ __all__ = [
     "create_execution_price",
     "list_execution_prices",
     "update_execution_price",
+    "get_company_variables",
+    "list_company_variables",
     "calculate_nav_wallets",
     "calculate_nav_groupings",
     "proportion_explosion",
@@ -81,6 +85,7 @@ __all__ = [
     "update_security_mappings",
     "get_security_mappings",
     "create_security",
+    "get_security",
     "list_securities",
     "filtered_security_price",
     "security_events",

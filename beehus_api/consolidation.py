@@ -5,6 +5,38 @@ Reusable from any blueprint — does not depend on Flask.
 from .client import request
 
 
+def list_company_variables(*, timeout: int = 60) -> list:
+    """GET /beehus/consolidation/company-variables — READ crua, SEM filtro.
+
+    IMPORTANTE: o endpoint IGNORA o parâmetro `companyId` — ele sempre
+    devolve a árvore de classificação de ativos de TODAS as empresas
+    (confirmado em produção: a mesma lista completa volta não importa o
+    `companyId` enviado). Devolve a lista crua (1 doc por empresa, cada um
+    com `companyId` + `hierarchicalVariables[]`); o filtro pela empresa certa
+    é responsabilidade do chamador (ver `get_company_variables`).
+    """
+    out = request(
+        "GET",
+        "/beehus/consolidation/company-variables",
+        params={"companyId": ""},
+        timeout=timeout,
+    )
+    return out if isinstance(out, list) else []
+
+
+def get_company_variables(*, company_id: str, timeout: int = 60) -> dict | None:
+    """Árvore de classificação de ativos (`hierarchicalVariables[]`) de UMA
+    empresa — filtra `list_company_variables()` pelo `companyId` certo, já
+    que o próprio endpoint upstream não filtra (ver aviso lá). Não existe
+    (ainda) endpoint de escrita conhecido pra vincular um ativo a um desses
+    nós — gerar JSON manual enquanto isso.
+    """
+    for doc in list_company_variables(timeout=timeout):
+        if isinstance(doc, dict) and str(doc.get("companyId") or "") == str(company_id):
+            return doc
+    return None
+
+
 def get_nav_contribution(
     *,
     entity_id: str,
