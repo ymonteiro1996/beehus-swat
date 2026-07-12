@@ -60,6 +60,7 @@ from beehus_api import (
 # Re-uses the precificacao curva engine when the operator opts in via
 # `useCurvaPrice` on a `position_strip` exception. Imported lazily-shaped
 # (only the building blocks) to avoid pulling repetir_posicoes' surface in.
+import beehus_catalog
 from pages.precificacao import calculate_curva, _load_lists
 
 
@@ -73,16 +74,10 @@ _SAFE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _KIND_POSITION_STRIP    = "position_strip"
 _KIND_WALLET_SLICE      = "wallet_slice"
 _KIND_CLASS_STRIP       = "class_strip"
-# managed_portfolio — "Carteira gerencial". Reuses the class_strip setup
-# UI up to the source-wallets step, then asks the operator to pick a date,
-# open the wallets' positions, and select individual (walletId, securityId)
-# pairs. Apply produces a printable A4 analysis modal (calculations TBD).
-_KIND_MANAGED_PORTFOLIO = "managed_portfolio"
 _KINDS = (
     _KIND_POSITION_STRIP,
     _KIND_WALLET_SLICE,
     _KIND_CLASS_STRIP,
-    _KIND_MANAGED_PORTFOLIO,
 )
 
 # class_strip migration filters — see docs/EXCECOES.md § Stripping por classe.
@@ -195,6 +190,15 @@ def _iter_exceptions(company_ids):
 def _visible_company_ids():
     cf = get_company_filter()
     ids = set(get_company_names().keys())
+    # As exceções são dados LOCAIS (data/excecoes/<companyId>/). Inclui também
+    # as empresas que têm exceção salva em disco, para que a listagem não suma
+    # quando get_company_names() volta vazio (ex.: token 401 / API instável).
+    # Sem isto, um token expirado esconde TODAS as exceções locais.
+    try:
+        ids |= {name for name in os.listdir(_ROOT)
+                if os.path.isdir(os.path.join(_ROOT, name))}
+    except OSError:
+        pass
     if not cf:
         return sorted(ids)
     return sorted(i for i in ids if i in cf)
@@ -233,7 +237,7 @@ def _build_unprocessed_to_security_map(company_id):
     Mirrors `pages/posicoes._build_mapping` so the strip rules (keyed by
     `unprocessedId`) can find the matching `securityId` on transactions —
     which are stored without the `unprocessedId` field."""
-    doc = db.securityMappings.find_one({"companyId": company_id}, {"mappings": 1})
+    doc = beehus_catalog.security_mappings_doc(company_id)
     if not doc:
         return {}
     return {m["from"]: m["to"]
@@ -245,10 +249,7 @@ def _fetch_source_position(wallet_id, date):
     """Return the aggregated `unprocessedSecurityPositions` for a wallet on a
     date — or `None` if no document exists. Tries the requested date first
     and does not silently fall back; the caller decides what to do on miss."""
-    doc = db.unprocessedSecurityPositions.find_one(
-        {"walletId": wallet_id, "positionDate": date},
-        {"securities": 1},
-    )
+    doc = beehus_catalog.unprocessed_doc(wallet_id, date)
     if not doc:
         return None
     return _aggregate_unprocessed(doc.get("securities") or [])
@@ -315,39 +316,15 @@ def list_exceptions():
                 wallet_ids.add(tw)
     wallet_names = {}
     if wallet_ids:
-        for w in db.wallets.find({"_id": {"$in": _to_oids(wallet_ids)}}, {"name": 1}):
-            wallet_names[str(w["_id"])] = w.get("name", str(w["_id"]))
+        for wid in wallet_ids:
+            swid = beehus_catalog.id_str(wid)
+            wallet_names[swid] = (beehus_catalog.wallet_doc(swid) or {}).get("name") or swid
 
-    # Latest `processedPosition.positionDate` — surfaced as the row's "Data
-    # Base" so the operator can drive each stripping run off the most recent
-    # processed position. For position_strip/wallet_slice the lookup is the
-    # exception's single `sourceWalletId`; for class_strip it's the MAX
-    # across all `sourceWalletIds` (the apply uses each source's own latest
-    # via fallback, but the listing row shows one date for the operator's
-    # convenience — picking the max keeps it forward-leaning).
-    source_wallet_ids = []
-    for it in items:
-        if it.get("sourceWalletId"):
-            source_wallet_ids.append(it["sourceWalletId"])
-        for w in it.get("sourceWalletIds") or []:
-            source_wallet_ids.append(w)
-    latest_by_wallet = {}
-    if source_wallet_ids:
-        try:
-            cursor = db.processedPosition.aggregate([
-                {"$match": {"walletId": {"$in": list(set(source_wallet_ids))}}},
-                {"$group": {"_id": "$walletId", "latest": {"$max": "$positionDate"}}},
-            ])
-            for r in cursor:
-                wid = str(r.get("_id") or "")
-                latest = r.get("latest")
-                if wid and latest:
-                    latest_by_wallet[wid] = str(latest)[:10]
-        except Exception:
-            # Aggregation failure shouldn't block the list — leave the
-            # field unset and the UI will fall back to the editable default.
-            latest_by_wallet = {}
-
+    # NOTE: the "Data Base" of each stripping run is an editable date entered
+    # by the operator (defaults to today in the UI). It is no longer seeded
+    # from `processedPosition.positionDate` — that Mongo read was removed as
+    # part of the Mongo shutdown; the apply flow only ever needed the date the
+    # operator chose, not the latest processed position.
     company_names = get_company_names()
     rows = []
     for it in sorted(items, key=lambda x: (x.get("companyId", ""), x.get("name", ""))):
@@ -358,8 +335,7 @@ def list_exceptions():
         # class_strip rows carry the multi-source list + classRoutes through
         # to the UI. The "Origem" column shows the first wallet plus a "+N"
         # suffix in the front-end; "Saídas / Destino" enumerates the unique
-        # targets across routes. `latestProcessedDate` for class_strip is
-        # the MAX across all sources (the row's "Data Base" default).
+        # targets across routes.
         src_ids = list(it.get("sourceWalletIds") or [])
         routes_raw = it.get("classRoutes") or []
         class_routes = []
@@ -377,19 +353,6 @@ def list_exceptions():
             if t and t not in seen_t:
                 seen_t.add(t)
                 unique_targets.append(t)
-
-        if kind in (_KIND_CLASS_STRIP, _KIND_MANAGED_PORTFOLIO):
-            # Both class_strip and managed_portfolio carry a multi-source
-            # list — the row's "Data Base" defaults to the max latest date
-            # across all sources. Falls through to empty when no source
-            # has a processedPosition yet (UI then falls back to today).
-            latest = ""
-            for w in src_ids:
-                ld = latest_by_wallet.get(w, "")
-                if ld and ld > latest:
-                    latest = ld
-        else:
-            latest = latest_by_wallet.get(sw, "")
 
         rows.append({
             "id":              it.get("id"),
@@ -419,37 +382,23 @@ def list_exceptions():
             "classRoutes":      class_routes,
             "uniqueTargetIds":  unique_targets,
             "uniqueTargetNames": [wallet_names.get(t, t) for t in unique_targets],
-            # managed_portfolio-only fields. `positionDate` is the date
-            # picked in the setup step 4; `selectedSecurities` is the
-            # (walletId, securityId) list from the picker modal;
-            # `benchmarkSecurityId` is the (optional) comparison
-            # benchmark. All are empty for non-managed kinds (JS guards
-            # on `kind`).
-            "positionDate":      (it.get("positionDate") or "")
-                                  if kind == _KIND_MANAGED_PORTFOLIO else "",
-            "selectedSecurities": (it.get("selectedSecurities") or [])
-                                   if kind == _KIND_MANAGED_PORTFOLIO else [],
-            "selectedCount":     len(it.get("selectedSecurities") or [])
-                                  if kind == _KIND_MANAGED_PORTFOLIO else 0,
-            "benchmarkSecurityId": (it.get("benchmarkSecurityId") or "")
-                                    if kind == _KIND_MANAGED_PORTFOLIO else "",
             "lastApplied":     it.get("lastApplied"),
             "updatedAt":       it.get("updatedAt"),
-            # Most recent processedPosition.positionDate for the source
-            # wallet ("YYYY-MM-DD"); empty when no processedPosition exists.
-            "latestProcessedDate": latest,
         })
     return jsonify({"exceptions": rows})
 
 
-def _to_oids(wallet_ids):
-    from bson import ObjectId
-    out = []
-    for wid in wallet_ids:
-        try:
-            out.append(ObjectId(str(wid)))
-        except Exception:
-            pass
+def _wallet_docs(wallet_ids):
+    """`{walletId_str: wallet_doc}` para os ids dados, via `beehus_catalog`
+    (índice global da API). Substitui `db.wallets.find({_id: {$in: ...}})`.
+    O doc traz name/currency/currencyId/entityId/companyId (currencyId derivado
+    de `currency` no catalog). Ids ausentes do índice são omitidos — mesmo
+    comportamento do `find` (só devolve os existentes)."""
+    out = {}
+    for wid in {str(w) for w in (wallet_ids or []) if w}:
+        d = beehus_catalog.wallet_doc(wid)
+        if d:
+            out[wid] = d
     return out
 
 
@@ -480,8 +429,9 @@ def get_exception(exception_id):
             wids.add(t)
     wids.discard(None); wids.discard("")
     wallet_names = {}
-    for w in db.wallets.find({"_id": {"$in": _to_oids(wids)}}, {"name": 1}):
-        wallet_names[str(w["_id"])] = w.get("name", str(w["_id"]))
+    for wid in wids:
+        swid = beehus_catalog.id_str(wid)
+        wallet_names[swid] = (beehus_catalog.wallet_doc(swid) or {}).get("name") or swid
 
     return jsonify({"exception": blob, "walletNames": wallet_names})
 
@@ -504,16 +454,14 @@ def list_company_wallets():
     if cross_company:
         cf = get_company_filter()
         company_names = get_company_names() or {}
-        query = {"companyId": {"$in": sorted(cf)}} if cf else {}
         wallets = []
-        for w in db.wallets.find(
-            query,
-            {"name": 1, "currency": 1, "currencyId": 1, "companyId": 1},
-        ):
+        for w in beehus_catalog.wallets_index().values():
             cid = str(w.get("companyId") or "")
+            if cf and cid not in cf:
+                continue
             wallets.append({
-                "id":          str(w["_id"]),
-                "name":        w.get("name", str(w["_id"])),
+                "id":          w["_id"],
+                "name":        w.get("name") or w["_id"],
                 "currencyId":  _wallet_currency(w),
                 "companyId":   cid,
                 "companyName": company_names.get(cid, cid),
@@ -525,13 +473,10 @@ def list_company_wallets():
     if not company_id or not company_visible(company_id):
         return jsonify({"wallets": []})
     wallets = []
-    for w in db.wallets.find(
-        {"companyId": company_id},
-        {"name": 1, "currency": 1, "currencyId": 1},
-    ):
+    for w in beehus_catalog.wallets_in_company(company_id):
         wallets.append({
-            "id":         str(w["_id"]),
-            "name":       w.get("name", str(w["_id"])),
+            "id":         w["_id"],
+            "name":       w.get("name") or w["_id"],
             "currencyId": _wallet_currency(w),
         })
     wallets.sort(key=lambda x: x["name"])
@@ -583,10 +528,7 @@ def _fetch_processed_with_fallback(wallet_id, target_date, max_fallback=5):
 
     for offset in range(0, max_fallback + 1):
         probe = (base - timedelta(days=offset)).isoformat()
-        doc = db.processedPosition.find_one(
-            {"walletId": wallet_id, "positionDate": probe},
-            {"securities": 1},
-        )
+        doc = beehus_catalog.processed_doc(wallet_id, probe)
         if doc:
             return (doc.get("securities") or []), probe, (offset > 0)
     return None, target_date, False
@@ -850,125 +792,6 @@ def _validate_payload_class(body):
     }
 
 
-def _validate_payload_managed(body):
-    """Validator for the `managed_portfolio` (Carteira gerencial) kind.
-
-    Body shape:
-        {
-          "companyId":           str,
-          "name":                str,
-          "sourceWalletIds":     [walletId, ...],
-          "positionDate":        "YYYY-MM-DD",
-          "selectedSecurities":  [{"walletId":..., "securityId":...}, ...],
-          "benchmarkSecurityId": str (optional — must be a benchmark
-                                       in this company's `securities`)
-        }
-
-    The UI reuses the class_strip groupings + wallets pickers for source
-    selection (groupings are a frontend-only filter, so they're NOT
-    persisted here). Step 4 collects a `positionDate` plus the operator's
-    securities picks — every pair must belong to one of the source
-    wallets (we don't validate the securityId against the wallet's
-    actual processedPosition snapshot, because the snapshot may have
-    changed between save and apply; the apply step re-fetches).
-    """
-    company_id   = (body.get("companyId") or "").strip()
-    name         = (body.get("name") or "").strip()
-    src_raw      = body.get("sourceWalletIds") or []
-    pos_date     = (body.get("positionDate") or "").strip()
-    sel_raw      = body.get("selectedSecurities") or []
-    benchmark_id = (body.get("benchmarkSecurityId") or "").strip()
-
-    if not company_id or not company_visible(company_id):
-        raise ValueError("forbidden")
-    _safe(company_id)
-    if not name:
-        raise ValueError("name required")
-
-    # benchmark is optional; when present, it must be a benchmark
-    # security visible to this company. Visibility mirrors the listing
-    # endpoint (managed_portfolio_benchmarks): benchmarks are scoped via
-    # the `companyIds` ARRAY on the security doc — empty / missing means
-    # the benchmark is global (CDI, IBOV, IPCA…), a non-empty list means
-    # restricted to those companyIds. Filtering by a scalar `companyId`
-    # always missed because that field doesn't exist on benchmark docs,
-    # so a previously saved benchmark on the dropdown failed validation
-    # with "benchmarkSecurityId não encontrado nesta empresa".
-    if benchmark_id:
-        from bson import ObjectId
-        from bson.errors import InvalidId
-        try:
-            bid = ObjectId(benchmark_id)
-        except (InvalidId, TypeError):
-            raise ValueError("benchmarkSecurityId inválido")
-        bench_doc = db.securities.find_one(
-            {
-                "_id": bid,
-                "securityType": "benchmark",
-                "$or": [
-                    {"companyIds": {"$exists": False}},
-                    {"companyIds": {"$size": 0}},
-                    {"companyIds": company_id},
-                ],
-            },
-            {"_id": 1},
-        )
-        if not bench_doc:
-            raise ValueError("benchmarkSecurityId não encontrado nesta empresa")
-
-    src_ws = list(dict.fromkeys(str(w).strip() for w in src_raw if w))
-    if not src_ws:
-        raise ValueError("sourceWalletIds required")
-    for w in src_ws:
-        if not _wallet_in_company(w, company_id):
-            raise ValueError(f"source wallet {w!r} not in company")
-    src_set = set(src_ws)
-
-    # positionDate is optional at save time — the operator may save the
-    # exception before opening the wallets to pick securities. When set,
-    # it must be a clean ISO date.
-    if pos_date:
-        try:
-            _safe_date(pos_date)
-        except ValueError:
-            raise ValueError("positionDate must be YYYY-MM-DD")
-
-    # selectedSecurities is also optional at save time (the operator can
-    # save a "draft" with just the source wallets + date, then come back
-    # to pick the securities). When non-empty, each entry must reference
-    # one of the source wallets.
-    if not isinstance(sel_raw, list):
-        raise ValueError("selectedSecurities must be a list")
-    selected = []
-    seen_pairs = set()
-    for entry in sel_raw:
-        if not isinstance(entry, dict):
-            raise ValueError("selectedSecurities entries must be objects")
-        wid = str(entry.get("walletId") or "").strip()
-        sid = str(entry.get("securityId") or "").strip()
-        if not wid or not sid:
-            raise ValueError("selectedSecurities[].walletId/securityId required")
-        if wid not in src_set:
-            raise ValueError(
-                f"selectedSecurities walletId {wid!r} not in sourceWalletIds")
-        key = (wid, sid)
-        # Dedup on (walletId, securityId) — the picker may emit the same
-        # row twice if the operator double-clicks; we collapse silently.
-        if key in seen_pairs:
-            continue
-        seen_pairs.add(key)
-        selected.append({"walletId": wid, "securityId": sid})
-
-    return {
-        "companyId":           company_id,
-        "name":                name,
-        "sourceWalletIds":     src_ws,
-        "positionDate":        pos_date,
-        "selectedSecurities":  selected,
-        "benchmarkSecurityId": benchmark_id,
-    }
-
-
 # ── Create / Update / Delete ──────────────────────────────────────────────────
 
 def _kind_from_body(body):
@@ -990,8 +813,6 @@ def _validate_by_kind(kind, body):
         return _validate_payload_slice(body)
     if kind == _KIND_CLASS_STRIP:
         return _validate_payload_class(body)
-    if kind == _KIND_MANAGED_PORTFOLIO:
-        return _validate_payload_managed(body)
     return _validate_payload(body)
 
 
@@ -1112,16 +933,11 @@ def _build_plan(blob, target_date, fx_overrides=None):
 
     by_uid = {s["unprocessedId"]: s for s in src_secs}
 
-    # Currency map: every wallet referenced by the plan, looked up against
-    # the `wallets` collection. `currencyId` may be stored as ObjectId, str,
-    # or be missing — `str(... or "BRL")` mirrors the rest of the codebase
-    # (see `pages/conciliacao.py:2681`) and guarantees the preview never
-    # renders a blank "Moeda" column.
+    # Currency map: every wallet referenced by the plan, looked up via the
+    # API wallet index. `_wallet_currency` prefers the wallet's `currency`
+    # code (fallback "BRL") so the preview never renders a blank "Moeda".
     referenced = {w for w in ({src_w} | set(out_ws)) if w}
-    cur_map = {}
-    for w in db.wallets.find({"_id": {"$in": _to_oids(referenced)}},
-                             {"currency": 1, "currencyId": 1}):
-        cur_map[str(w["_id"])] = _wallet_currency(w)
+    cur_map = {wid: _wallet_currency(w) for wid, w in _wallet_docs(referenced).items()}
 
     # Existing positions for every wallet that may be touched (outputs and
     # the source itself — a rule's `removeFromWalletId` can be the source
@@ -1429,32 +1245,28 @@ def _collect_transaction_migrations(*, company_id, rules, target_date, cur_map=N
     if not targets:
         return {"rows": [], "unmapped": unmapped, "fxPending": []}
 
-    # One Mongo query covering every (wallet, security) pair we care about.
+    # One query covering every (wallet, security) pair we care about.
     # `companyId` is also pinned to defend against a stale exception that
     # references a wallet that has since been moved to a different company.
-    or_clauses = []
+    # The endpoint can't express the (walletId, securityId) $or of pairs, so we
+    # fetch by the union of from-wallets + securityIds on target_date and keep
+    # the per-pair filter via `pair_index` below (same semantics as the $or).
     pair_index = {}
+    from_wallets = set()
+    sec_ids = set()
     for rule, sec in targets:
         from_w = rule["removeFromWalletId"]
         to_w   = rule["addToWalletId"]
-        or_clauses.append({"walletId": from_w, "securityId": sec})
+        from_wallets.add(from_w)
+        sec_ids.add(sec)
         pair_index[(from_w, sec)] = (rule, to_w)
-
-    query = {
-        "$or": or_clauses,
-        "companyId": company_id,
-        "liquidationDate": target_date,
-    }
-    proj = {
-        "walletId": 1, "securityId": 1, "balance": 1, "quantity": 1,
-        "price": 1,
-        "liquidationDate": 1, "operationDate": 1, "description": 1,
-        "beehusTransactionType": 1, "currencyId": 1, "comment": 1,
-    }
 
     rows = []
     fx_pending = []
-    for tx in db.transactions.find(query, proj):
+    for tx in beehus_catalog.transactions_search(
+        company_id, initial_date=target_date, final_date=target_date,
+        wallet_ids=list(from_wallets), security_ids=list(sec_ids),
+    ):
         from_w = str(tx.get("walletId") or "")
         sec    = str(tx.get("securityId") or "")
         match  = pair_index.get((from_w, sec))
@@ -1581,30 +1393,43 @@ def _wallet_currency(w):
     return str((w.get("currency") or w.get("currencyId") or "BRL"))
 
 
-def _fx_date_query(target_date):
-    """Match an `fxRates` doc on `target_date` whether its `date` is stored
-    as a `'YYYY-MM-DD'` string or as a midnight datetime."""
-    from datetime import timedelta
-    clauses = [{"date": target_date}]
-    try:
-        d0 = datetime.strptime(target_date, "%Y-%m-%d")
-        clauses.append({"date": {"$gte": d0, "$lt": d0 + timedelta(days=1)}})
-    except (TypeError, ValueError):
-        pass
-    return {"$or": clauses}
-
-
-# Moeda de referência implícita em `db.fxRates`. Toda linha tem o shape
-# `{currencyId, value, date}` onde `value` é "1 currencyId = value BRL" —
-# então BRL é a moeda âncora e não tem documento próprio (value=1 implícito).
+# Taxas de câmbio agora vivem num arquivo JSON local (`data/fx_rates.json`),
+# não mais no Mongo (`db.fxRates`). Shape do arquivo:
+#   {currencyId: {"YYYY-MM-DD": value}}  com value = "1 currencyId = value BRL".
+# BRL é a âncora implícita (=1, sem entrada). Chaves iniciadas por "_" (docs)
+# são ignoradas. Cacheado por mtime — editar o arquivo reflete na hora.
 _FX_REF_CURRENCY = "BRL"
+_FX_RATES_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "fx_rates.json")
+_fx_rates_cache = {"mtime": None, "rates": {}}
+
+
+def _load_fx_rates():
+    """`{currencyId: {YYYY-MM-DD: value_BRL}}` de `data/fx_rates.json`. Cacheado
+    por mtime; `{}` se o arquivo faltar/for inválido. Lockless: uma corrida
+    benigna apenas recarrega o arquivo (pequeno)."""
+    try:
+        mt = os.path.getmtime(_FX_RATES_FILE)
+    except OSError:
+        return _fx_rates_cache["rates"]
+    if _fx_rates_cache["mtime"] == mt:
+        return _fx_rates_cache["rates"]
+    try:
+        with open(_FX_RATES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+    except (OSError, ValueError):
+        return _fx_rates_cache["rates"]
+    rates = {k: v for k, v in data.items()
+             if not k.startswith("_") and isinstance(v, dict)}
+    _fx_rates_cache["mtime"] = mt
+    _fx_rates_cache["rates"] = rates
+    return rates
 
 
 def _fx_rate(base, quote, date, overrides=None):
     """Rate to convert an amount in `base` currency into `quote` on `date`.
 
-    Schema real do `db.fxRates`: cada doc tem `{currencyId, value, date}`,
-    onde `value` é "1 currencyId = value BRL" (BRL = referência implícita).
+    Schema de `data/fx_rates.json` (via `_load_fx_rates`): `{currencyId:
+    {date: value}}`, onde `value` é "1 currencyId = value BRL" (BRL = âncora).
     Daí:
       - `X  → BRL`: multiplica por `value(X)`.
       - `BRL → X` : divide por `value(X)` (ou seja, multiplica por `1/value`).
@@ -1621,15 +1446,15 @@ def _fx_rate(base, quote, date, overrides=None):
         return 1.0
 
     def _fetch_value(currency):
-        """Lookup do `value` no `fxRates` para a moeda na data — i.e. a taxa
-        `1 currency = value BRL`. Retorna float positivo ou `None`."""
+        """Lookup do `value` em `data/fx_rates.json` para a moeda na data — i.e.
+        a taxa `1 currency = value BRL`. Retorna float positivo ou `None`."""
         if currency == _FX_REF_CURRENCY:
             return 1.0
-        doc = db.fxRates.find_one({**_fx_date_query(date), "currencyId": currency})
-        if doc is None:
+        raw = (_load_fx_rates().get(currency) or {}).get(str(date)[:10])
+        if raw is None:
             return None
         try:
-            v = float(doc.get("value"))
+            v = float(raw)
             return v if v else None
         except (TypeError, ValueError):
             return None
@@ -1780,8 +1605,6 @@ def preview_exception(exception_id):
         return _preview_slice(blob, target_date)
     if kind == _KIND_CLASS_STRIP:
         return _preview_class_strip(blob, target_date)
-    if kind == _KIND_MANAGED_PORTFOLIO:
-        return _preview_managed(blob, target_date)
 
     plan = _build_plan(blob, target_date, fx_overrides=fx_overrides)
     if "error" in plan:
@@ -1797,8 +1620,9 @@ def preview_exception(exception_id):
         wids.add(tx.get("toWalletId"))
     wids.discard(None); wids.discard("")
     wallet_names = {}
-    for w in db.wallets.find({"_id": {"$in": _to_oids(wids)}}, {"name": 1}):
-        wallet_names[str(w["_id"])] = w.get("name", str(w["_id"]))
+    for wid in wids:
+        swid = beehus_catalog.id_str(wid)
+        wallet_names[swid] = (beehus_catalog.wallet_doc(swid) or {}).get("name") or swid
 
     # Security names for the transactions list — looked up via the cached
     # `get_security_names` helper to keep the preview cheap.
@@ -1949,15 +1773,11 @@ def apply_exception(exception_id):
     # Dispatch by kind. `wallet_slice` and `class_strip` each have their
     # own multi-step apply pipelines (position upload + provisions +
     # transactions + adjustments). See `_apply_slice` / `_apply_class_strip`.
-    # `managed_portfolio` is read-only — the apply just renders the
-    # analysis modal (no upstream writes).
     kind = blob.get("kind") or _KIND_POSITION_STRIP
     if kind == _KIND_WALLET_SLICE:
         return _apply_slice(blob, target_date)
     if kind == _KIND_CLASS_STRIP:
         return _apply_class_strip(blob, target_date)
-    if kind == _KIND_MANAGED_PORTFOLIO:
-        return _apply_managed(blob, target_date)
 
     plan = _build_plan(blob, target_date, fx_overrides=fx_overrides)
     if "error" in plan:
@@ -2180,10 +2000,7 @@ def _slice_source_cash(wallet_id, target_date):
     found = False
     uid = ""
     key = target_date[:10]
-    for doc in db.cashAccounts.find(
-        {"walletId": wallet_id, "trashed": {"$ne": True}},
-        {"values": 1, "unprocessedId": 1},
-    ):
+    for doc in beehus_catalog.cash_accounts_docs(wallet_id, date=target_date):
         if not uid:
             cur_uid = (doc.get("unprocessedId") or "").strip()
             if cur_uid:
@@ -2211,18 +2028,8 @@ def _slice_source_provisions(company_id, wallet_id, target_date):
     if not wallet_id or not target_date:
         return []
     out = []
-    cursor = db.provisions.find(
-        {
-            "companyId":       company_id,
-            "walletId":        wallet_id,
-            "initialDate":     {"$lte": target_date},
-            "liquidationDate": {"$gt":  target_date},
-            "trashed":         {"$ne": True},
-        },
-        {"balance": 1, "description": 1, "initialDate": 1,
-         "liquidationDate": 1, "provisionType": 1, "type": 1,
-         "currencyId": 1, "securityId": 1, "provisionSource": 1},
-    )
+    cursor = beehus_catalog.provisions_active(
+        company_id, target_date, wallet_ids=[wallet_id])
     for d in cursor:
         bal = d.get("balance")
         try:
@@ -2253,17 +2060,11 @@ def _slice_source_transactions(company_id, wallet_id, target_date):
     rest of the codebase)."""
     if not wallet_id or not target_date:
         return []
-    cursor = db.transactions.find(
-        {
-            "walletId":        wallet_id,
-            "companyId":       company_id,
-            "liquidationDate": target_date,
-            "trashed":         {"$ne": True},
-        },
-        {"walletId": 1, "securityId": 1, "balance": 1, "quantity": 1,
-         "liquidationDate": 1, "operationDate": 1, "description": 1,
-         "beehusTransactionType": 1, "currencyId": 1},
-    )
+    cursor = [
+        t for t in beehus_catalog.transactions_on_date(
+            company_id, [wallet_id], target_date)
+        if not t.get("trashed")
+    ]
     out = []
     for tx in cursor:
         try:
@@ -2343,11 +2144,8 @@ def _build_slice_plan(blob, target_date):
     # ends up blank. Also pull entityId for the target so transactions
     # and provisions can attach the same entity the wallet already uses.
     meta = {}
-    for w in db.wallets.find(
-        {"_id": {"$in": _to_oids({src_w, tgt_w})}},
-        {"currency": 1, "currencyId": 1, "entityId": 1, "name": 1},
-    ):
-        meta[str(w["_id"])] = {
+    for wid, w in _wallet_docs({src_w, tgt_w}).items():
+        meta[wid] = {
             "currencyId": _wallet_currency(w),
             "entityId":   str(w.get("entityId") or "") if w.get("entityId") else "",
             "name":       w.get("name") or "",
@@ -2798,14 +2596,10 @@ def _build_class_strip_plan(blob, target_date):
     # Wallet meta (currency, entity, name) for the target side of adjustments.
     all_wallet_ids = set(source_ids) | {r["targetWalletId"] for r in routes_raw if isinstance(r, dict)}
     wallet_meta = {}
-    for w in db.wallets.find(
-        {"_id": {"$in": _to_oids(all_wallet_ids)}},
-        {"name": 1, "currencyId": 1, "entityId": 1},
-    ):
-        wid = str(w["_id"])
+    for wid, w in _wallet_docs(all_wallet_ids).items():
         wallet_meta[wid] = {
             "name":       w.get("name") or wid,
-            "currencyId": str(w.get("currencyId") or "BRL"),
+            "currencyId": _wallet_currency(w),
             "entityId":   str(w.get("entityId") or "") if w.get("entityId") else "",
         }
 
@@ -2948,20 +2742,12 @@ def _build_class_strip_plan(blob, target_date):
         sids = matched_security_ids_per_source.get(src_w) or set()
         if not sids:
             continue
-        cursor = db.provisions.find(
-            {
-                "companyId":       company_id,
-                "walletId":        src_w,
-                "securityId":      {"$in": list(sids)},
-                "provisionType":   {"$in": list(_CLASS_STRIP_PROV_TYPES)},
-                "initialDate":     {"$lte": target_date},
-                "liquidationDate": {"$gt":  target_date},
-                "trashed":         {"$ne": True},
-            },
-            {"balance": 1, "description": 1, "initialDate": 1,
-             "liquidationDate": 1, "provisionType": 1, "provisionSource": 1,
-             "currencyId": 1, "securityId": 1},
-        )
+        _sid_set = {str(s) for s in sids}
+        _ptypes = set(_CLASS_STRIP_PROV_TYPES)
+        cursor = [p for p in beehus_catalog.provisions_active(
+                      company_id, target_date, wallet_ids=[src_w])
+                  if str(p.get("securityId") or "") in _sid_set
+                  and (p.get("provisionType") or "") in _ptypes]
         for d in cursor:
             sid = str(d.get("securityId") or "")
             # Look up the target via the routes (a security's variable1 has
@@ -3000,19 +2786,13 @@ def _build_class_strip_plan(blob, target_date):
         sids = matched_security_ids_per_source.get(src_w) or set()
         if not sids:
             continue
-        cursor = db.transactions.find(
-            {
-                "walletId":              src_w,
-                "companyId":             company_id,
-                "securityId":            {"$in": list(sids)},
-                "beehusTransactionType": {"$in": list(_CLASS_STRIP_TXN_TYPES)},
-                "liquidationDate":       target_date,
-                "trashed":               {"$ne": True},
-            },
-            {"walletId": 1, "securityId": 1, "balance": 1, "quantity": 1,
-             "liquidationDate": 1, "operationDate": 1, "description": 1,
-             "beehusTransactionType": 1, "currencyId": 1},
-        )
+        cursor = [
+            t for t in beehus_catalog.transactions_search(
+                company_id, initial_date=target_date, final_date=target_date,
+                wallet_ids=[src_w], security_ids=list(sids))
+            if t.get("beehusTransactionType") in _CLASS_STRIP_TXN_TYPES
+            and not t.get("trashed")
+        ]
         for tx in cursor:
             sid = str(tx.get("securityId") or "")
             tgt_wid = None
@@ -3499,6 +3279,10 @@ def _apply_class_strip(blob, target_date):
                                     "error": str(e),
                                     "upstream_status": getattr(e, "status", None),
                                     "upstream_body":   getattr(e, "body", None)})
+        # NAV recalculado upstream p/ as carteiras-alvo → invalida o cache
+        # consolidado da empresa (grade de divergência / publish-state).
+        if nav_results:
+            beehus_catalog.invalidate_nav(company_id)
 
     # Aggregate failure flags. Only stamp `lastApplied` when nothing failed
     # across the entire pipeline (including process + nav steps — operators
@@ -3545,715 +3329,6 @@ def _apply_class_strip(blob, target_date):
     return jsonify(response)
 
 
-# ── managed_portfolio (Carteira gerencial) — plan / preview / apply ──────────
-# Reuses the class_strip groupings/wallets pickers for selecting source
-# wallets; setup step 4 adds a date input + "abrir carteiras" button that
-# opens a modal listing every security held by the selected wallets at the
-# chosen date. The operator transfers individual securities to the
-# "selecionadas" pane (wallet → security pairs) and saves. Apply produces
-# a printable A4 analysis modal — the actual calculations are pending the
-# operator's spec, so the plan currently returns the raw enriched data
-# (wallets, securities, position values) and lets the FE render the layout.
-
-
-def _managed_position_rows(company_id, wallet_ids, target_date):
-    """Return `{walletId: [securityRow, ...]}` for the wallets' processed
-    position on `target_date`. Each row carries the security's
-    `_id`/`beehusName`/`hierarchicalVariable.variable1` plus the
-    snapshot's `quantity`/`pu`/`balance` so the picker modal can render
-    the listing without a second round-trip.
-
-    No fallback to an earlier date — the operator picked `target_date`
-    explicitly and a silent fallback would let them analyse the wrong
-    snapshot. When a wallet has no document at `target_date`, the value
-    is an empty list and the FE shows "sem posição" for that wallet."""
-    if not wallet_ids:
-        return {}
-    out: dict[str, list] = {wid: [] for wid in wallet_ids}
-    sec_index = get_security_names()
-    cursor = db.processedPosition.find(
-        {"companyId":    company_id,
-         "walletId":     {"$in": list(wallet_ids)},
-         "positionDate": target_date},
-        {"walletId": 1, "securities": 1},
-    )
-    for doc in cursor:
-        wid = str(doc.get("walletId") or "")
-        if wid not in out:
-            continue
-        for s in (doc.get("securities") or []):
-            sid = str(s.get("securityId") or "")
-            if not sid:
-                continue
-            hv = s.get("hierarchicalVariable") or {}
-            out[wid].append({
-                "securityId":    sid,
-                "beehusName":    sec_index.get(sid, ""),
-                "variable1":     (hv or {}).get("variable1") or "",
-                "quantity":      s.get("quantity"),
-                "pu":            s.get("executionPrice") or s.get("pu"),
-                "balance":       s.get("contribution") or s.get("balance"),
-                "amountDifference": s.get("amountDifference"),
-            })
-    return out
-
-
-@bp.route("/api/excecoes/managed-portfolio/benchmarks")
-def managed_portfolio_benchmarks():
-    """List securities with `securityType: "benchmark"` available to the
-    company. Used by the setup UI to populate the benchmark picker — a
-    single benchmark per managed_portfolio exception, used as a
-    comparison series on the A4 report's line chart.
-
-    Benchmarks aren't scoped via a `companyId` scalar — they expose a
-    `companyIds: []` array. Empty array (or missing field) means the
-    benchmark is global (CDI, IBOV, etc. live this way); a non-empty
-    array means it's restricted to the listed companies. The matcher
-    below covers both shapes."""
-    company_id = (request.args.get("companyId") or "").strip()
-    if not company_visible(company_id):
-        return jsonify({"error": "forbidden"}), 403
-    try:
-        _safe(company_id)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    out = []
-    for s in db.securities.find(
-        {
-            "securityType": "benchmark",
-            "$or": [
-                {"companyIds": {"$exists": False}},
-                {"companyIds": {"$size": 0}},
-                {"companyIds": company_id},
-            ],
-        },
-        {"beehusName": 1, "_id": 1},
-    ):
-        out.append({
-            "id":   str(s["_id"]),
-            "name": s.get("beehusName") or str(s["_id"]),
-        })
-    out.sort(key=lambda x: (x["name"] or "").lower())
-    return jsonify({"benchmarks": out})
-
-
-@bp.route("/api/excecoes/managed-portfolio/positions")
-def managed_portfolio_positions():
-    """Return the securities held by the requested wallets at `date`,
-    used by the picker modal in setup step 4.
-
-    Query string:
-        ?companyId=...&walletIds=w1,w2&date=YYYY-MM-DD
-    """
-    company_id = (request.args.get("companyId") or "").strip()
-    date_str   = (request.args.get("date") or "").strip()
-    raw_ids    = (request.args.get("walletIds") or "").strip()
-    if not company_visible(company_id):
-        return jsonify({"error": "forbidden"}), 403
-    try:
-        _safe(company_id); _safe_date(date_str)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    if not raw_ids:
-        return jsonify({"wallets": []})
-    wallet_ids = [w.strip() for w in raw_ids.split(",") if w.strip()]
-    # Re-check every wallet belongs to the company — `_validate_payload_managed`
-    # also enforces this on save, but the picker endpoint is reachable
-    # before save so we guard here too.
-    safe_wids = []
-    for w in wallet_ids:
-        if _wallet_in_company(w, company_id):
-            safe_wids.append(w)
-    rows_by_wallet = _managed_position_rows(company_id, safe_wids, date_str)
-    wallet_names = get_wallet_names()
-    out = []
-    for w in safe_wids:
-        out.append({
-            "walletId":   w,
-            "walletName": wallet_names.get(w, w),
-            "securities": rows_by_wallet.get(w, []),
-        })
-    return jsonify({"wallets": out, "positionDate": date_str})
-
-
-def _managed_date_range(blob, body_or_args):
-    """Resolve the analysis date range from request input + the saved
-    exception. Body/args take precedence; if only one is given we use
-    it as `final` and default `initial` to 12 months prior."""
-    from datetime import date as _date
-    raw_ini = (body_or_args.get("initialDate")
-               or body_or_args.get("initial")
-               or "").strip()
-    raw_fin = (body_or_args.get("finalDate")
-               or body_or_args.get("final")
-               or body_or_args.get("date")
-               or blob.get("positionDate")
-               or "").strip()
-    if raw_fin:
-        _safe_date(raw_fin)
-    else:
-        raise ValueError("finalDate required")
-    if raw_ini:
-        _safe_date(raw_ini)
-    else:
-        fin = _date.fromisoformat(raw_fin)
-        raw_ini = fin.replace(year=fin.year - 1).isoformat()
-    if raw_ini > raw_fin:
-        raise ValueError("initialDate > finalDate")
-    return raw_ini, raw_fin
-
-
-def _load_company_palette(company_id):
-    """Return the company's brand colour palette as a list of hex strings.
-
-    Data model (in the live DB):
-      * `companies._id` is the companyId scalar (not an ObjectId).
-        Each company has `selectedPalletes: [palleteOid, ...]` —
-        ordered, the FIRST entry is the company's primary palette.
-      * `palletes._id` is an ObjectId. The colour list lives in the
-        `pallete` array (yes, singular — matches the field as stored;
-        we do not normalise to avoid silent breakage if the operator
-        ever queries it directly).
-
-    Returns `[]` (front-end falls back to its built-in palette) when:
-      * the company doc is missing, has no `selectedPalletes`, or the
-        first id doesn't resolve to a doc; or
-      * the matched palette has an empty / malformed `pallete` array.
-    """
-    if not company_id:
-        return []
-    try:
-        co = db.companies.find_one(
-            {"_id": company_id}, {"selectedPalletes": 1})
-    except Exception:
-        return []
-    sel = (co or {}).get("selectedPalletes") or []
-    if not sel:
-        return []
-    primary = sel[0]
-    # The list may store either string ids or ObjectIds depending on how
-    # the company was migrated — try ObjectId conversion then fall back
-    # to the raw value.
-    oids = _to_oids([primary])
-    candidates = oids + ([primary] if primary not in oids else [])
-    for cand in candidates:
-        try:
-            doc = db.palletes.find_one({"_id": cand}, {"pallete": 1})
-        except Exception:
-            continue
-        if doc:
-            colours = doc.get("pallete") or []
-            return [str(c) for c in colours if isinstance(c, str) and c]
-    return []
-
-
-def _compute_benchmark_series(security_id, company_id, initial_date, final_date):
-    """Build the daily + monthly accumulated return series for a
-    benchmark security so the A4 report can plot it next to the
-    portfolio line.
-
-    Benchmark prices live in `securityPrices.historyPrice` (NOT in
-    `publishedPositionSecurities` — those rows only exist for assets
-    actually held in a wallet; a benchmark like CDI is a quoted index
-    with no wallet-level position). Each `historyPrice` entry is
-    `{date, value, adjustedQuantity}`; we compute the daily return as
-    the close-to-close ratio of `value`. The CDI doc is keyed by the
-    string `securityId` matching `securities._id`, and is global
-    (not per-company) — the `companyId` field on the prices doc is
-    informational and not used for the lookup.
-
-    Returns a 3-tuple `(daily, monthly, meta)` where:
-      * `daily`   = [{"date","return","accumulated"}, ...] sorted asc.
-                    The first day in the [initial_date, final_date]
-                    window has `accumulated = 0` (it's the baseline);
-                    subsequent days carry the cumulative return
-                    relative to that baseline.
-      * `monthly` = [{"month": "YYYY-MM", "return": ...}, ...]
-      * `meta`    = {"id", "name"} or None when the security can't be
-                    resolved (front-end skips the dataset in that case)
-
-    Used twice per report build: once for the optional configured
-    benchmark and once for CDI (always-on baseline)."""
-    if not security_id:
-        return [], [], None
-    bench_oids = _to_oids([security_id])
-    bench_doc = (db.securities.find_one(
-        {"_id": bench_oids[0]}, {"beehusName": 1})
-        if bench_oids else None)
-    meta = {
-        "id":   security_id,
-        "name": (bench_doc or {}).get("beehusName") or security_id,
-    }
-    # `securityPrices.securityId` is mixed-type historically — the
-    # canonical shape is a stringified ObjectId, but some legacy docs
-    # use the raw ObjectId. Both lookups attempted before giving up.
-    price_doc = (
-        db.securityPrices.find_one(
-            {"securityId": security_id, "trashed": {"$ne": True}},
-            {"historyPrice": 1},
-        )
-        or (
-            db.securityPrices.find_one(
-                {"securityId": bench_oids[0], "trashed": {"$ne": True}},
-                {"historyPrice": 1},
-            )
-            if bench_oids else None
-        )
-    )
-    if not price_doc:
-        return [], [], meta
-    points = []
-    for hp in (price_doc.get("historyPrice") or []):
-        date_str = str(hp.get("date") or "")[:10]
-        if not date_str or date_str < initial_date or date_str > final_date:
-            continue
-        try:
-            v = float(hp.get("value"))
-        except (TypeError, ValueError):
-            continue
-        if v <= 0:
-            # A zero or negative price would NaN the ratio for the next
-            # day — skip the bogus entry rather than corrupt the series.
-            continue
-        points.append((date_str, v))
-    if not points:
-        return [], [], meta
-    points.sort(key=lambda p: p[0])
-    # Baseline = first in-window price. Accumulated return at every
-    # subsequent point is `value(d) / baseline - 1`; the daily
-    # return between consecutive prices is `value(d) / value(d-1) - 1`.
-    base_date, base_value = points[0]
-    daily = [{
-        "date":        base_date,
-        "return":      0.0,
-        "accumulated": 0.0,
-    }]
-    prev = base_value
-    for date_str, v in points[1:]:
-        r = (v / prev) - 1.0
-        prev = v
-        daily.append({
-            "date":        date_str,
-            "return":      r,
-            "accumulated": (v / base_value) - 1.0,
-        })
-    monthly_factor: dict[str, float] = {}
-    for row in daily[1:]:   # skip the anchor day (0% return contributes nothing)
-        ym = row["date"][:7]
-        monthly_factor[ym] = monthly_factor.get(ym, 1.0) * (1.0 + row["return"])
-    monthly = [{"month": ym, "return": monthly_factor[ym] - 1.0}
-               for ym in sorted(monthly_factor.keys())]
-    return daily, monthly, meta
-
-
-def _build_managed_plan(blob, initial_date, final_date):
-    """Build the analysis payload for the A4 report.
-
-    Calculation contract (per the operator's spec):
-
-      * Daily return for the set of selected (walletId, securityId) pairs
-        on a given date `d`:
-              r(d) = Σ totalContribution(d) / Σ (formerPu(d) * formerQuantity(d))
-        Both sums are restricted to the selected pairs and to docs whose
-        `positionDate == d`. Dates with a zero denominator are skipped
-        (they'd otherwise spike the accumulated curve).
-      * Accumulated return: cumulative product of `(1 + r(d))` minus 1.
-      * Monthly returns: same compounding applied within each calendar
-        month, indexed by `YYYY-MM`.
-      * Donut breakdown: sum of `balance` grouped by `variable1` on the
-        final date (matched pairs only).
-      * Latest transactions: `transactions` collection filtered by the
-        same (walletId, securityId) pairs, `trashed != True`, sorted by
-        `operationDate` desc + `liquidationDate` desc, capped at
-        `_MANAGED_TX_LIMIT` rows so the A4 layout doesn't overflow.
-    """
-    company_id = blob["companyId"]
-    pairs      = blob.get("selectedSecurities") or []
-    src_ids    = list(dict.fromkeys(blob.get("sourceWalletIds") or []))
-    sec_index  = get_security_names()
-    wallet_names = get_wallet_names()
-    palette    = _load_company_palette(company_id)
-
-    # `mainId` is the operator-facing identifier on db.securities (e.g.
-    # "CDI", a CNPJ, an ISIN — depends on the security type). The A4
-    # "Ativos por saldo" table on page 2 lists it next to beehusName so
-    # the reader can cross-reference with custody statements without
-    # opening another tab. Build a {securityId → mainId} map once for
-    # the pairs in play. */
-    pair_sec_ids = {(p.get("securityId") or "") for p in pairs}
-    pair_sec_ids.discard("")
-    main_id_index: dict[str, str] = {}
-    if pair_sec_ids:
-        oids = _to_oids(pair_sec_ids)
-        if oids:
-            for s in db.securities.find(
-                {"_id": {"$in": oids}}, {"mainId": 1},
-            ):
-                main_id_index[str(s["_id"])] = str(s.get("mainId") or "")
-
-    # ── Selected-pair indexes for filtering ─────────────────────────────
-    selected_pairs = {(p.get("walletId") or "", p.get("securityId") or "")
-                      for p in pairs}
-    sel_wallets    = {wid for wid, _ in selected_pairs if wid}
-    sel_securities = {sid for _, sid in selected_pairs if sid}
-
-    # Empty selection → return an empty analysis (FE renders an info
-    # banner). Avoid hitting Mongo with `$in` of nothing.
-    if not selected_pairs:
-        return {
-            "kind":          _KIND_MANAGED_PORTFOLIO,
-            "name":          blob.get("name") or "",
-            "companyId":     company_id,
-            "initialDate":   initial_date,
-            "finalDate":     final_date,
-            "sourceWalletIds":   src_ids,
-            "sourceWalletNames": [wallet_names.get(w, w) for w in src_ids],
-            "daily":         [],
-            "monthly":       [],
-            "donut":         [],
-            "snapshot":      {"count": 0, "totalBalance": 0.0,
-                              "totalGain": 0.0,
-                              "missing": [], "matched": []},
-            "contributionByClass": [],
-            "transactions":  [],
-            "benchmark":     None,
-            "benchmarkDaily":   [],
-            "benchmarkMonthly": [],
-            "cdi":           None,
-            "cdiDaily":      [],
-            "cdiMonthly":    [],
-            "palette":       palette,
-            "warning":       "Nenhum ativo selecionado nesta exceção.",
-        }
-
-    # ── publishedPositionSecurities scan ────────────────────────────────
-    # One $in scan, then we filter the pair set in Python because Mongo
-    # can't match a cross-field tuple efficiently without a compound
-    # index. Materialised up front (vs streaming) because we need to
-    # know the actual date bounds BEFORE choosing the final-snapshot
-    # date — see the "effective window" block below.
-    raw_rows = list(db.publishedPositionSecurities.find(
-        {"walletId":     {"$in": list(sel_wallets)},
-         "securityId":   {"$in": list(sel_securities)},
-         "positionDate": {"$gte": initial_date, "$lte": final_date}},
-        {"walletId": 1, "securityId": 1, "positionDate": 1,
-         "totalContribution": 1, "formerPu": 1, "formerQuantity": 1,
-         "balance": 1, "variable1": 1, "beehusName": 1,
-         "walletName": 1, "quantity": 1, "pu": 1},
-    ))
-
-    # Trim to rows that actually match a selected (wallet, security)
-    # pair AND carry a valid date — the $in filter above is a superset
-    # (cross-product), and stripping noise up here lets the bounds
-    # calculation reflect the real coverage.
-    matched_pair_rows = []
-    for d in raw_rows:
-        wid = str(d.get("walletId") or "")
-        sid = str(d.get("securityId") or "")
-        if (wid, sid) not in selected_pairs:
-            continue
-        date_str = str(d.get("positionDate") or "")[:10]
-        if not date_str:
-            continue
-        matched_pair_rows.append((d, wid, sid, date_str))
-
-    # ── Effective window clipping ───────────────────────────────────────
-    # The operator may pick a window much wider than the actual data
-    # availability (e.g. "2020-01-01 → 2026-12-31" but the selected
-    # pairs only have publishedPositionSecurities from 2025-04 onwards).
-    # Narrow the window to the actual min/max date present in the
-    # matched rows so the chart x-axis isn't stretched over empty
-    # periods, the final-snapshot lands on a date that actually has
-    # data, and the benchmark/CDI series are computed for the same
-    # visible range.  Falls back to the requested window when no row
-    # matched (the "Sem rentabilidade" path below will surface a
-    # warning).
-    dates_in_data = {date_str for (_, _, _, date_str) in matched_pair_rows}
-    if dates_in_data:
-        initial_date = min(dates_in_data)
-        final_date   = max(dates_in_data)
-
-    # Daily aggregates: per date, the matched (walletId, securityId)
-    # rows feeding the return calculation + the final-date snapshot.
-    # `pair_contribution_by_class` accumulates the full-period
-    # `Σ totalContribution` per `variable1` so the A4 report can render
-    # the "performance contribution by class" bar chart and the total
-    # gain on the side table next to the donut.
-    per_date_contrib: dict[str, float] = {}
-    per_date_former:  dict[str, float] = {}
-    final_snapshot: dict[tuple[str, str], dict] = {}
-    seen_pairs: set[tuple[str, str]] = set()
-    period_total_contribution = 0.0
-    period_contribution_by_class: dict[str, float] = {}
-    # Track variable1 per (wallet, security) so contributions from days
-    # whose row arrives before the final date still land in the right
-    # class bucket (variable1 doesn't change over the period for a
-    # given pair in practice).
-    class_by_pair: dict[tuple[str, str], str] = {}
-    for (d, wid, sid, date_str) in matched_pair_rows:
-        key = (wid, sid)
-        seen_pairs.add(key)
-        try:
-            tc = float(d.get("totalContribution") or 0)
-            fp = float(d.get("formerPu") or 0)
-            fq = float(d.get("formerQuantity") or 0)
-        except (TypeError, ValueError):
-            continue
-        per_date_contrib[date_str] = per_date_contrib.get(date_str, 0.0) + tc
-        per_date_former[date_str]  = per_date_former.get(date_str, 0.0) + (fp * fq)
-        period_total_contribution += tc
-        # Capture variable1 for this pair (overwriting is fine; the
-        # latest non-empty class wins).
-        cls = d.get("variable1") or ""
-        if cls:
-            class_by_pair[key] = cls
-        period_contribution_by_class[cls or "(sem classe)"] = (
-            period_contribution_by_class.get(cls or "(sem classe)", 0.0) + tc
-        )
-        # Final-date snapshot for the donut + side table. Keep the
-        # latest doc per pair within the (now-clipped) window.
-        if date_str == final_date:
-            final_snapshot[key] = {
-                "walletId":   wid,
-                "walletName": d.get("walletName") or wallet_names.get(wid, wid),
-                "securityId": sid,
-                "mainId":     main_id_index.get(sid, ""),
-                "beehusName": d.get("beehusName") or sec_index.get(sid, sid),
-                "variable1":  d.get("variable1") or "",
-                "balance":    float(d.get("balance") or 0),
-                "quantity":   d.get("quantity"),
-                "pu":         d.get("pu"),
-            }
-
-    # ── Daily returns + accumulated curve ───────────────────────────────
-    daily = []
-    acc = 1.0
-    for date_str in sorted(per_date_contrib.keys()):
-        denom = per_date_former.get(date_str, 0.0)
-        if denom == 0:
-            # Skip — feeding a zero denominator into the cumulative
-            # product would either NaN out or pin the curve to -100%.
-            continue
-        r = per_date_contrib[date_str] / denom
-        acc *= (1.0 + r)
-        daily.append({
-            "date":        date_str,
-            "return":      r,
-            "accumulated": acc - 1.0,
-        })
-
-    # ── Monthly compounding ─────────────────────────────────────────────
-    monthly_factor: dict[str, float] = {}
-    for row in daily:
-        ym = row["date"][:7]
-        monthly_factor[ym] = monthly_factor.get(ym, 1.0) * (1.0 + row["return"])
-    monthly = [{"month": ym, "return": monthly_factor[ym] - 1.0}
-               for ym in sorted(monthly_factor.keys())]
-
-    # ── Donut + snapshot table ──────────────────────────────────────────
-    donut_by_class: dict[str, float] = {}
-    total_balance = 0.0
-    matched_rows = []
-    for key, row in final_snapshot.items():
-        total_balance += row["balance"]
-        cls = row["variable1"] or "(sem classe)"
-        donut_by_class[cls] = donut_by_class.get(cls, 0.0) + row["balance"]
-        matched_rows.append(row)
-    donut = [{"variable1": k, "balance": v}
-             for k, v in sorted(donut_by_class.items(),
-                                key=lambda kv: -kv[1])]
-    # Performance-contribution bar chart series — same class buckets as
-    # the donut so the colour palette can be shared by the front-end.
-    contribution_by_class = [
-        {"variable1": k, "contribution": v}
-        for k, v in sorted(period_contribution_by_class.items(),
-                           key=lambda kv: -kv[1])
-    ]
-    missing_pairs = []
-    for (wid, sid) in selected_pairs:
-        if (wid, sid) not in final_snapshot:
-            missing_pairs.append({
-                "walletId":   wid,
-                "walletName": wallet_names.get(wid, wid),
-                "securityId": sid,
-                "beehusName": sec_index.get(sid, sid),
-            })
-
-    # ── Comparator series ───────────────────────────────────────────────
-    # We always plot the CDI line (per operator spec: baseline reference
-    # regardless of any configured benchmark) and optionally plot the
-    # configured benchmark on top when the operator picked one that is
-    # NOT CDI itself. Both series use the same return formula as the
-    # portfolio: `Σ totalContribution / Σ (formerPu·formerQuantity)` per
-    # date, accumulated across the window. Aggregating by `positionDate`
-    # across all wallets that hold the benchmark is mathematically
-    # equivalent to using any single wallet's row because the rate is
-    # identical for a given benchmark on a given date.
-    cdi_doc = db.securities.find_one(
-        {"securityType": "benchmark", "beehusName": "CDI"},
-        {"_id": 1, "beehusName": 1},
-    )
-    cdi_id = str(cdi_doc["_id"]) if cdi_doc else ""
-
-    benchmark_id = (blob.get("benchmarkSecurityId") or "").strip()
-
-    # Compute the configured benchmark series whenever the operator
-    # picked one — even if it happens to be CDI itself.  When it's CDI,
-    # we DON'T also fill the cdi_* slots (would draw the same line twice
-    # — once labelled "CDI" via the benchmark dataset, once via the
-    # auto-baseline dataset).
-    benchmark_daily, benchmark_monthly, benchmark_meta = [], [], None
-    if benchmark_id:
-        benchmark_daily, benchmark_monthly, benchmark_meta = (
-            _compute_benchmark_series(
-                benchmark_id, company_id, initial_date, final_date))
-
-    # CDI baseline auto-line. Suppressed when the configured benchmark
-    # IS CDI (already covered by the benchmark dataset above).
-    cdi_daily, cdi_monthly, cdi_meta = [], [], None
-    if cdi_id and benchmark_id != cdi_id:
-        cdi_daily, cdi_monthly, cdi_meta = _compute_benchmark_series(
-            cdi_id, company_id, initial_date, final_date)
-
-    # ── Latest transactions ─────────────────────────────────────────────
-    # `securityContributionAdjustment` is excluded by request — those rows
-    # are synthetic adjustments emitted by the platform (not real moves
-    # by the operator), so they clutter the "últimas transações" list
-    # without helping the analysis.
-    tx_rows = []
-    if sel_wallets and sel_securities:
-        tx_cursor = (db.transactions.find(
-            {"companyId":  company_id,
-             "walletId":   {"$in": list(sel_wallets)},
-             "securityId": {"$in": list(sel_securities)},
-             "trashed":    {"$ne": True},
-             "beehusTransactionType": {"$ne": "securityContributionAdjustment"}},
-            {"walletId": 1, "securityId": 1, "operationDate": 1,
-             "liquidationDate": 1, "balance": 1, "quantity": 1, "price": 1,
-             "description": 1, "beehusTransactionType": 1, "currencyId": 1},
-        ).sort([("operationDate", -1), ("liquidationDate", -1)])
-            .limit(_MANAGED_TX_LIMIT * 4))   # over-fetch then pair-filter
-        for d in tx_cursor:
-            wid = str(d.get("walletId") or "")
-            sid = str(d.get("securityId") or "")
-            if (wid, sid) not in selected_pairs:
-                continue
-            tx_rows.append({
-                "walletId":      wid,
-                "walletName":    wallet_names.get(wid, wid),
-                "securityId":    sid,
-                "beehusName":    sec_index.get(sid, sid),
-                "operationDate": d.get("operationDate") or "",
-                "liquidationDate": d.get("liquidationDate") or "",
-                "balance":       d.get("balance"),
-                "quantity":      d.get("quantity"),
-                "price":         d.get("price"),
-                "description":   d.get("description") or "",
-                "type":          d.get("beehusTransactionType") or "",
-                "currencyId":    d.get("currencyId") or "BRL",
-            })
-            if len(tx_rows) >= _MANAGED_TX_LIMIT:
-                break
-
-    return {
-        "kind":          _KIND_MANAGED_PORTFOLIO,
-        "name":          blob.get("name") or "",
-        "companyId":     company_id,
-        "initialDate":   initial_date,
-        "finalDate":     final_date,
-        "sourceWalletIds":   src_ids,
-        "sourceWalletNames": [wallet_names.get(w, w) for w in src_ids],
-        # Series for the line chart.
-        "daily":         daily,
-        # Series for the monthly table.
-        "monthly":       monthly,
-        # Series + total for the donut + side table.
-        "donut":         donut,
-        "snapshot": {
-            "count":             len(matched_rows),
-            "totalBalance":      total_balance,
-            # Period-wide aggregates rendered next to the donut in the
-            # A4 report. `totalGain` is Σ totalContribution across every
-            # (wallet, security, date) row in the window.
-            "totalGain":         period_total_contribution,
-            "matched":           matched_rows,
-            "missing":           missing_pairs,
-        },
-        # Bar chart: Σ totalContribution in the period grouped by
-        # variable1. Empty array when no pair contributed anything.
-        "contributionByClass":   contribution_by_class,
-        # Latest transactions for the bottom table.
-        "transactions":  tx_rows,
-        # Configured benchmark comparison series (empty / null when no
-        # benchmark is configured, or when the configured benchmark is
-        # CDI itself — that case is rolled into the CDI block below to
-        # avoid drawing the same line twice).
-        "benchmark":     benchmark_meta,
-        "benchmarkDaily":   benchmark_daily,
-        "benchmarkMonthly": benchmark_monthly,
-        # CDI baseline — always plotted on the line chart so the
-        # operator has a reference rate even when no benchmark was
-        # configured for the exception. Empty when the CDI security
-        # itself is missing from `db.securities`.
-        "cdi":           cdi_meta,
-        "cdiDaily":      cdi_daily,
-        "cdiMonthly":    cdi_monthly,
-        # Company-specific brand palette (hex strings) — used by the
-        # front-end to colour the donut + bar chart so the printed PDF
-        # matches the operator's company colours. Empty list when no
-        # `selectedPalletes[0]` is configured (front-end falls back to
-        # its built-in slate palette in that case).
-        "palette":       palette,
-    }
-
-
-_MANAGED_TX_LIMIT = 20
-
-
-def _preview_managed(blob, target_date_or_body=None):
-    """Read the date range from the request body (preview endpoint uses
-    `request.get_json()`) and return the analysis payload."""
-    body = request.get_json(silent=True) or {}
-    # Fallback for the legacy `{date: ...}` shape used by the daily-routine
-    # preview button — we treat that single date as `finalDate`.
-    if target_date_or_body and not (body.get("finalDate") or body.get("date")):
-        body["finalDate"] = target_date_or_body
-    try:
-        ini, fin = _managed_date_range(blob, body)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    plan = _build_managed_plan(blob, ini, fin)
-    return jsonify(plan)
-
-
-def _apply_managed(blob, target_date_or_body=None):
-    """Same as preview — read-only kind. Stamps `lastApplied` so the
-    list view picks up the most-recent analysis time."""
-    body = request.get_json(silent=True) or {}
-    if target_date_or_body and not (body.get("finalDate") or body.get("date")):
-        body["finalDate"] = target_date_or_body
-    try:
-        ini, fin = _managed_date_range(blob, body)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    plan = _build_managed_plan(blob, ini, fin)
-    # Match the {date, at} shape used by class_strip / position_strip /
-    # wallet_slice — the listing JS reads `lastApplied.date` and
-    # `lastApplied.at`, so a bare ISO string used to render empty parens
-    # in the "Última aplicação" column.
-    blob["lastApplied"] = {
-        "date": fin,
-        "at":   datetime.utcnow().isoformat(timespec="seconds") + "Z",
-    }
-    try:
-        _save(blob)
-    except (OSError, ValueError):
-        # Persisting lastApplied is a nice-to-have for the list view;
-        # don't fail the analysis if the file write hiccups.
-        pass
-    return jsonify(plan)
-
-
 # ── Ajustes Day-Trade ─────────────────────────────────────────────────────────
 # Detects same-day buy+sell transactions whose security never landed in the
 # wallet's `processedPosition` for that liquidationDate, then builds a patched
@@ -4270,7 +3345,7 @@ def _build_security_to_unprocessed_map(company_id):
     a list. Used to translate a day-traded `securityId` (carried by
     transactions) back to the unprocessedId rows that need to be zeroed out
     in the position payload."""
-    doc = db.securityMappings.find_one({"companyId": company_id}, {"mappings": 1})
+    doc = beehus_catalog.security_mappings_doc(company_id)
     if not doc:
         return {}
     out = {}
@@ -4293,8 +3368,8 @@ def _intraday_resolve_wallets(*, company_id, grouping_ids, wallet_ids):
     narrowed by `groupingIds` (union of their walletIds), then intersected
     with explicit `walletIds` if any.
     """
-    from bson import ObjectId
-    wallet_query = {"companyId": company_id}
+    # Company-wide candidate set from the cached wallet index (ids são str).
+    candidate = set(beehus_catalog.wallets_for_company(company_id).keys())
     if grouping_ids:
         gindex = get_grouping_index()
         ids = set()
@@ -4307,11 +3382,9 @@ def _intraday_resolve_wallets(*, company_id, grouping_ids, wallet_ids):
             ids.update(g.get("walletIds") or [])
         if not ids:
             return set()
-        try:
-            wallet_query["_id"] = {"$in": [ObjectId(w) for w in ids if w]}
-        except Exception:
-            return set()
-    candidate = {str(w["_id"]) for w in db.wallets.find(wallet_query, {"_id": 1})}
+        # Narrow to the grouping wallets, keeping the implicit company
+        # intersection the original `find({companyId, _id:$in})` enforced.
+        candidate &= {beehus_catalog.id_str(w) for w in ids if w}
     explicit = set(wallet_ids or [])
     if explicit:
         candidate &= explicit
@@ -4339,17 +3412,13 @@ def _intraday_detect(*, company_id, initial_date, final_date, candidate_wallets)
     if not candidate_wallets:
         return []
 
-    cursor = db.transactions.find(
-        {
-            "walletId": {"$in": list(candidate_wallets)},
-            "liquidationDate": {"$gte": initial_date, "$lte": final_date},
-            "beehusTransactionType": "buySell",
-            "trashed": {"$ne": True},
-        },
-        {"walletId": 1, "securityId": 1, "balance": 1, "quantity": 1,
-         "liquidationDate": 1, "operationDate": 1, "description": 1,
-         "currencyId": 1, "beehusTransactionType": 1},
-    )
+    cursor = [
+        t for t in beehus_catalog.transactions_search(
+            company_id, initial_date=initial_date, final_date=final_date,
+            wallet_ids=list(candidate_wallets))
+        if t.get("beehusTransactionType") == "buySell"
+        and not t.get("trashed")
+    ]
 
     groups = {}
     for d in cursor:
@@ -4382,22 +3451,19 @@ def _intraday_detect(*, company_id, initial_date, final_date, candidate_wallets)
     if not candidates:
         return []
 
-    # Batch-fetch processed positions per (walletId, date). One find_one
-    # per pair stays cheap because the `(walletId, positionDate)` index on
-    # `processedPosition` is the hot index for this collection (db.py:170).
+    # Batch-fetch processed positions per (walletId, date) via endpoint A
+    # (`processed_positions_map`: 1 chamada por data, walletIds plural; fallback
+    # Mongo num único find multi-data). Evita o N+1 de um find_one por par.
     pos_keys = {(wid, date) for (wid, _, date) in candidates.keys()}
+    _pos_map = beehus_catalog.processed_positions_map(
+        company_id, sorted({w for (w, _d) in pos_keys}),
+        sorted({_d for (w, _d) in pos_keys}))
     processed_ids = {}
     for wid, date in pos_keys:
-        doc = db.processedPosition.find_one(
-            {"walletId": wid, "positionDate": date},
-            {"securities.securityId": 1},
-        )
-        sids = set()
-        if doc:
-            for s in doc.get("securities") or []:
-                if s.get("securityId"):
-                    sids.add(str(s["securityId"]))
-        processed_ids[(wid, date)] = sids
+        processed_ids[(wid, date)] = {
+            str(s["securityId"]) for s in _pos_map.get((wid, date), [])
+            if s.get("securityId")
+        }
 
     out = []
     for (wid, sid, date), g in candidates.items():
@@ -4475,17 +3541,18 @@ def _intraday_build_patched_positions(*, company_id, groups):
     cur_map = {}
     if by_wallet_date:
         wid_set = {wid for (wid, _) in by_wallet_date.keys()}
-        for w in db.wallets.find({"_id": {"$in": _to_oids(wid_set)}},
-                                 {"currencyId": 1}):
-            cur_map[str(w["_id"])] = str(w.get("currencyId") or "BRL")
+        cur_map = {wid: _wallet_currency(w) for wid, w in _wallet_docs(wid_set).items()}
 
+    # Pre-fetch unprocessed positions for all (wallet, date) pairs via endpoint
+    # B (`unprocessed_docs_map`: 1 chamada de range; fallback Mongo multi-data),
+    # em vez de um find_one por par (evita N+1).
+    _unp_map = beehus_catalog.unprocessed_docs_map(
+        company_id, [w for (w, _d) in by_wallet_date.keys()],
+        [_d for (w, _d) in by_wallet_date.keys()])
     out = []
     for (wid, date), entry in by_wallet_date.items():
         sec_set = entry["securityIds"]
-        doc = db.unprocessedSecurityPositions.find_one(
-            {"walletId": wid, "positionDate": date},
-            {"securities": 1},
-        )
+        doc = _unp_map.get((wid, date))
         secs = _aggregate_unprocessed((doc or {}).get("securities") or [])
 
         # Source `unprocessedId`s that should be replaced by a beehusName
@@ -4575,11 +3642,8 @@ def _resolve_wallet_meta(wallet_ids):
     if not wallet_ids:
         return {}
     out = {}
-    for w in db.wallets.find(
-        {"_id": {"$in": _to_oids(wallet_ids)}},
-        {"entityId": 1, "currency": 1, "currencyId": 1, "companyId": 1},
-    ):
-        out[str(w["_id"])] = {
+    for wid, w in _wallet_docs(wallet_ids).items():
+        out[wid] = {
             "entityId":   str(w.get("entityId") or "") if w.get("entityId") else "",
             "currencyId": _wallet_currency(w),
             "companyId":  str(w.get("companyId") or "") if w.get("companyId") else "",
@@ -4680,9 +3744,9 @@ def _intraday_resolve_names(groups, patched):
 
     wallet_names = {}
     if wid_set:
-        for w in db.wallets.find({"_id": {"$in": _to_oids(wid_set)}},
-                                 {"name": 1}):
-            wallet_names[str(w["_id"])] = w.get("name", str(w["_id"]))
+        for wid in wid_set:
+            swid = beehus_catalog.id_str(wid)
+            wallet_names[swid] = (beehus_catalog.wallet_doc(swid) or {}).get("name") or swid
 
     sec_names = {}
     if sid_set:

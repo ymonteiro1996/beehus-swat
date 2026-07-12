@@ -46,24 +46,20 @@ Controle de cargas/
 │   ├── __init__.py
 │   ├── config.py             # Entity selection + app settings
 │   ├── conciliacao.py        # NAV conciliation + diagnostic engine
-│   ├── painel.py             # Consolidated control panel (dashboard + all controls)
+│   ├── correcoes.py          # Correction-file CRUD + /api/correcoes/* (used by conciliacao)
 │   ├── impostos.py           # Tax view for wallet securities
-│   ├── nav.py                # NAV package tracking
 │   ├── precos.py             # Historical price viewer (multi-security, multi-source)
 │   ├── setup.py              # First-run MongoDB connection registration
-│   ├── stubs.py              # Placeholder routes for future features
-│   └── validacao_rentabilidades.py  # Rentability validation
+│   └── stubs.py              # Placeholder routes for future features
 │
 ├── templates/                # Jinja2 HTML templates (one per page)
 │   ├── base.html             # Master layout: sidebar + content block
 │   ├── conciliacao.html
 │   ├── config.html
 │   ├── impostos.html
-│   ├── painel.html
 │   ├── precos.html
 │   ├── settings.html
 │   ├── setup.html
-│   ├── validacao_rentabilidades.html
 │   └── stub.html             # Shared "em construção" placeholder
 │
 ├── static/
@@ -84,25 +80,44 @@ Controle de cargas/
 
 ```
 Browser request
-  └─► app.py before_request()
-        ├─ db not ready? → redirect /setup
-        └─ db ready? → route handler in pages/*.py
+  └─► app.py before_request()  (auth only)
+        └─► route handler in pages/*.py
               └─ render_template(template, **ctx)  or  jsonify(data)
 ```
 
+> **Sem dependência de Mongo (jun/2026).** Todas as rotas web leem da API
+> Beehus (via `beehus_catalog`). O antigo `before_request` que redirecionava
+> para `/setup` quando o Mongo não estava conectado **foi removido**, junto com
+> a própria tela `/setup`. O app sobe e serve tudo sem qualquer conexão Mongo.
+
 ### DB Proxy pattern
 
-`db.py` exposes a module-level `_DbProxy` singleton called `db`. On startup the proxy is uninitialised (`_ready()` returns `False`). Once the user registers a MongoDB URI via `/setup`, the proxy is initialised and all `db.collection_name` accesses route to the real PyMongo database.
+`db.py` exposes a module-level `_DbProxy` singleton called `db`. There is **no
+implicit connect-at-import** — the proxy stays uninitialised (`_ready()`
+returns `False`) until something calls `connect_for_cli()`. The web app never
+does, so the dashboard process never opens a Mongo socket (regardless of
+`SWAT_IDENTIFICAR` or a saved `user_connections.json`). A stray
+`db.collection_name` access while uninitialised raises `RuntimeError`, which
+`app.py` surfaces as the `db_unreachable.html` page (per-route, not a
+whole-app block).
+
+The only consumers that connect are **offline maintenance CLIs** — e.g.
+`transaction_type_classifier --rebuild` and `scripts/update_liquidation_dates`
+— which call `connect_for_cli()` once at startup.
 
 ```python
 # db.py
-db = _DbProxy()           # module-level singleton
+db = _DbProxy()           # module-level singleton, uninitialised
 
-# pages/setup.py
-db_module.db._init(client[DB_NAME])   # called after successful connection test
+# offline CLIs opt in explicitly; URI from arg → $SWAT_MONGO_URI →
+# user_connections.json[windows_user]:
+import db as _dbmod
+client = _dbmod.connect_for_cli()
+try:
+    rebuild_training_data(_dbmod.db)   # db.transactions.find(...)
+finally:
+    client.close()
 ```
-
-This allows the application to start and serve the setup page without a valid DB connection, and without restarting.
 
 ### Config vs Settings
 
@@ -123,25 +138,28 @@ pip install -r requirements.txt
 # 2. Start the app
 python app.py
 # → http://localhost:5000
-
-# 3. First visit → /setup page
-#    Enter your MongoDB connection string.
-#    It is saved to user_connections.json keyed by your Windows username.
-#    Subsequent visits auto-connect using the saved string.
+#    No setup screen: the dashboard runs entirely off the Beehus API.
 ```
 
 **Requirements:**
 - Python 3.9+
-- Access to the MongoDB Atlas cluster
-- Windows (Windows username is used to look up the saved connection string)
+- Beehus API access (Bearer token configured in-app)
+- Windows (Windows username is used to look up a saved Mongo connection,
+  only if you run the offline Mongo-backed CLIs)
 
 ---
 
 ## Database Setup
 
-The app connects to a MongoDB database named **`Beehus`**. No migrations exist — collections are used as-is. See [MongoDB Collections Reference](#mongodb-collections-reference) for expected schemas.
+The dashboard does **not** require MongoDB — every web route reads from the
+Beehus API. A Mongo connection is needed only by the offline Mongo-backed CLIs
+(e.g. `transaction_type_classifier --rebuild`, which refreshes ML training
+data from `db.transactions`). Those CLIs connect via `db.connect_for_cli()`,
+resolving the URI in this order:
 
-The connection string is stored **per Windows user** in `user_connections.json`:
+1. an explicit argument, then
+2. the `SWAT_MONGO_URI` environment variable, then
+3. the saved per-user entry in `user_connections.json`:
 
 ```json
 {
@@ -149,7 +167,10 @@ The connection string is stored **per Windows user** in `user_connections.json`:
 }
 ```
 
-A new developer must visit `/setup`, enter their own URI, and save it before using the app.
+Since the `/setup` UI was removed, `user_connections.json` is populated
+out-of-band (manual edit / provisioning) — or skip it entirely and just export
+`SWAT_MONGO_URI` before running a CLI. The web app never reads either for a
+connection.
 
 > **Security note:** `user_connections.json` contains MongoDB URIs with credentials in plain text. This file should **never** be committed to version control or shared outside the team. It is listed in `.gitignore`.
 
@@ -477,6 +498,9 @@ for doc in db.cashAccounts.find({"walletId": wid}, {"values": 1}):
 |---|---|---|
 | `EMAIL_FROM` | No | Sender address for report emails (default: `tecnologia@beehus.com.br`) |
 | `EMAIL_PASSWORD` | Yes (for email) | SMTP password for Office 365 account |
+| `SWAT_IDENTIFICAR` | No (default `1`/on) | Master switch for the **transaction/security identification** feature, which is the **only** part of the dashboard runtime that still reads MongoDB. Set `SWAT_IDENTIFICAR=0` to disable it on an instance: `db.IDENTIFICAR_ENABLED` becomes `False`, so (1) the Painel "Posições da carteira" tab + `/api/controlpanel/wallet-positions` are hidden/short-circuited; (2) `db.py` **skips the Mongo connection and `ensure_indexes`**; (3) `app.py` skips `db_profiler` and the `PyMongoError` handler; (4) **`pymongo` is never imported** (all its imports are lazy/gated). Net: that instance runs **fully Mongo-free**. The default-on identification instance and the offline CLIs (`*_classifier.py --rebuild`, `scripts/*`) are unaffected. R2/R3 of identification (`/identify`, `/execution-extras`) were migrated to the API and work regardless of the flag; only P1 (`wallet-positions`) is gated. `pymongo` stays **installed** (the identification instance + CLIs need it) — the flag only stops this instance from loading/using it. |
+| `DB_PROFILE_SLOW_REQUEST_MS` | No (default `500`) | `db_profiler` threshold (ms) below which a request logs nothing. Only relevant when `SWAT_IDENTIFICAR` is on (profiler is otherwise not installed). |
+| `DB_PROFILE_TOP_N_OPS` | No (default `3`) | How many slowest Mongo ops `db_profiler` lists per slow-request line. |
 
 Set these in a `.env` file or in your OS environment before starting the app. The email feature silently fails if `EMAIL_PASSWORD` is not set.
 
@@ -487,6 +511,5 @@ Set these in a `.env` file or in your OS environment before starting the app. Th
 | Document | What it covers |
 |---|---|
 | `CONCILIACAO_DIAGNOSTICO.md` | Full specification of the NAV conciliation diagnostic engine: all flags, their formulas, `signedImpact` semantics, and the scenario scoring algorithm. Read this before touching `pages/conciliacao.py`. |
-| `CONCILIACAO_SIMULATION.md` | Synthetic portfolio simulation scenarios for testing and validating the diagnostic engine. |
 | `FILE_GENERATION.md` | JSON templates for all upload files: transactions, wallets, positions, provisions, and security mappings. |
 | `BEEHUS_CONSOLE.md` | The Funções (`/beehus`) page: bearer-token handling, the catalog of filter and action routes, the per-functionality view list, the daily-routine sequential pipelines, and the session-state preservation pattern between `shell.html` and the iframe. Read this before touching `pages/beehus_console.py` or `templates/beehus_console.html`. |

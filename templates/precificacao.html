@@ -166,8 +166,6 @@
           <span class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Lotes de Compra</span>
           <button onclick="addTxnRow()"
             class="border rounded-lg px-2.5 py-1 text-[10px] text-orange-600 border-orange-300 hover:bg-orange-50">+ Linha</button>
-          <button onclick="openTxnModal()"
-            class="border rounded-lg px-2.5 py-1 text-[10px] text-gray-600 hover:bg-gray-50">Carregar do BD</button>
         </div>
         <div id="dp-txn-table-wrap">
           <p class="text-[10px] text-gray-300 italic">Adicione ao menos um lote.</p>
@@ -432,26 +430,6 @@
   </div>
 </div>
 
-<!-- ── Transactions Modal ─────────────────────────────────────────────────────── -->
-<div id="txn-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col" style="max-height:80vh">
-    <div class="flex items-center justify-between px-6 py-4 border-b shrink-0">
-      <div>
-        <h2 class="font-semibold text-gray-800 text-sm">Transações do Ativo</h2>
-        <p id="txn-modal-subtitle" class="text-[10px] text-gray-400 mt-0.5"></p>
-      </div>
-      <button onclick="closeTxnModal()" class="text-gray-400 hover:text-gray-600">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
-    </div>
-    <div class="overflow-y-auto flex-1 px-4 py-4">
-      <div id="txn-modal-body"><p class="text-xs text-gray-400 italic">Carregando...</p></div>
-    </div>
-  </div>
-</div>
-
 <!-- ── Save List Modal ─────────────────────────────────────────────────────── -->
 <div id="edit-pu-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-10 pb-10 px-4">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style="max-height:80vh">
@@ -608,14 +586,10 @@
       });
   }
 
+  // Fluxo data-driven: o usuário informa a data e clica Atualizar — nada é
+  // pré-puxado do servidor (a rota latest-position-date foi removida).
   function fetchLatestDate() {
-    const walletId = document.getElementById("wallet-select").value;
-    if (!walletId) { document.getElementById("position-date-input").value = ""; return; }
-    fetch(`/api/precificacao/latest-position-date?walletId=${encodeURIComponent(walletId)}`)
-      .then(r => r.json())
-      .then(({ date }) => {
-        document.getElementById("position-date-input").value = date || "";
-      });
+    document.getElementById("position-date-input").value = "";
   }
 
   // Listen for wallet dropdown change
@@ -811,95 +785,6 @@
             </tr>`).join("")}
         </tbody>
       </table>`;
-  }
-
-  // ── Transactions modal (load from DB) ────────────────────────────────────────
-  function openTxnModal() {
-    if (!_selectedSec) return;
-    const { id, walletId, positionDate, beehusName } = _selectedSec;
-    if (!walletId) { alert("Ativo sem carteira — não é possível carregar transações."); return; }
-
-    document.getElementById("txn-modal-subtitle").textContent =
-      `${beehusName || id}${positionDate ? ` · até ${positionDate}` : ""}`;
-    document.getElementById("txn-modal-body").innerHTML =
-      '<p class="text-xs text-gray-400 italic">Carregando...</p>';
-    document.getElementById("txn-modal").classList.remove("hidden");
-
-    const qs = `securityId=${encodeURIComponent(id)}&walletId=${encodeURIComponent(walletId)}&positionDate=${encodeURIComponent(positionDate)}`;
-    fetch(`/api/precificacao/security-transactions?${qs}`)
-      .then(r => r.json())
-      .then(data => renderTxnModal(data.transactions || []))
-      .catch(() => {
-        document.getElementById("txn-modal-body").innerHTML =
-          '<p class="text-xs text-red-400">Erro ao carregar transações.</p>';
-      });
-  }
-
-  function closeTxnModal() { document.getElementById("txn-modal").classList.add("hidden"); }
-
-  function renderTxnModal(txns) {
-    const body = document.getElementById("txn-modal-body");
-    if (!txns.length) {
-      body.innerHTML = '<p class="text-xs text-gray-400 italic">Nenhuma transação encontrada.</p>';
-      return;
-    }
-    body.innerHTML = `
-      <table class="w-full text-xs border-collapse">
-        <thead>
-          <tr class="text-[10px] uppercase text-gray-400 border-b">
-            <th class="py-2 pr-2 w-5 font-normal"></th>
-            <th class="text-left py-2 pr-3 font-normal">Data Liquidação</th>
-            <th class="text-left py-2 pr-3 font-normal">Tipo</th>
-            <th class="text-right py-2 pr-3 font-normal">Quantidade</th>
-            <th class="text-right py-2 pr-3 font-normal">Preço</th>
-            <th class="text-right py-2 pr-3 font-normal">Financeiro</th>
-            <th class="text-left py-2 font-normal">Descrição</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${txns.map((t, i) => `
-            <tr class="border-t border-gray-100 hover:bg-gray-50">
-              <td class="py-2 pr-2 text-center">
-                <input type="checkbox" data-idx="${i}" class="txn-check w-3.5 h-3.5 rounded border-gray-300 text-orange-500 cursor-pointer" checked />
-              </td>
-              <td class="py-2 pr-3 font-mono text-gray-600">${escHtml(t.liquidationDate)}</td>
-              <td class="py-2 pr-3 text-gray-500">${escHtml(t.beehusTransactionType)}</td>
-              <td class="py-2 pr-3 text-right font-mono text-gray-600">${fmtNum(t.quantity, 2)}</td>
-              <td class="py-2 pr-3 text-right font-mono text-gray-600">${t.price != null ? fmtNum(t.price, 8) : "—"}</td>
-              <td class="py-2 pr-3 text-right font-mono text-gray-600">${t.balance != null ? fmtNum(t.balance, 2) : "—"}</td>
-              <td class="py-2 text-gray-500 text-[10px] max-w-[200px] truncate" title="${escHtml(t.description)}">${escHtml(t.description || "—")}</td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
-      <div class="flex justify-end mt-3">
-        <button onclick="importSelectedTxns()" class="bg-orange-500 hover:bg-orange-600 text-white rounded-lg px-5 py-2 text-xs font-semibold">
-          Importar selecionados
-        </button>
-      </div>`;
-    // Store txns for import
-    body._txns = txns;
-  }
-
-  function importSelectedTxns() {
-    const body  = document.getElementById("txn-modal-body");
-    const txns  = body._txns || [];
-    const checks = body.querySelectorAll(".txn-check");
-    // Remove blank rows before importing
-    _txnRows = _txnRows.filter(r => r.date || r.quantity != null || r.yield != null);
-    let imported = 0;
-    checks.forEach(cb => {
-      if (!cb.checked) return;
-      const t = txns[Number(cb.dataset.idx)];
-      if (!t || !t.quantity) return;
-      _txnRows.push({
-        date:     t.liquidationDate || "",
-        quantity: t.quantity,
-        yield:    null,
-      });
-      imported++;
-    });
-    closeTxnModal();
-    if (imported) renderTxnTable();
   }
 
   // ── Add security to list ───────────────────────────────────────────────────
@@ -1620,7 +1505,6 @@
   window.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
     if (!document.getElementById("formulas-modal").classList.contains("hidden")) closeFormulasModal();
-    if (!document.getElementById("txn-modal").classList.contains("hidden")) closeTxnModal();
     if (!document.getElementById("config-modal").classList.contains("hidden")) closeConfigModal();
     if (!document.getElementById("wallet-sec-modal").classList.contains("hidden")) closeWalletSecModal();
     if (!document.getElementById("save-modal").classList.contains("hidden")) closeSaveModal();
@@ -1637,7 +1521,6 @@
     });
   }
   _guardedClose("formulas-modal",   closeFormulasModal);
-  _guardedClose("txn-modal",        closeTxnModal);
   _guardedClose("config-modal",     closeConfigModal);
   _guardedClose("wallet-sec-modal", closeWalletSecModal);
   _guardedClose("save-modal",       closeSaveModal);

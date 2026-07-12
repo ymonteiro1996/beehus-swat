@@ -3,28 +3,25 @@ import os
 import re
 import subprocess
 
-from flask import Flask, jsonify, redirect, request, render_template
-from pymongo.errors import PyMongoError
-from pages.painel         import bp as painel_bp
+from flask import Flask, jsonify, request, render_template
 from pages.config         import bp as config_bp
-from pages.nav            import bp as nav_bp
 from pages.conciliacao    import bp as conciliacao_bp
-from pages.setup          import bp as setup_bp
+# conciliacao_unprocessed agora puxa os helpers de pages.conciliacao_shared
+# (API-only, sem Mongo), então não depende mais da ordem de import.
+from pages.conciliacao_unprocessed import bp as conciliacao_unprocessed_bp
+from pages.conciliacao_mov import bp as conciliacao_mov_bp
 from pages.stubs          import bp as stubs_bp
-from pages.validacao_rentabilidades import bp as validacao_rentabilidades_bp
-from pages.posicoes      import bp as posicoes_bp
-from pages.caixa         import bp as caixa_bp
+# pages.correcoes: page removed from the sidebar, but the blueprint stays
+# registered — Conciliação calls its /api/correcoes/* routes and imports its
+# helper functions (load_corrections_for_wallet, etc.).
 from pages.correcoes     import bp as correcoes_bp
 from pages.beehus_console import bp as beehus_console_bp
 from pages.controlpanel   import bp as controlpanel_bp
-from pages.parceiro       import bp as parceiro_bp
 from pages.excecoes       import bp as excecoes_bp
 from pages.carteira       import bp as carteira_bp
 from pages.repetir_posicoes import bp as repetir_posicoes_bp
 from pages.precificacao   import bp as precificacao_bp
-from pages.fundos         import bp as fundos_bp
 import db as db_module
-import db_profiler
 import auth
 
 _log = logging.getLogger(__name__)
@@ -39,31 +36,27 @@ def _scrub(msg):
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
-db_profiler.install(app)
-# auth.install MUST run before any other before_request hook below: Flask
-# fires before_request handlers in registration order, and the auth gate
-# whitelists /setup, /api/setup, /static, /bootstrap, /healthz, /favicon.ico.
-# If a new blueprint registers its own before_request before this line, an
-# unauthenticated user hitting /setup gets a 401 instead of the setup page.
+# The Mongo query profiler only matters when this instance talks to Mongo; skip
+# the import (and its pymongo dependency) entirely when disabled.
+if db_module.IDENTIFICAR_ENABLED:
+    import db_profiler
+    db_profiler.install(app)
+# auth.install MUST run before any other before_request hook: Flask fires
+# before_request handlers in registration order, and the auth gate whitelists
+# /static, /bootstrap, /healthz, /favicon.ico for unauthenticated access.
 auth.install(app)
-app.register_blueprint(painel_bp)
 app.register_blueprint(config_bp)
-app.register_blueprint(nav_bp)
 app.register_blueprint(conciliacao_bp)
-app.register_blueprint(setup_bp)
+app.register_blueprint(conciliacao_unprocessed_bp)
+app.register_blueprint(conciliacao_mov_bp)
 app.register_blueprint(stubs_bp)
-app.register_blueprint(validacao_rentabilidades_bp)
-app.register_blueprint(posicoes_bp)
-app.register_blueprint(caixa_bp)
 app.register_blueprint(correcoes_bp)
 app.register_blueprint(beehus_console_bp)
 app.register_blueprint(controlpanel_bp)
-app.register_blueprint(parceiro_bp)
 app.register_blueprint(excecoes_bp)
 app.register_blueprint(carteira_bp)
 app.register_blueprint(repetir_posicoes_bp)
 app.register_blueprint(precificacao_bp)
-app.register_blueprint(fundos_bp)
 
 
 @app.route("/")
@@ -71,13 +64,19 @@ def index():
     return render_template("shell.html")
 
 
-@app.errorhandler(PyMongoError)
-def handle_mongo_error(err):
-    """Render a friendly page when MongoDB is unreachable instead of a 500 traceback.
-    The scrubbed error stays in the server log; the user-facing page does not
-    leak Atlas hosts or SRV record names."""
-    _log.exception("PyMongoError surfaced to user: %s", _scrub(err))
-    return render_template("db_unreachable.html"), 503
+# Only reachable when this instance uses Mongo; register the handler (and import
+# pymongo.errors) lazily so a Mongo-free instance never loads pymongo. The
+# RuntimeError handler below still covers the "db not initialized" case.
+if db_module.IDENTIFICAR_ENABLED:
+    from pymongo.errors import PyMongoError
+
+    @app.errorhandler(PyMongoError)
+    def handle_mongo_error(err):
+        """Friendly page when MongoDB is unreachable instead of a 500 traceback.
+        The scrubbed error stays in the server log; the user-facing page does not
+        leak Atlas hosts or SRV record names."""
+        _log.exception("PyMongoError surfaced to user: %s", _scrub(err))
+        return render_template("db_unreachable.html"), 503
 
 
 @app.errorhandler(RuntimeError)
@@ -92,20 +91,58 @@ def handle_runtime_error(err):
     return render_template("db_unreachable.html"), 500
 
 
-@app.before_request
-def require_registration():
-    """Redirect unregistered users to /setup before any other route is served."""
-    if db_module.db._ready():
-        return  # connected — proceed normally
-    # Allow setup routes, auth bootstrap, healthcheck, and static files to pass through
-    p = request.path
-    if (p.startswith("/setup") or p.startswith("/api/setup") or p.startswith("/static")
-            or p.startswith("/bootstrap") or p == "/healthz" or p == "/favicon.ico"):
-        return
-    return redirect("/setup")
-
-
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+@app.route("/api/cache/refresh", methods=["POST"])
+def api_cache_refresh():
+    """Invalida os caches em processo da camada API. Backing do modal "Atualizar"
+    do sidebar. Tudo é invalidação (instantâneo) — o re-warm é preguiçoso na
+    próxima leitura. As telas consolidadas (Painel/Conciliação/Console) leem NAV
+    AO VIVO via /results, então dependem apenas do cache de REFERÊNCIA.
+
+    `scope` (JSON body ou query param):
+      - "reference": só securities/mappings/companies/entities
+      - "nav":       invalida o cache navPackages de todas as empresas
+      - "company":   invalida referência + navPackages de UMA empresa (`companyId`)
+      - "all" (default): invalida referência + navPackages de TODAS as empresas"""
+    body = request.get_json(silent=True) or {}
+    scope = str(body.get("scope") or request.args.get("scope") or "all").lower()
+    company_id = (body.get("companyId") or request.args.get("companyId") or "").strip()
+    try:
+        import beehus_catalog
+        if scope == "reference":
+            beehus_catalog.invalidate()
+            return jsonify({"ok": True, "scope": scope})
+        if scope == "nav":
+            beehus_catalog.invalidate_nav()
+            return jsonify({"ok": True, "scope": scope})
+        if scope == "company" and company_id:
+            beehus_catalog.invalidate()
+            beehus_catalog.invalidate_nav(company_id)
+            return jsonify({"ok": True, "scope": scope, "companyId": company_id})
+        # all: limpa referência + nav de todas as empresas
+        scope = "all"
+        beehus_catalog.refresh()
+        return jsonify({"ok": True, "scope": scope})
+    except Exception as e:
+        return jsonify({"ok": False, "error": _scrub(e)}), 500
+
+
+@app.route("/api/cache/companies")
+def api_cache_companies():
+    """Lista de empresas (id+nome) para o seletor do modal "Atualizar". Usa
+    company_names (API com fallback Mongo)."""
+    try:
+        import beehus_catalog
+        names = beehus_catalog.company_names()
+        companies = sorted(
+            [{"id": cid, "name": nm or cid} for cid, nm in names.items()],
+            key=lambda c: c["name"].lower(),
+        )
+        return jsonify({"companies": companies})
+    except Exception as e:
+        return jsonify({"companies": [], "error": _scrub(e)}), 500
 
 
 @app.route("/api/update")

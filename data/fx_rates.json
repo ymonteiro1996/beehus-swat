@@ -1,0 +1,5 @@
+{
+  "_format": "currencyId -> { \"YYYY-MM-DD\": value }, onde value = 1 unidade da moeda em BRL. BRL e a ancora (=1, sem entrada propria). Chaves iniciadas com \"_\" sao ignoradas pelo loader. Exemplo: { \"USD\": { \"2026-06-21\": 5.43 } }. Preencha com as taxas reais por data; uma data ausente faz a conversao da Excecao reportar pendingFxRates (igual a uma taxa ausente no Mongo antes).",
+  "USD": {},
+  "EUR": {}
+}

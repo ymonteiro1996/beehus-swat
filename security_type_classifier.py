@@ -2,12 +2,14 @@
 Security-type classifier for unprocessed securities.
 
 Two responsibilities:
-  1. rebuild_mapping()  – query MongoDB and regenerate the labelled JSON
+  1. rebuild_mapping()  – regenerate the labelled JSON from the security-mappings
+     cache + securities catalog (API; no MongoDB)
   2. SecurityTypeClassifier – train a TF-IDF + Logistic Regression model from
      the labelled JSON and predict securityType for new unprocessedId strings.
 """
 import json, os, re, logging
 from bson import ObjectId
+import beehus_catalog
 
 log = logging.getLogger(__name__)
 
@@ -15,35 +17,31 @@ DATA_DIR  = os.path.join(os.path.dirname(__file__), "data")
 JSON_PATH = os.path.join(DATA_DIR, "unprocessed_security_types.json")
 
 
-# ── 1. Rebuild the labelled mapping from MongoDB ─────────────────────────────
+# ── 1. Rebuild the labelled mapping from the security-mappings catalog (API) ─
 
-def rebuild_mapping(db):
+def rebuild_mapping(db=None):
     """
-    Query MongoDB and write data/unprocessed_security_types.json.
+    Regenerate data/unprocessed_security_types.json from the security-mappings
+    cache (API-backed) + the securities catalog. **No longer reads MongoDB.**
 
-    Returns (total, mapped) counts.
+    The distinct unprocessedIds are exactly the mapping `from` values, served by
+    `MappingCache` (GET /beehus/financial/security-mappings), so the old
+    all-company `db.unprocessedSecurityPositions` scan is unnecessary. `db` is
+    accepted for backward compatibility but is no longer used.
+
+    Returns (total, mapped) counts — `total` = distinct mapped unprocessedIds
+    (the `from` values), `mapped` = how many resolve to a security with a known
+    securityType.
     """
-    # Distinct unprocessedId values
-    pipeline = [
-        {"$unwind": "$securities"},
-        {"$group": {"_id": "$securities.unprocessedId"}},
-    ]
-    unprocessed_ids = {
-        doc["_id"]
-        for doc in db.unprocessedSecurityPositions.aggregate(pipeline)
-    }
-    log.info("Distinct unprocessedId values: %d", len(unprocessed_ids))
+    # Distinct unprocessedId → securityId from the security-mappings catalog.
+    from security_matcher import get_mapping_cache
+    cache = get_mapping_cache()
+    cache.ensure_loaded()                  # today's file → API → persist
+    mapping = cache.as_dict()              # {unprocessedId: securityId}
+    unprocessed_ids = set(mapping.keys())
+    log.info("unprocessedId values (from security-mappings): %d", len(unprocessed_ids))
 
-    # unprocessedId → securityId via securityMappings
-    mapping = {}
-    for doc in db.securityMappings.find({}, {"mappings": 1}):
-        for m in doc.get("mappings", []):
-            frm = m.get("from")
-            sid = m.get("to")
-            if frm in unprocessed_ids and sid:
-                mapping[frm] = sid
-
-    # securityId → securityType via securities collection
+    # securityId → securityType via securities catalog
     oid_list = []
     for s in set(mapping.values()):
         try:
@@ -53,7 +51,7 @@ def rebuild_mapping(db):
 
     sec_type_map = {}
     if oid_list:
-        for doc in db.securities.find({"_id": {"$in": oid_list}}, {"securityType": 1}):
+        for doc in beehus_catalog.securities_by_ids(oid_list).values():
             sec_type_map[str(doc["_id"])] = doc.get("securityType", "")
 
     # Build rows – keep only mapped entries with a securityType
@@ -226,9 +224,8 @@ if __name__ == "__main__":
 
     if "--rebuild" in sys.argv:
         sys.path.insert(0, os.path.dirname(__file__))
-        from db import db as _db
-        total, mapped = rebuild_mapping(_db)
-        print(f"Rebuild done: {total} unprocessedIds, {mapped} mapped with type.")
+        total, mapped = rebuild_mapping()
+        print(f"Rebuild done: {total} mapped unprocessedIds, {mapped} with securityType.")
 
     if "--eval" in sys.argv:
         clf = SecurityTypeClassifier()

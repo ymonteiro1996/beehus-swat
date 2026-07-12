@@ -5,50 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Beehus{% endblock %}</title>
 
-  <!-- Restore dark mode before first paint to avoid flash -->
-  <script>if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark');</script>
-
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = { darkMode: 'class' }</script>
 
-  <!-- Dark mode overrides for page content (avoids touching every template) -->
   <style>
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinning { animation: spin 1s linear infinite; }
-    html.dark body                          { background-color: #111827; }
-    html.dark .bg-gray-100                  { background-color: #111827 !important; }
-    html.dark .bg-white                     { background-color: #1f2937 !important; }
-    html.dark .bg-gray-50                   { background-color: #1f2937 !important; }
-    html.dark .bg-amber-50                  { background-color: #292219 !important; }
-    html.dark .text-gray-700               { color: #d1d5db !important; }
-    html.dark .text-gray-600               { color: #d1d5db !important; }
-    html.dark .text-gray-500               { color: #9ca3af !important; }
-    html.dark .text-gray-400               { color: #6b7280 !important; }
-    html.dark .text-gray-300               { color: #4b5563 !important; }
-    html.dark .border                       { border-color: #374151 !important; }
-    html.dark .border-b                     { border-color: #374151 !important; }
-    html.dark .border-t                     { border-color: #374151 !important; }
-    html.dark .border-gray-200             { border-color: #374151 !important; }
-    html.dark .border-amber-200            { border-color: #4b3a1e !important; }
-    html.dark .divide-y > * + *            { border-color: #374151 !important; }
-    html.dark .shadow                       { box-shadow: 0 1px 3px 0 rgba(0,0,0,0.6), 0 1px 2px -1px rgba(0,0,0,0.6) !important; }
-    html.dark .hover\:bg-gray-50:hover     { background-color: #374151 !important; }
-    html.dark .hover\:bg-gray-100:hover    { background-color: #374151 !important; }
-    html.dark select,
-    html.dark input[type="text"],
-    html.dark input[type="date"],
-    html.dark input[type="number"],
-    html.dark input[type="search"],
-    html.dark input[type="email"],
-    html.dark textarea                      { background-color: #374151 !important; color: #d1d5db !important; border-color: #4b5563 !important; }
-    html.dark input[type="checkbox"]        { accent-color: #3b82f6; }
-    html.dark table thead                   { background-color: #1f2937 !important; }
-    html.dark table thead th               { color: #9ca3af !important; }
-    html.dark table tbody tr:hover         { background-color: #374151 !important; }
-    html.dark table td, html.dark table th  { border-color: #374151 !important; }
-    html.dark .rounded-xl                   { --tw-shadow: none; }
-    /* sticky header bars */
-    html.dark header.bg-white              { background-color: #1f2937 !important; border-bottom: 1px solid #374151; }
   </style>
 
   {% block head %}{% endblock %}
@@ -58,36 +19,16 @@
   {% set frame_mode = request.args.get('_frame') == '1' %}
 
   {% if not frame_mode %}
+  {% include 'partials/_token_banner.html' %}
+  {% endif %}
+
+  {% if not frame_mode %}
   <!-- Sidebar -->
   <aside class="w-56 min-h-screen bg-black flex flex-col shrink-0 fixed top-0 left-0 h-full z-20">
     <div class="px-5 py-6 border-b border-white/10">
       <img src="/static/logo.png" alt="Beehus" class="h-16 w-auto" />
     </div>
     <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-      <a href="/#painel" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'painel' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10-2a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z"/></svg>
-        Painel
-      </a>
-      <a href="/#conciliacao" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'conciliacao' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-        Conciliação
-      </a>
-      <a href="/#validacao_rentabilidades" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'validacao_rentabilidades' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-        Validação Rentab.
-      </a>
-      <a href="/#posicoes" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'posicoes' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
-        Validação Proc.
-      </a>
-      <a href="/#caixa" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'caixa' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        Validação Caixa
-      </a>
-      <a href="/#correcoes" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'correcoes' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-3-3v6m9-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        Correções
-      </a>
       <a href="/stripping" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'stripping' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121M9.121 9.121a3 3 0 10-4.242 4.242 3 3 0 004.242-4.242zM14.121 14.121a3 3 0 104.242 4.242 3 3 0 00-4.242-4.242z"/></svg>
         Stripping
@@ -102,25 +43,9 @@
         </svg>
         <span id="label-atualizar">Atualizar versão</span>
       </button>
-      <!-- Dark mode toggle -->
-      <button onclick="toggleDark()" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
-        <!-- Moon icon — shown in light mode -->
-        <svg id="icon-moon" class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/>
-        </svg>
-        <!-- Sun icon — shown in dark mode -->
-        <svg id="icon-sun" class="w-4 h-4 shrink-0 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m8.66-9H21M3 12H2m15.07-6.07l-.71.71M6.64 17.36l-.71.71m12.02 0l-.71-.71M6.64 6.64l-.71-.71M12 5a7 7 0 100 14A7 7 0 0012 5z"/>
-        </svg>
-        <span id="dark-label">Modo Escuro</span>
-      </button>
       <a href="/#settings" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'settings' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
         Configurações
-      </a>
-      <a href="/#setup" class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors {% if active == 'setup' %}bg-white/10 text-white font-medium{% else %}text-white/60 hover:text-white hover:bg-white/10{% endif %}">
-        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10M8 7v10M4 12h4M12 5v14M16 7v10M20 7v10M16 12h4"/></svg>
-        Conexão DB
       </a>
     </div>
   </aside>
@@ -162,21 +87,6 @@
           setTimeout(() => { label.textContent = 'Atualizar versão'; btn.disabled = false; }, 4000);
         });
     }
-
-    function toggleDark() {
-      const isDark = document.documentElement.classList.toggle('dark');
-      localStorage.setItem('theme', isDark ? 'dark' : 'light');
-      _updateToggleUI(isDark);
-    }
-
-    function _updateToggleUI(isDark) {
-      document.getElementById('icon-moon').classList.toggle('hidden', isDark);
-      document.getElementById('icon-sun').classList.toggle('hidden', !isDark);
-      document.getElementById('dark-label').textContent = isDark ? 'Modo Claro' : 'Modo Escuro';
-    }
-
-    // Sync toggle icons with current state on load
-    _updateToggleUI(document.documentElement.classList.contains('dark'));
   </script>
   {% endif %}
 

@@ -6,6 +6,7 @@ import re
 import openpyxl
 from bson import ObjectId
 from bson.errors import InvalidId
+import beehus_catalog
 from flask import Blueprint, Response, jsonify, render_template, request
 from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -117,87 +118,70 @@ def _extract_all_hp(doc):
     return []
 
 
-def _find_price(sec_id_str, query_extra, proj):
-    """Find one price doc trying ObjectId then string for securityId."""
-    try:
-        oid = ObjectId(sec_id_str)
-        doc = next(iter(db.securityPrices.find(
-            {"securityId": oid, **query_extra}, proj
-        ).sort("historyPrice.date", -1).limit(1)), None)
-        if doc:
-            return doc
-    except Exception:
-        pass
-    return next(iter(db.securityPrices.find(
-        {"securityId": sec_id_str, **query_extra}, proj
-    ).sort("historyPrice.date", -1).limit(1)), None)
+def _price_context(wallet_id):
+    """`(company_id, entity_id)` da carteira p/ resolver o ESCOPO do preço
+    (C3/C2/C1/B2). Sem carteira → (None, None) → resolve o B1 global. Lê o índice
+    de carteiras do seam (não toca Mongo)."""
+    if not wallet_id:
+        return None, None
+    wd = beehus_catalog.wallet_doc(str(wallet_id)) or {}
+    cid = beehus_catalog.id_str(wd.get("companyId")) or None
+    eid = beehus_catalog.id_str(wd.get("entityId")) or None
+    return cid, eid
 
 
-def _find_all_prices(sec_id_str, query_extra, proj, ascending=True):
-    """Find all price docs trying ObjectId then string for securityId."""
-    direction = 1 if ascending else -1
-    try:
-        oid  = ObjectId(sec_id_str)
-        docs = list(db.securityPrices.find(
-            {"securityId": oid, **query_extra}, proj
-        ).sort("historyPrice.date", direction))
-        if docs:
-            return docs
-    except Exception:
-        pass
-    return list(db.securityPrices.find(
-        {"securityId": sec_id_str, **query_extra}, proj
-    ).sort("historyPrice.date", direction))
+def _resolved_hp(sec_id_str, wallet_id=None):
+    """`historyPrice` (lista) do record de preço RESOLVIDO (C3→C2→C1→B2→B1) p/ o
+    ativo no contexto da carteira, via `beehus_catalog.security_prices_resolved`
+    (endpoint filtered-security-price; só `status=="approved"`/não-trashed).
+    `[]` se não houver preço que case o contexto. Substitui os reads diretos de
+    `db.securityPrices`."""
+    cid, eid = _price_context(wallet_id)
+    m = beehus_catalog.security_prices_resolved(
+        [sec_id_str], company_id=cid, entity_id=eid,
+        wallet_id=(str(wallet_id) if wallet_id else None))
+    return m.get(str(sec_id_str)) or []
 
 
-def _find_price_as_of(sec_id_str, ref_date):
-    """Latest `historyPrice` entry whose `date` is `<= ref_date` for this
-    security. Walks every `securityPrices` doc (since `historyPrice` may
-    be embedded as either a single dict or an array of entries — see
-    [[securityprices_schema]]) and returns the best `{date, value, ...}`
-    dict. When `ref_date` is falsy, falls back to the all-time-latest
-    behaviour of `_find_price + _extract_hp` so callers can opt-in.
-    Returns `{}` when no historical entry satisfies the cutoff."""
+def _find_price(sec_id_str, query_extra, proj, wallet_id=None):
+    """Pseudo-doc `{"historyPrice": [...]}` do record de preço resolvido p/ o
+    contexto da carteira (ou None). `query_extra`/`proj` mantidos por compat
+    (ignorados — a resolução de escopo do seam substitui o filtro Mongo)."""
+    hp = _resolved_hp(sec_id_str, wallet_id)
+    return {"historyPrice": hp} if hp else None
+
+
+def _find_all_prices(sec_id_str, query_extra, proj, ascending=True, wallet_id=None):
+    """Série do record resolvido como `[{"historyPrice": [...]}]` (lista de 1, p/
+    compat com `_extract_all_hp`). Aplica o filtro `historyPrice.date >= X` de
+    `query_extra` no cliente e ordena por data."""
+    hp = _resolved_hp(sec_id_str, wallet_id)
+    since = ((query_extra or {}).get("historyPrice.date") or {}).get("$gte")
+    if since:
+        s = str(since)[:10]
+        hp = [e for e in hp if str(e.get("date", ""))[:10] >= s]
+    hp = sorted(hp, key=lambda x: str(x.get("date", "")), reverse=not ascending)
+    return [{"historyPrice": hp}] if hp else []
+
+
+def _find_price_as_of(sec_id_str, ref_date, wallet_id=None):
+    """Entrada `historyPrice` mais recente com `date <= ref_date` do record
+    resolvido p/ o contexto da carteira (`historyPrice` pode ser dict único ou
+    array — ver [[securityprices_schema]]). `ref_date` falsy → última de todas.
+    `{}` quando nada satisfaz o corte."""
+    hp = _resolved_hp(sec_id_str, wallet_id)
     if not ref_date:
-        return _extract_hp(_find_price(sec_id_str, {}, {"historyPrice": 1}))
-    docs = _find_all_prices(sec_id_str, {}, {"historyPrice": 1}, ascending=False)
+        return _extract_hp({"historyPrice": hp})
     best = None
     best_dt = ""
-    for d in docs:
-        for hp in _extract_all_hp(d):
-            dt = str(hp.get("date") or "")[:10]
-            if not dt or dt > ref_date:
-                continue
-            if dt > best_dt:
-                best_dt = dt
-                best = hp
+    for e in hp:
+        dt = str(e.get("date") or "")[:10]
+        if not dt or dt > ref_date:
+            continue
+        if dt > best_dt:
+            best_dt = dt
+            best = e
     return best or {}
-
-
-def _get_most_recent_position(wallet_id, position_date=None):
-    """Get processedPosition for a wallet at a given date (or most recent).
-    Returns (pos_doc, position_date_str) or (None, None).
-    """
-    or_q = [{"walletId": wallet_id}]
-    try:
-        or_q.append({"walletId": ObjectId(wallet_id)})
-    except Exception:
-        pass
-
-    query = {"$or": or_q}
-    if position_date:
-        query["positionDate"] = position_date
-
-    pos_doc = next(iter(
-        db.processedPosition.find(
-            query,
-            {"securities": 1, "positionDate": 1}
-        ).sort("positionDate", -1).limit(1)
-    ), None)
-
-    if not pos_doc:
-        return None, None
-    return pos_doc, str(pos_doc.get("positionDate", ""))[:10]
 
 
 # ── Page ───────────────────────────────────────────────────────────────────────
@@ -214,8 +198,8 @@ def index():
 @bp.route("/api/precificacao/companies")
 def get_companies():
     companies = sorted(
-        [{"id": str(c["_id"]), "name": c.get("name", "")}
-         for c in db.companies.find({}, {"name": 1})],
+        [{"id": cid, "name": name}
+         for cid, name in beehus_catalog.company_names().items()],
         key=lambda c: c["name"],
     )
     cf = get_company_filter()
@@ -229,24 +213,13 @@ def get_wallets():
     company_id = request.args.get("companyId", "").strip()
     if not company_id:
         return jsonify([])
-    wallets = list(db.wallets.find(
-        {"companyId": company_id},
-        {"name": 1, "accountCode": 1}
-    ).sort("name", 1))
+    wallets = sorted(beehus_catalog.wallets_in_company(company_id),
+                     key=lambda w: (w.get("name") or ""))
     return jsonify([
-        {"id": str(w["_id"]), "name": w.get("name", ""), "accountCode": w.get("accountCode", "")}
+        {"id": beehus_catalog.id_str(w.get("_id")), "name": w.get("name", ""),
+         "accountCode": w.get("accountCode", "")}
         for w in wallets
     ])
-
-
-@bp.route("/api/precificacao/latest-position-date")
-def get_latest_position_date():
-    """Return the most recent positionDate for a wallet."""
-    wallet_id = request.args.get("walletId", "").strip()
-    if not wallet_id:
-        return jsonify({"date": None})
-    _, pos_date = _get_most_recent_position(wallet_id)
-    return jsonify({"date": pos_date})
 
 
 # ── API: Wallet Securities (from processedPosition) ──────────────────────────
@@ -258,9 +231,13 @@ def get_wallet_securities():
     if not wallet_id:
         return jsonify({"error": "walletId obrigatório"}), 400
 
-    pos_doc, position_date = _get_most_recent_position(wallet_id, pos_date_arg or None)
+    # Data-driven: a listagem é sempre da data informada pelo usuário
+    # (endpoint A, single-date). Sem data → nada a mostrar (sem fallback Mongo
+    # "posição mais recente").
+    pos_doc = beehus_catalog.processed_doc(wallet_id, pos_date_arg) if pos_date_arg else None
     if not pos_doc:
         return jsonify({"securities": [], "positionDate": None})
+    position_date = str(pos_doc.get("positionDate") or pos_date_arg)[:10]
 
     raw_secs = pos_doc.get("securities", [])
 
@@ -275,7 +252,7 @@ def get_wallet_securities():
                 pass
 
     sec_meta = {}
-    for sec in db.securities.find({"_id": {"$in": oid_ids}}, {"beehusName": 1, "mainId": 1}):
+    for sec in beehus_catalog.securities_by_ids(oid_ids).values():
         sec_meta[str(sec["_id"])] = {
             "beehusName": sec.get("beehusName", ""),
             "mainId":     sec.get("mainId", ""),
@@ -318,27 +295,25 @@ def get_security(sec_id):
     except Exception:
         return jsonify({"error": "ID inválido"}), 400
 
-    sec = db.securities.find_one({"_id": oid}, {
-        "beehusName": 1, "mainId": 1, "securityType": 1, "type": 1,
-        "currency": 1, "maturityDate": 1, "emissionDate": 1, "issuer": 1,
-        "indexer": 1, "indexerPercentual": 1, "yield": 1,
-    })
+    sec = beehus_catalog.security_doc(oid)
     if not sec:
         return jsonify({"error": "Ativo não encontrado"}), 404
 
-    # Last PU from securityPrices
-    last_price = _find_price(sec_id, {}, {"historyPrice": 1})
+    # Contexto da carteira (resolve o escopo do preço: C3 quando informada)
+    wallet_id    = request.args.get("walletId", "").strip()
+    pos_date_arg = request.args.get("positionDate", "").strip()
+
+    # Last PU from securityPrices (escopo da carteira quando houver)
+    last_price = _find_price(sec_id, {}, {"historyPrice": 1}, wallet_id=wallet_id or None)
     hp = _extract_hp(last_price)
 
     # Position data from processedPosition
-    wallet_id    = request.args.get("walletId", "").strip()
-    pos_date_arg = request.args.get("positionDate", "").strip()
     pos_pricing_type = ""
     pos_quantity     = None
     pos_pu           = None
 
-    if wallet_id:
-        pos_doc, _ = _get_most_recent_position(wallet_id, pos_date_arg or None)
+    if wallet_id and pos_date_arg:
+        pos_doc = beehus_catalog.processed_doc(wallet_id, pos_date_arg)
         if pos_doc:
             for ps in pos_doc.get("securities", []):
                 if str(ps.get("securityId", "")) == sec_id:
@@ -376,21 +351,8 @@ def search_securities():
     if len(q) < 2:
         return jsonify({"results": []})
 
-    escaped_q = re.escape(q)
-    or_clauses = [
-        {"beehusName": {"$regex": escaped_q, "$options": "i"}},
-        {"mainId":     {"$regex": escaped_q, "$options": "i"}},
-    ]
-    try:
-        or_clauses.append({"_id": ObjectId(q)})
-    except Exception:
-        pass
-
     results = []
-    for sec in db.securities.find({"$or": or_clauses}, {
-        "beehusName": 1, "mainId": 1, "securityType": 1,
-        "indexer": 1, "indexerPercentual": 1,
-    }).limit(20):
+    for sec in beehus_catalog.search(q):
         results.append({
             "id":               str(sec["_id"]),
             "beehusName":       sec.get("beehusName", ""),
@@ -403,66 +365,6 @@ def search_securities():
 
 
 # ── API: Transactions ─────────────────────────────────────────────────────────
-
-@bp.route("/api/precificacao/security-transactions")
-def get_security_transactions():
-    sec_id        = request.args.get("securityId", "").strip()
-    wallet_id     = request.args.get("walletId",   "").strip()
-    position_date = request.args.get("positionDate", "").strip()
-    if not sec_id or not wallet_id:
-        return jsonify({"transactions": []})
-
-    # Match securityId as both ObjectId and string
-    sid_q = [{"securityId": sec_id}]
-    try:
-        sid_q.append({"securityId": ObjectId(sec_id)})
-    except Exception:
-        pass
-
-    # Match walletId as both ObjectId and string
-    wid_q = [{"walletId": wallet_id}]
-    try:
-        wid_q.append({"walletId": ObjectId(wallet_id)})
-    except Exception:
-        pass
-
-    query = {
-        "$or": sid_q,
-        "$and": [{"$or": wid_q}],
-        "beehusTransactionType": {"$in": ["buySell", "securityTransfer"]},
-    }
-    if position_date:
-        query["liquidationDate"] = {"$lte": position_date}
-
-    txns = list(db.transactions.find(
-        query,
-        {"liquidationDate": 1, "beehusTransactionType": 1,
-         "quantity": 1, "price": 1, "balance": 1, "description": 1}
-    ).sort("liquidationDate", 1))
-
-    result = []
-    for txn in txns:
-        qty = txn.get("quantity")
-        if qty is None:
-            continue
-        try:
-            if float(qty) == 0:
-                continue
-        except (ValueError, TypeError):
-            continue
-        prc = txn.get("price")
-        q   = float(qty)
-        p   = float(prc) if prc is not None else None
-        result.append({
-            "liquidationDate":      str(txn.get("liquidationDate", "") or "")[:10],
-            "beehusTransactionType": txn.get("beehusTransactionType", ""),
-            "quantity":             q,
-            "price":                p,
-            "balance":              round(q * p, 2) if p is not None else None,
-            "description":          txn.get("description", ""),
-        })
-    return jsonify({"transactions": result})
-
 
 # ── API: Calculate ────────────────────────────────────────────────────────────
 
@@ -485,70 +387,56 @@ def calculate_curva(securities_list):
 _TXN_TYPES_COUPON_AMORT = ("coupon", "amortization")
 
 
-def _qty_before(wallet_id, sec_id, date_str):
-    """Quantity of `sec_id` in the most recent `processedPosition` for
-    `wallet_id` whose `positionDate` is strictly **before** `date_str`
-    (the "dia anterior" ao evento). Matches `walletId` as ObjectId and
-    string. Returns `None` when no prior position or no entry for the
-    security."""
-    if not wallet_id or not sec_id or not date_str:
-        return None
-    or_q = [{"walletId": wallet_id}]
-    try:
-        or_q.append({"walletId": ObjectId(wallet_id)})
-    except Exception:
-        pass
-    doc = next(iter(db.processedPosition.find(
-        {"$or": or_q, "positionDate": {"$lt": date_str}},
-        {"securities": 1, "positionDate": 1},
-    ).sort("positionDate", -1).limit(1)), None)
-    if not doc:
-        return None
-    sid = str(sec_id)
-    for ps in doc.get("securities", []):
-        if str(ps.get("securityId", "")) == sid:
-            q = ps.get("quantity")
-            try:
-                return float(q) if q is not None else None
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
-def _event_pu_impacts(sec_id, wallet_id):
+def _event_pu_impacts(sec_id, wallet_id, base_date):
     """Per-unit PU drops for coupon/amortization events on (wallet,
     security), keyed by `liquidationDate` (`YYYY-MM-DD`).
 
-        impacto = (Σ balance[coupon|amortization] + Σ balance[taxes]) / qtd_prev
+        impacto = (Σ balance[coupon|amortization] + Σ balance[taxes]) / qtd_base
 
     `taxes` (IR retido — `balance` já negativo) só entra quando há uma
     transação `taxes` com o **mesmo** `walletId`/`securityId`/`liquidationDate`
     de um cupom/amortização, baixando o degrau ao valor líquido (marcação
-    caixa-neutra). `qtd_prev` vem de `_qty_before` (posição do dia
-    anterior). Datas com `taxes` mas sem cupom/amort, ou com `qtd_prev`
-    nula/zero, são descartadas. Retorna `{}` quando não há `wallet_id`
-    (sem carteira não há como casar a transação)."""
-    if not wallet_id or not sec_id:
+    caixa-neutra). `qtd_base` é a quantidade do ativo na posição processada da
+    carteira na data-base da curva (`base_date`), obtida via endpoint A
+    (`beehus_catalog.processed_doc`). Os eventos da curva são projetados PARA
+    O FUTURO (após a base), e no futuro não há posição processada → a "posição
+    anterior ao evento" é sempre a posição-base. Datas com `taxes` mas sem
+    cupom/amort são descartadas. Retorna `{}` quando falta `wallet_id`/
+    `base_date` ou não há posição-base (sem fallback Mongo)."""
+    if not wallet_id or not sec_id or not base_date:
         return {}
 
-    sid_q = [{"securityId": sec_id}]
-    try:
-        sid_q.append({"securityId": ObjectId(sec_id)})
-    except Exception:
-        pass
-    wid_q = [{"walletId": wallet_id}]
-    try:
-        wid_q.append({"walletId": ObjectId(wallet_id)})
-    except Exception:
-        pass
+    # Quantidade da posição-base (endpoint A, DATA EXATA). Sem posição na
+    # data-base → sem degrau (sem fallback Mongo "posição anterior").
+    qty_base = None
+    pos = beehus_catalog.processed_doc(wallet_id, base_date)
+    if pos:
+        for ps in (pos.get("securities") or []):
+            if str(ps.get("securityId") or "") == str(sec_id):
+                try:
+                    qty_base = float(ps["quantity"]) if ps.get("quantity") is not None else None
+                except (TypeError, ValueError):
+                    qty_base = None
+                break
+    if not qty_base:
+        return {}
 
-    cursor = db.transactions.find(
-        {"$or": sid_q,
-         "$and": [{"$or": wid_q}],
-         "beehusTransactionType": {"$in": list(_TXN_TYPES_COUPON_AMORT) + ["taxes"]},
-         "trashed": {"$ne": True}},
-        {"liquidationDate": 1, "beehusTransactionType": 1, "balance": 1},
-    )
+    # Endpoint G: single wallet → company_id resolvido pelo helper. Sem
+    # filtro de data (range total). securityId, beehusTransactionType e o
+    # guard trashed!=True são reaplicados no cliente.
+    _allowed_types = set(_TXN_TYPES_COUPON_AMORT) | {"taxes"}
+    cursor = [
+        t for t in beehus_catalog.transactions_search(
+            None,
+            initial_date="2000-01-01",
+            final_date="2999-12-31",
+            wallet_ids=[wallet_id],
+            security_ids=[sec_id],
+        )
+        if str(t.get("securityId") or "") == sec_id
+        and t.get("beehusTransactionType") in _allowed_types
+        and not t.get("trashed")
+    ]
 
     by_date = {}  # date -> {"event": float, "taxes": float}
     for t in cursor:
@@ -569,10 +457,7 @@ def _event_pu_impacts(sec_id, wallet_id):
     for dt, slot in by_date.items():
         if slot["event"] == 0.0:
             continue  # taxes-only date — sem cupom/amort, não há degrau
-        qty_prev = _qty_before(wallet_id, sec_id, dt)
-        if not qty_prev:
-            continue  # sem posição anterior ou qtd 0 → pula (sem div/0)
-        impacts[dt] = (slot["event"] + slot["taxes"]) / qty_prev
+        impacts[dt] = (slot["event"] + slot["taxes"]) / qty_base
     return impacts
 
 
@@ -608,15 +493,19 @@ def calcular():
 
 def _calculate_curva_impl(securities_list):
     # Find each security's last available PU
+    # Chaveado por (securityId, walletId): com preço por carteira (C3), o mesmo
+    # ativo em carteiras diferentes tem PU-base diferente — não deduplicar só
+    # por securityId (senão o PU de uma carteira vazaria p/ a outra).
     sec_last = {}
     for s in securities_list:
         sec_id = s.get("id")
-        if not sec_id or sec_id in sec_last:
+        wid    = s.get("walletId", "")
+        if not sec_id or (sec_id, wid) in sec_last:
             continue
-        last_price = _find_price(sec_id, {}, {"historyPrice": 1})
+        last_price = _find_price(sec_id, {}, {"historyPrice": 1}, wallet_id=wid or None)
         last_hp    = _extract_hp(last_price)
         if last_hp.get("value"):
-            sec_last[sec_id] = (float(last_hp["value"]), str(last_hp.get("date", ""))[:10])
+            sec_last[(sec_id, wid)] = (float(last_hp["value"]), str(last_hp.get("date", ""))[:10])
 
     # Earliest start date to limit benchmark fetch
     all_start_dates = [v[1] for v in sec_last.values() if v[1]]
@@ -687,13 +576,13 @@ def _calculate_curva_impl(securities_list):
                 try:
                     current_pu, last_pu_date = float(pos_pu_raw), pos_date_raw
                 except (ValueError, TypeError):
-                    if sec_id not in sec_last:
+                    if (sec_id, wallet_id) not in sec_last:
                         results.append({"securityId": sec_id, "beehusName": sec_inp.get("beehusName", ""),
                                         "calcType": calc_type, "error": "Sem PU disponível"})
                         continue
-                    current_pu, last_pu_date = sec_last[sec_id]
-            elif sec_id in sec_last:
-                current_pu, last_pu_date = sec_last[sec_id]
+                    current_pu, last_pu_date = sec_last[(sec_id, wallet_id)]
+            elif (sec_id, wallet_id) in sec_last:
+                current_pu, last_pu_date = sec_last[(sec_id, wallet_id)]
             else:
                 results.append({"securityId": sec_id, "beehusName": sec_inp.get("beehusName", ""),
                                 "calcType": calc_type, "error": "Sem PU disponível"})
@@ -711,8 +600,10 @@ def _calculate_curva_impl(securities_list):
             idx_pct_f  = float(idx_pct) / 100.0
             factor_map = bm_factor_map.get(bm_id, {})
             emitted    = sorted(dt for dt in factor_map if dt > last_pu_date)
-            impacts    = _snap_impacts(_event_pu_impacts(sec_id, wallet_id),
-                                       emitted, last_pu_date)
+            impacts    = _snap_impacts(
+                _event_pu_impacts(sec_id, wallet_id,
+                                  str(sec_inp.get("positionDate") or "")[:10]),
+                emitted, last_pu_date)
             for dt in emitted:
                 factor = factor_map[dt]
                 new_pu = current_pu * (1 + factor * idx_pct_f)
@@ -786,7 +677,7 @@ def _calculate_curva_impl(securities_list):
                 except (ValueError, TypeError):
                     pass
             if not last_pu or not last_pu_date:
-                last_price_doc = _find_price(sec_id, {}, {"historyPrice": 1})
+                last_price_doc = _find_price(sec_id, {}, {"historyPrice": 1}, wallet_id=wallet_id or None)
                 last_hp = _extract_hp(last_price_doc)
                 last_pu = float(last_hp["value"]) if last_hp.get("value") else None
                 last_pu_date = str(last_hp.get("date", ""))[:10] if last_hp.get("date") else None
@@ -843,8 +734,10 @@ def _calculate_curva_impl(securities_list):
             # propague para os dias seguintes (e, na amortização, o acrual
             # passe a incidir sobre a base reduzida). Ver docs/PRECIFICACAO.md.
             emitted = [dt for dt in sorted_cal if date_to_idx[dt] > base_idx]
-            impacts = _snap_impacts(_event_pu_impacts(sec_id, wallet_id),
-                                    emitted, last_pu_date)
+            impacts = _snap_impacts(
+                _event_pu_impacts(sec_id, wallet_id,
+                                  str(sec_inp.get("positionDate") or "")[:10]),
+                emitted, last_pu_date)
             running_pu = last_pu
             for dt in sorted_cal:
                 dt_idx = date_to_idx[dt]
@@ -950,7 +843,7 @@ def get_config():
             oid = ObjectId(b["id"])
             row = _find_price(b["id"], {}, {"historyPrice": 1})
             entry["lastDate"] = str(_extract_hp(row).get("date", ""))[:10] if row else None
-            sec = db.securities.find_one({"_id": oid}, {"beehusName": 1, "mainId": 1})
+            sec = beehus_catalog.security_doc(oid)
             if sec:
                 entry["beehusName"] = sec.get("beehusName", "")
                 entry["mainId"]     = sec.get("mainId", "")
@@ -1231,15 +1124,9 @@ def upload_excel():
         if sec_id_str:
             oid = _to_oid_safe(sec_id_str)
             if oid is not None:
-                sec_doc = db.securities.find_one({"_id": oid}, {
-                    "beehusName": 1, "mainId": 1, "securityType": 1,
-                    "indexer": 1, "indexerPercentual": 1,
-                })
+                sec_doc = beehus_catalog.security_doc(oid)
         if not sec_doc and main_id:
-            sec_doc = db.securities.find_one({"mainId": str(main_id).strip()}, {
-                "beehusName": 1, "mainId": 1, "securityType": 1,
-                "indexer": 1, "indexerPercentual": 1,
-            })
+            sec_doc = beehus_catalog.security_by_main_id(main_id)
         if not sec_doc:
             errors.append(
                 f"Linha {row_idx}: ativo não encontrado "
@@ -1297,23 +1184,20 @@ def upload_excel():
                 except (TypeError, ValueError):
                     pass
 
-            # Quando o operador informou `referenceDate`, ela tem prioridade
-            # sobre o `positionDate` da planilha — a busca de posição usa ela
-            # exata (sem fallback para a mais recente do banco, que poderia
-            # carregar PU de outro dia). Em modo legado (sem ref_date), mantém
-            # o comportamento antigo de "mais recente" via _get_most_recent_position.
+            # A busca de posição é sempre por DATA EXATA (endpoint A via
+            # processed_doc): `referenceDate` do operador tem prioridade, senão
+            # o `positionDate` da planilha. Sem nenhuma data → sem lookup (não
+            # há fallback "mais recente", que poderia carregar PU de outro dia).
             pos_lookup_date = ref_date or entry["positionDate"] or None
             need_pos_lookup = (
                 wallet_id
                 and (entry["posPU"] is None or not entry["positionDate"])
             )
-            if need_pos_lookup:
-                pos_doc, posdate = _get_most_recent_position(
-                    wallet_id, pos_lookup_date,
-                )
+            if need_pos_lookup and pos_lookup_date:
+                pos_doc = beehus_catalog.processed_doc(wallet_id, pos_lookup_date)
                 if pos_doc:
                     if not entry["positionDate"]:
-                        entry["positionDate"] = posdate
+                        entry["positionDate"] = str(pos_doc.get("positionDate") or pos_lookup_date)[:10]
                     for ps in pos_doc.get("securities", []):
                         if str(ps.get("securityId", "")) != sec_id:
                             continue
@@ -1328,7 +1212,7 @@ def upload_excel():
 
             # Price lookup: "as of `ref_date`" when informado, senão all-time
             # most recent (legacy). `_find_price_as_of` cobre ambos os modos.
-            hp = _find_price_as_of(sec_id, ref_date)
+            hp = _find_price_as_of(sec_id, ref_date, wallet_id=wallet_id or None)
             if hp.get("value") is not None:
                 try:
                     entry["lastPU"] = float(hp["value"])
@@ -1448,10 +1332,10 @@ def refresh_list():
         entry["lastPU"]       = None
         entry["lastPUDate"]   = None
 
-        if wallet_id:
-            pos_doc, posdate = _get_most_recent_position(wallet_id, ref_date)
+        if wallet_id and ref_date:
+            pos_doc = beehus_catalog.processed_doc(wallet_id, ref_date)
             if pos_doc:
-                entry["positionDate"] = posdate
+                entry["positionDate"] = str(pos_doc.get("positionDate") or ref_date)[:10]
                 for ps in pos_doc.get("securities", []):
                     if str(ps.get("securityId", "")) != sec_id:
                         continue
@@ -1463,7 +1347,7 @@ def refresh_list():
                     entry["pricingType"] = ps.get("pricingType", "")
                     break
 
-        hp = _find_price_as_of(sec_id, ref_date)
+        hp = _find_price_as_of(sec_id, ref_date, wallet_id=wallet_id or None)
         if hp.get("value") is not None:
             try:
                 entry["lastPU"] = float(hp["value"])

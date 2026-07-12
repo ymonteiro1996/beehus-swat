@@ -1,6 +1,8 @@
 # Correções — arquivo temporário único para geração de arquivos
 
-> A página **Correções** (`/correcoes`) é, a partir desta refatoração, o **único lugar do projeto** que gera arquivos JSON ou Excel exportáveis. Todas as demais páginas (Painel, Conciliação, etc.) deixam de gerar arquivos diretamente e passam a **adicionar linhas** neste armazenamento temporário, que o usuário revisa, edita e exporta aqui.
+> **Nota (navegação):** a entrada **Correções** foi removida da barra lateral. O blueprint continua registrado — a rota `/correcoes` e os endpoints `/api/correcoes/*` seguem ativos porque a Conciliação depende deles (envio em lote, `anomaly-keys`, helpers como `load_corrections_for_wallet`). A página ainda é acessível diretamente pela URL `/correcoes`.
+
+> A página **Correções** (`/correcoes`) é o **único lugar do projeto** que gera arquivos JSON ou Excel exportáveis. As demais páginas (Conciliação, etc.) não geram arquivos diretamente e passam a **adicionar linhas** neste armazenamento temporário, que o usuário revisa, edita e exporta aqui.
 
 ---
 

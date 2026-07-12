@@ -1,0 +1,59 @@
+<!-- Global Beehus-token banner ──────────────────────────────────────────────
+     The dashboard reads everything from the Beehus API with no Mongo fallback,
+     so an expired/absent in-process token makes pages fail SILENTLY (empty
+     lists, no error). This banner polls the in-process token state and prompts
+     a re-paste. Included by shell.html (top-level host) and by base.html when
+     NOT framed (direct page loads) — never inside an iframe, to avoid dupes. -->
+<div id="beehus-token-banner"
+     class="hidden fixed top-0 left-0 right-0 z-[60] bg-red-600 text-white text-sm px-4 py-2
+            flex items-center justify-center gap-3 shadow-lg">
+  <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+  </svg>
+  <span id="beehus-token-banner-msg">Token Beehus expirado — cole o token de hoje para carregar os dados.</span>
+  <!-- O token é gerenciado pelo modal do shell. Dentro do shell, abre o modal
+       direto; num carregamento de página solto (fora do shell), navega para
+       /#token e o shell abre o modal ao carregar. -->
+  <a href="/#token" onclick="if(window.Token){Token.open();return false;}"
+     class="underline font-semibold whitespace-nowrap hover:text-white/80">Colar token →</a>
+</div>
+<script>
+(function () {
+  var banner = document.getElementById('beehus-token-banner');
+  var msgEl  = document.getElementById('beehus-token-banner-msg');
+  if (!banner || !msgEl) return;
+
+  function show(msg) { msgEl.textContent = msg; banner.classList.remove('hidden'); }
+  function hide() { banner.classList.add('hidden'); }
+
+  function check() {
+    fetch('/api/beehus/token', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        // null → app-login/network issue (not a Beehus-token problem): leave alone.
+        if (!s) return;
+        if (!s.loaded) {
+          show('Token Beehus ausente — cole o token de hoje para carregar os dados.');
+        } else if (s.rejected) {
+          show('Token Beehus inválido — a API rejeitou (401). Cole o token de hoje novamente.');
+        } else if (s.expired) {
+          show('Token Beehus expirado — cole o token de hoje para recarregar os dados.');
+        } else {
+          hide();
+        }
+      })
+      .catch(function () { /* network blip: keep last state */ });
+  }
+
+  // Exposed so the token modal (shell.html) can refresh the banner immediately
+  // after a save/clear, instead of waiting for the 60s poll below.
+  window.refreshBeehusTokenBanner = check;
+
+  check();
+  setInterval(check, 60000);  // catch mid-session expiry within a minute
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) check();  // re-check when the tab regains focus
+  });
+})();
+</script>

@@ -42,10 +42,10 @@ if (typeof Funcoes === 'undefined') {
     // toolbar; survives loadList() because IDs that no longer appear in
     // the refreshed list are pruned on render.
     _selectedIds: new Set(),
-    // Per-row "Data Base" overrides keyed by exception id. Seeded on
-    // render from `e.latestProcessedDate` (max positionDate in
-    // processedPosition for the source wallet); operator edits live here
-    // until the row disappears.
+    // Per-row "Data Base" values keyed by exception id. Each row's date
+    // defaults to today on first render; operator edits live here until the
+    // row disappears. (Previously seeded from the source wallet's latest
+    // processedPosition — that Mongo read was removed.)
     _rowDates: {},
     // Toolbar filter state — drives both the visible rows and the bulk
     // selection (rows hidden by the filter are dropped from
@@ -90,14 +90,6 @@ if (typeof Funcoes === 'undefined') {
       classVariables: [],         // [{variable1, count, totalBalance}] from /class-strip/variables
       classGroupings: [],         // [{id, name, walletIds: [...]}] from /api/beehus/filters/groupings
       classGroupingIds: new Set(),// selected groupings → narrows the wallet "Disponíveis" pane
-      // managed_portfolio-only:
-      managedDate: "",             // YYYY-MM-DD picked in setup step 4
-      managedPairs: [],            // [{walletId, securityId, walletName, beehusName}] confirmed by the picker
-      managedAvailable: [],        // [{walletId, walletName, securityId, beehusName, variable1, quantity, pu, balance}] from /managed-portfolio/positions
-      managedPickerSearch: "",     // free-text filter in the picker modal
-      managedPickerWalletFilter: "",
-      managedBenchmarkId: "",      // securities._id (string) — optional benchmark
-      managedBenchmarks: [],       // [{id, name}] cached for the dropdown
     },
     // Single-row apply state — set by openApplyModal, cleared on
     // closeApplyInline. `plan` is populated by _runApplyPreview and
@@ -297,8 +289,8 @@ if (typeof Funcoes === 'undefined') {
       this.closeBulkConfirm();
       this.closeApplyModal();
       this._selectedIds = new Set();
-      // Wipe row-level Data Base overrides so the reseed picks up the
-      // latest processedPosition again on the next render.
+      // Wipe row-level Data Base values so each row falls back to today
+      // again on the next render.
       this._rowDates = {};
       // Clear the toolbar filters too — Reiniciar means "fresh start",
       // including any company or date narrowing the operator had
@@ -318,10 +310,10 @@ if (typeof Funcoes === 'undefined') {
     renderList() {
       const tbody = document.getElementById("sp-tbody");
       const msg   = document.getElementById("sp-msg");
-      // Prune selections + row-date overrides for exceptions that
+      // Prune selections + row-date values for exceptions that
       // disappeared since the last render (deleted, or visibility
-      // narrowed). Keeps the bulk count honest and prevents stale
-      // overrides from masking refreshed `latestProcessedDate` values.
+      // narrowed). Keeps the bulk count honest and drops stale row
+      // dates for rows that no longer exist.
       const liveIds = new Set(this._exceptions.map(e => e.id));
       for (const id of [...this._selectedIds]) {
         if (!liveIds.has(id)) this._selectedIds.delete(id);
@@ -366,24 +358,14 @@ if (typeof Funcoes === 'undefined') {
           ? `${this._esc(e.lastApplied.date || "")} <span class="text-[10px] text-gray-400">(${this._esc((e.lastApplied.at || "").slice(0,10))})</span>`
           : '<span class="text-gray-300">--</span>';
         const checked = this._selectedIds.has(e.id) ? "checked" : "";
-        // Data Base — persists any operator edit across renders via
-        // `_rowDates[id]`; falls back to the latest processedPosition
-        // date returned by the backend, then to today.
-        const baseDate = (this._rowDates && this._rowDates[e.id])
-          || e.latestProcessedDate
-          || this._todayISO();
-        if (this._rowDates) this._rowDates[e.id] = baseDate;
-        const baseTitle = e.latestProcessedDate
-          ? `Última processedPosition: ${e.latestProcessedDate}`
-          : "Nenhuma processedPosition encontrada para a carteira de origem.";
+        // Data Base column removed — the date is chosen at apply time
+        // (single: Aplicar panel; bulk: single picker in the confirm modal).
         // Kind-aware columns:
         //   wallet_slice       → single target + percent
         //   class_strip        → first source + "+N" / first target + "+N" / route count
-        //   managed_portfolio  → first source + "+N" / positionDate / pair count
         //   position_strip (default) → output list + ruleCount
         const isSlice   = e.kind === "wallet_slice";
         const isClass   = e.kind === "class_strip";
-        const isManaged = e.kind === "managed_portfolio";
         let kindPill, sourceCell, outsCell, ruleCell;
         if (isClass) {
           kindPill = '<span class="sp-pill sp-pill-warn">Classe</span>';
@@ -396,23 +378,6 @@ if (typeof Funcoes === 'undefined') {
           sourceCell = `${this._esc(srcFirst)}${srcMore}`;
           outsCell   = `${this._esc(tgtFirst)}${tgtMore}`;
           ruleCell   = String((e.classRoutes || []).length);
-        } else if (isManaged) {
-          kindPill = '<span class="sp-pill sp-pill-info">Carteira gerencial</span>';
-          const srcs  = e.sourceWalletNames || [];
-          const srcFirst = srcs[0] || "";
-          const srcMore = srcs.length > 1 ? ` <span class="text-[10px] text-gray-400">+${srcs.length - 1}</span>` : "";
-          sourceCell = `${this._esc(srcFirst)}${srcMore}`;
-          // "Saídas / Destino" doesn't apply — repurpose the column to
-          // show the configured Data base of the analysis (the operator
-          // re-picks dates at Apply time, but this is the snapshot the
-          // selected pairs reference).
-          outsCell   = e.positionDate
-            ? `<span class="text-[11px] text-gray-500">Base: ${this._esc(e.positionDate)}</span>`
-            : '<span class="text-gray-300">—</span>';
-          // "Regras / %" repurposed as the count of selected (wallet,
-          // security) pairs — the closest analogue to "how many rows
-          // the apply will touch".
-          ruleCell   = String(e.selectedCount || 0);
         } else {
           kindPill = isSlice
             ? '<span class="sp-pill sp-pill-info">Fatiar carteira</span>'
@@ -438,13 +403,6 @@ if (typeof Funcoes === 'undefined') {
           <td class="px-3 py-2 text-gray-700">${sourceCell}</td>
           <td class="px-3 py-2 text-gray-700">${outsCell}</td>
           <td class="px-3 py-2 text-right">${ruleCell}</td>
-          <td class="px-3 py-2">
-            <input type="date" value="${this._esc(baseDate)}"
-              data-sp-id="${this._esc(e.id)}"
-              onchange="Strip.onRowDateChange(this)"
-              title="${this._esc(baseTitle)}"
-              class="border rounded px-2 py-1 text-[11px] bg-white text-gray-700 w-[140px]" />
-          </td>
           <td class="px-3 py-2 text-gray-700">${last}</td>
           <td class="px-3 py-2 text-center">
             <button onclick="Strip.openApplyModal('${this._esc(e.id)}', '${this._esc(e.companyId)}')"
@@ -463,8 +421,8 @@ if (typeof Funcoes === 'undefined') {
 
     // Operator edit on the per-row Data Base input — store it so that
     // re-renders (toggleAll, refreshes after apply) don't wipe the value,
-    // and so bulk/single apply read the live edit instead of the stale
-    // `latestProcessedDate`. Refreshes the toolbar date filter panel so
+    // and so bulk/single apply read the live edit instead of the default.
+    // Refreshes the toolbar date filter panel so
     // newly-introduced dates show up as options and stale ones fall off
     // (and any active date-filter selection that no longer matches any
     // row gets pruned in _refreshDateFilterPanel).
@@ -547,9 +505,9 @@ if (typeof Funcoes === 'undefined') {
     // bulk-apply count consult it so visibility and action stay aligned.
     // Combines the company filter AND the date filter. A row's "date"
     // for filtering purposes is its rendered Data Base value
-    // (`_rowDates[id] || latestProcessedDate`) — the same value the
-    // operator sees in the table. The date filter is pure (read-only):
-    // it hides rows, it never mutates `_rowDates`.
+    // (`_rowDates[id]`) — the same value the operator sees in the table.
+    // The date filter is pure (read-only): it hides rows, it never
+    // mutates `_rowDates`.
     _visibleExceptions() {
       const compSet = this._filter && this._filter.companyIds;
       const dateSet = this._filter && this._filter.dates;
@@ -557,9 +515,7 @@ if (typeof Funcoes === 'undefined') {
       if (compSet) rows = rows.filter(e => compSet.has(e.companyId));
       if (dateSet && dateSet.size) {
         rows = rows.filter(e => {
-          const d = (this._rowDates && this._rowDates[e.id])
-            || e.latestProcessedDate
-            || "";
+          const d = (this._rowDates && this._rowDates[e.id]) || "";
           return d && dateSet.has(d);
         });
       }
@@ -691,9 +647,7 @@ if (typeof Funcoes === 'undefined') {
 
       const dates = new Set();
       for (const e of sourceRows) {
-        const d = (this._rowDates && this._rowDates[e.id])
-          || e.latestProcessedDate
-          || "";
+        const d = (this._rowDates && this._rowDates[e.id]) || "";
         if (d) dates.add(d);
       }
       const sorted = [...dates].sort().reverse();
@@ -757,9 +711,7 @@ if (typeof Funcoes === 'undefined') {
           : this._exceptions;
         const all = new Set();
         for (const e of sourceRows) {
-          const d = (this._rowDates && this._rowDates[e.id])
-            || e.latestProcessedDate
-            || "";
+          const d = (this._rowDates && this._rowDates[e.id]) || "";
           if (d) all.add(d);
         }
         this._filter.dates = all.size ? all : null;
@@ -786,13 +738,6 @@ if (typeof Funcoes === 'undefined') {
     // from the panel header.
     openApplyModal(id, companyId) {
       const exc = (this._exceptions || []).find(e => e.id === id);
-      // managed_portfolio is read-only — instead of the inline preview/
-      // upload panel, it opens a small date-range prompt and pipes the
-      // response straight into the A4 report modal.
-      if (exc && exc.kind === "managed_portfolio") {
-        this.openManagedDateRange(id, companyId, exc);
-        return;
-      }
       // strip / slice / class — let the operator pick a single date (which
       // keeps the rich inline preview below) or a range / explicit list of
       // dates (sequential apply, no per-date preview). The date picker
@@ -871,7 +816,6 @@ if (typeof Funcoes === 'undefined') {
     openApplyDates(id, companyId, exc) {
       exc = exc || (this._exceptions || []).find(e => e.id === id);
       const base = (this._rowDates && this._rowDates[id])
-        || (exc && exc.latestProcessedDate)
         || this._todayISO();
       this._applyDates = {
         exceptionId: id, companyId,
@@ -1929,12 +1873,7 @@ if (typeof Funcoes === 'undefined') {
     runApply() {
       if (!this._apply || !this._apply.plan) return;
       const kind = (this._apply.plan && this._apply.plan.kind) || "";
-      // managed_portfolio is read-only — no upstream writes happen, so
-      // the confirmation prompt would be misleading. Skip it and open
-      // the printable A4 modal as soon as the apply payload returns.
-      if (kind !== "managed_portfolio") {
-        if (!confirm("Confirmar envio para a API Beehus?")) return;
-      }
+      if (!confirm("Confirmar envio para a API Beehus?")) return;
 
       const {exceptionId, companyId, date} = this._apply;
       const list = document.getElementById("sp-apply-results-list");
@@ -1963,17 +1902,7 @@ if (typeof Funcoes === 'undefined') {
             document.getElementById("sp-apply-run-btn").disabled = false;
             return;
           }
-          if (kind === "managed_portfolio") {
-            // The API returns the same shape as preview. Open the
-            // printable modal and surface a one-liner inline so the
-            // operator can tell the apply ran.
-            if (ok && !d.error) {
-              this.openManagedReport(d);
-              list.innerHTML = `<p class="sp-pill sp-pill-success">Análise gerada (${(d.matched || []).length} ativo(s))</p>`;
-            } else {
-              list.innerHTML = `<p class="sp-pill sp-pill-error">${this._esc(d.error || "falha")}</p>`;
-            }
-          } else if (kind === "wallet_slice") {
+          if (kind === "wallet_slice") {
             this._renderSliceResults(d);
           } else if (kind === "class_strip") {
             this._renderClassResults(d);
@@ -2156,13 +2085,6 @@ if (typeof Funcoes === 'undefined') {
         classVariables: [],
         classGroupings: [],
         classGroupingIds: new Set(),
-        managedDate: "",
-        managedPairs: [],
-        managedAvailable: [],
-        managedPickerSearch: "",
-        managedPickerWalletFilter: "",
-        managedBenchmarkId: "",
-        managedBenchmarks: [],
       };
       // Curva checkbox starts unchecked on a fresh open (and on editException
       // the state is hydrated below from `e.useCurvaPrice`).
@@ -2252,36 +2174,16 @@ if (typeof Funcoes === 'undefined') {
     _applySetupKindVisibility() {
       const isSlice   = this._setup.kind === "wallet_slice";
       const isClass   = this._setup.kind === "class_strip";
-      const isManaged = this._setup.kind === "managed_portfolio";
-      // managed_portfolio reuses the class_strip groupings + wallets
-      // pickers (steps 2/3), so we keep the `sp-setup-class-only` block
-      // visible for it as well. The class-specific step 4 (`variable1`
-      // routes) stays hidden behind a separate inner toggle below.
-      const classPanesVisible = isClass || isManaged;
+      const classPanesVisible = isClass;
       document.getElementById("sp-setup-strip-only").classList.toggle("hidden", isSlice || classPanesVisible);
       document.getElementById("sp-setup-slice-only").classList.toggle("hidden", !isSlice);
       const sharedSrc = document.getElementById("sp-setup-shared-source");
       if (sharedSrc) sharedSrc.classList.toggle("hidden", classPanesVisible);
       const classOnly = document.getElementById("sp-setup-class-only");
       if (classOnly) classOnly.classList.toggle("hidden", !classPanesVisible);
-      // The "variable1 → carteira destino" step belongs to class_strip
-      // only; the managed_portfolio kind shares the pickers above but
-      // adds its own step 4 (date + open-wallets).
-      const routesBlock = document.querySelector("#sp-setup-class-routes-tbody")?.closest(".sp-step-num")?.parentElement?.parentElement
-        || document.getElementById("sp-setup-class-routes-tbody")?.closest("div");
-      // Walk up to the section wrapping the routes table + its header
-      // (the immediate `div` that contains both the step-num title and
-      // the routes table). Hidden cleanly for managed_portfolio.
-      const routesSection = document.getElementById("sp-setup-class-routes-tbody")
-        ? document.getElementById("sp-setup-class-routes-tbody").closest("div.border")?.parentElement
-        : null;
-      if (routesSection) routesSection.classList.toggle("hidden", isManaged);
-      const managedOnly = document.getElementById("sp-setup-managed-only");
-      if (managedOnly) managedOnly.classList.toggle("hidden", !isManaged);
 
       document.getElementById("sp-setup-title").textContent =
-        isManaged ? "Nova Exceção — Carteira gerencial"
-        : isClass ? "Nova Exceção — Stripping por classe"
+        isClass ? "Nova Exceção — Stripping por classe"
         : isSlice ? "Nova Exceção — Fatiar carteira"
         : "Nova Exceção — Position Stripping";
       // Lock the kind radios when editing — switching kind on an existing
@@ -2295,7 +2197,6 @@ if (typeof Funcoes === 'undefined') {
       // it isn't empty for the operator (uses the already-loaded company
       // wallets if companyId was picked before the kind change).
       if (classPanesVisible) this._renderClassPicker();
-      if (isManaged) this._renderManagedPairs();
     },
 
     onSetupTargetChange() {
@@ -2355,25 +2256,20 @@ if (typeof Funcoes === 'undefined') {
       if (cDatalist) cDatalist.innerHTML = "";
 
       if (!cid) return;
-      // Fetch wallets + groupings + benchmarks in parallel.  benchmarks
-      // is managed_portfolio-only but fetching here keeps the wiring
-      // simple: dropdowns are pre-populated even before the operator
-      // flips the kind radio.
+      // Fetch wallets + groupings in parallel.
       Promise.all([
         fetch(`/api/excecoes/wallets?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
         fetch(`/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
-        fetch(`/api/excecoes/managed-portfolio/benchmarks?companyId=${encodeURIComponent(cid)}`).then(r => r.json()).catch(() => ({benchmarks: []})),
         // Lista cross-company para os pickers de outputs/target. Sem
         // `companyId` na query — backend devolve wallets de todas as
         // empresas visíveis (`company_filter`).
         fetch(`/api/excecoes/wallets?crossCompany=1`).then(r => r.json()).catch(() => ({wallets: []})),
       ])
-        .then(([walletsRes, groupingsRes, benchmarksRes, crossRes]) => {
+        .then(([walletsRes, groupingsRes, crossRes]) => {
           const wallets = (walletsRes && walletsRes.wallets) || [];
           this._setup.walletsForCompany = wallets;
           this._setup.walletsCrossCompany = (crossRes && crossRes.wallets) || [];
           this._setup.classGroupings = Array.isArray(groupingsRes) ? groupingsRes : (groupingsRes.body || []);
-          this._setup.managedBenchmarks = (benchmarksRes && benchmarksRes.benchmarks) || [];
           const sel = document.getElementById("sp-setup-source");
           sel.innerHTML = '<option value="">Selecione...</option>'
             + this._setup.walletsForCompany.map(w =>
@@ -2381,33 +2277,15 @@ if (typeof Funcoes === 'undefined') {
           sel.disabled = false;
           // Re-render the class picker now that the company's wallets and
           // groupings are available (the operator may already have switched
-          // to class_strip — or to managed_portfolio, which reuses the
-          // same groupings + wallets dual-pane).
-          if (this._setup.kind === "class_strip"
-              || this._setup.kind === "managed_portfolio") {
+          // to class_strip, which reuses the same groupings + wallets
+          // dual-pane).
+          if (this._setup.kind === "class_strip") {
             this._renderClassPicker();
           }
-          // Always refresh the benchmark dropdown — it's hidden unless
-          // managed_portfolio is the active kind, but the data is cheap.
-          this._renderManagedBenchmarkDropdown();
         })
         .catch(() => {
           document.getElementById("sp-setup-source").innerHTML = '<option value="">Erro ao carregar</option>';
         });
-    },
-
-    _renderManagedBenchmarkDropdown() {
-      const sel = document.getElementById("sp-setup-managed-benchmark");
-      if (!sel) return;
-      const benchmarks = this._setup.managedBenchmarks || [];
-      const current = this._setup.managedBenchmarkId || "";
-      sel.innerHTML = '<option value="">— sem benchmark —</option>'
-        + benchmarks.map(b =>
-          `<option value="${this._esc(b.id)}" ${b.id === current ? "selected" : ""}>${this._esc(b.name)}</option>`).join("");
-    },
-
-    onManagedBenchmarkChange(val) {
-      this._setup.managedBenchmarkId = (val || "").trim();
     },
 
     onSetupSourceChange() {
@@ -2951,842 +2829,6 @@ if (typeof Funcoes === 'undefined') {
         });
     },
 
-    // ── managed_portfolio: date + securities picker ─────────────────────
-    onManagedDateChange(val) {
-      this._setup.managedDate = (val || "").trim();
-      // Clear any previously-loaded picker rows when the date changes —
-      // they'd be stale (snapshot is per-date). Pairs the operator has
-      // already confirmed stay; reopening the picker re-fetches.
-      this._setup.managedAvailable = [];
-    },
-
-    openManagedPicker() {
-      const cid  = this._setup.companyId;
-      const date = (this._setup.managedDate || "").trim();
-      const srcs = (this._setup.classSourceIds || []).slice();
-      if (!cid)         { alert("Selecione uma empresa."); return; }
-      if (!srcs.length) { alert("Selecione ao menos uma carteira de origem (Step 3)."); return; }
-      if (!date)        { alert("Informe a Data base antes de abrir as carteiras."); return; }
-
-      const modal  = document.getElementById("sp-managed-picker");
-      const status = document.getElementById("sp-managed-picker-status");
-      document.getElementById("sp-managed-picker-date").textContent = date;
-      if (status) status.textContent = "Carregando posições…";
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
-
-      const url = `/api/excecoes/managed-portfolio/positions`
-        + `?companyId=${encodeURIComponent(cid)}`
-        + `&date=${encodeURIComponent(date)}`
-        + `&walletIds=${encodeURIComponent(srcs.join(","))}`;
-      fetch(url)
-        .then(r => r.json().then(d => ({ok: r.ok, d})))
-        .then(({ok, d}) => {
-          if (!ok || d.error) {
-            if (status) status.textContent = "Erro: " + (d.error || "falha");
-            return;
-          }
-          // Flatten { wallets: [{walletId, walletName, securities[]}] } into
-          // the picker's row shape — one entry per (walletId, securityId).
-          const flat = [];
-          for (const w of (d.wallets || [])) {
-            for (const s of (w.securities || [])) {
-              flat.push({
-                walletId:   w.walletId,
-                walletName: w.walletName || w.walletId,
-                securityId: s.securityId,
-                beehusName: s.beehusName || s.securityId,
-                variable1:  s.variable1 || "",
-                quantity:   s.quantity,
-                pu:         s.pu,
-                balance:    s.balance,
-              });
-            }
-          }
-          this._setup.managedAvailable = flat;
-          // Re-hydrate the wallet filter dropdown.
-          const walletSel = document.getElementById("sp-managed-picker-wallet-filter");
-          if (walletSel) {
-            const wallets = (d.wallets || []);
-            walletSel.innerHTML = '<option value="">Todas as carteiras</option>'
-              + wallets.map(w => `<option value="${this._esc(w.walletId)}">${this._esc(w.walletName || w.walletId)}</option>`).join("");
-          }
-          document.getElementById("sp-managed-picker-wallet-count").textContent =
-            String((d.wallets || []).length);
-          document.getElementById("sp-managed-picker-available-count").textContent =
-            String(flat.length);
-          if (status) status.textContent = `${flat.length} ativo(s) carregado(s)`;
-          this._renderManagedPicker();
-        })
-        .catch(() => {
-          if (status) status.textContent = "Erro de rede.";
-        });
-    },
-
-    closeManagedPicker() {
-      const modal = document.getElementById("sp-managed-picker");
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
-    },
-
-    onManagedPickerFilterChange() {
-      this._setup.managedPickerSearch = (document.getElementById("sp-managed-picker-search").value || "").toLowerCase();
-      this._setup.managedPickerWalletFilter = document.getElementById("sp-managed-picker-wallet-filter").value || "";
-      this._renderManagedPicker();
-    },
-
-    _managedPickerKey(p) {
-      // Stable composite key used both for the <option> value and for
-      // deduping inside `managedPairs`. Picker rows that share a key
-      // are considered the same pick.
-      return `${p.walletId}::${p.securityId}`;
-    },
-
-    _renderManagedPicker() {
-      const search = (this._setup.managedPickerSearch || "").trim();
-      const walletFilter = this._setup.managedPickerWalletFilter || "";
-      const pairs = this._setup.managedPairs || [];
-      const selectedKeys = new Set(pairs.map(p => this._managedPickerKey(p)));
-
-      const avail = (this._setup.managedAvailable || []).filter(p => {
-        if (selectedKeys.has(this._managedPickerKey(p))) return false;
-        if (walletFilter && p.walletId !== walletFilter) return false;
-        if (search) {
-          const hay = `${p.walletName} ${p.beehusName} ${p.securityId} ${p.variable1}`.toLowerCase();
-          if (!hay.includes(search)) return false;
-        }
-        return true;
-      });
-
-      const fmtLabel = p =>
-        `[${this._esc(p.walletName)}] ${this._esc(p.beehusName)} `
-        + `(${this._esc(p.securityId)})`
-        + (p.variable1 ? ` · ${this._esc(p.variable1)}` : "");
-
-      const availSel = document.getElementById("sp-managed-picker-available");
-      availSel.innerHTML = avail.map(p =>
-        `<option value="${this._esc(this._managedPickerKey(p))}">${fmtLabel(p)}</option>`
-      ).join("");
-      document.getElementById("sp-managed-picker-avail-shown").textContent = String(avail.length);
-
-      const selSel = document.getElementById("sp-managed-picker-selected");
-      selSel.innerHTML = pairs.map(p =>
-        `<option value="${this._esc(this._managedPickerKey(p))}">${fmtLabel(p)}</option>`
-      ).join("");
-      document.getElementById("sp-managed-picker-sel-shown").textContent = String(pairs.length);
-      document.getElementById("sp-managed-picker-selected-count").textContent = String(pairs.length);
-    },
-
-    _managedPickerMoveKeys(keys, toSelected) {
-      const byKey = new Map((this._setup.managedAvailable || []).map(p => [this._managedPickerKey(p), p]));
-      const pairs = this._setup.managedPairs || [];
-      if (toSelected) {
-        const existing = new Set(pairs.map(p => this._managedPickerKey(p)));
-        for (const k of keys) {
-          if (existing.has(k)) continue;
-          const p = byKey.get(k);
-          if (p) pairs.push(p);
-        }
-      } else {
-        this._setup.managedPairs = pairs.filter(p => !keys.includes(this._managedPickerKey(p)));
-      }
-      this._renderManagedPicker();
-    },
-
-    onManagedPickerAddSelected() {
-      const sel = Array.from(document.getElementById("sp-managed-picker-available").selectedOptions);
-      if (!sel.length) return;
-      this._managedPickerMoveKeys(sel.map(o => o.value), true);
-    },
-    onManagedPickerAddAll() {
-      const all = Array.from(document.getElementById("sp-managed-picker-available").options);
-      if (!all.length) return;
-      this._managedPickerMoveKeys(all.map(o => o.value), true);
-    },
-    onManagedPickerRemoveSelected() {
-      const sel = Array.from(document.getElementById("sp-managed-picker-selected").selectedOptions);
-      if (!sel.length) return;
-      this._managedPickerMoveKeys(sel.map(o => o.value), false);
-    },
-    onManagedPickerRemoveAll() {
-      this._setup.managedPairs = [];
-      this._renderManagedPicker();
-    },
-
-    confirmManagedPicker() {
-      // The picker writes back into `managedPairs` directly; confirm just
-      // closes the modal and re-renders the inline summary table.
-      this.closeManagedPicker();
-      this._renderManagedPairs();
-    },
-
-    _renderManagedPairs() {
-      const tbody = document.getElementById("sp-setup-managed-pairs-tbody");
-      const msg   = document.getElementById("sp-setup-managed-pairs-msg");
-      if (!tbody) return;
-      const pairs = this._setup.managedPairs || [];
-      if (!pairs.length) {
-        tbody.innerHTML = "";
-        if (msg) msg.classList.remove("hidden");
-        return;
-      }
-      if (msg) msg.classList.add("hidden");
-      tbody.innerHTML = pairs.map((p, i) => `
-        <tr>
-          <td class="px-2 py-1.5 text-left text-gray-700">${this._esc(p.walletName || p.walletId)}</td>
-          <td class="px-2 py-1.5 text-left text-gray-700">${this._esc(p.beehusName || p.securityId)}</td>
-          <td class="px-2 py-1.5 text-right">
-            <button class="text-red-600 hover:text-red-700 text-[11px]"
-                    onclick="Strip.onManagedPairRemove(${i})">Remover</button>
-          </td>
-        </tr>
-      `).join("");
-    },
-
-    onManagedPairRemove(idx) {
-      const pairs = this._setup.managedPairs || [];
-      if (idx >= 0 && idx < pairs.length) {
-        pairs.splice(idx, 1);
-        this._renderManagedPairs();
-      }
-    },
-
-    // ── managed_portfolio: date-range prompt ────────────────────────────
-    openManagedDateRange(id, companyId, exc) {
-      this._managedApply = {exceptionId: id, companyId, name: (exc && exc.name) || "Carteira gerencial"};
-      const fin = (exc && exc.positionDate) || (exc && exc.latestProcessedDate) || this._todayISO();
-      const finDate = new Date(fin);
-      // Default initial: 12 months back.
-      const ini = new Date(finDate.getFullYear() - 1, finDate.getMonth(), finDate.getDate())
-        .toISOString().slice(0, 10);
-      document.getElementById("sp-managed-daterange-ini").value = ini;
-      document.getElementById("sp-managed-daterange-fin").value = fin;
-      document.getElementById("sp-managed-daterange-status").textContent = "";
-      const modal = document.getElementById("sp-managed-daterange");
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
-    },
-
-    closeManagedDateRange() {
-      const modal = document.getElementById("sp-managed-daterange");
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
-    },
-
-    runManagedAnalysis() {
-      const a = this._managedApply || {};
-      const ini = (document.getElementById("sp-managed-daterange-ini").value || "").trim();
-      const fin = (document.getElementById("sp-managed-daterange-fin").value || "").trim();
-      const status = document.getElementById("sp-managed-daterange-status");
-      const go = document.getElementById("sp-managed-daterange-go");
-      if (!ini || !fin) { status.textContent = "Informe as duas datas."; return; }
-      if (ini > fin)    { status.textContent = "Data inicial > data final."; return; }
-      status.textContent = "Carregando…";
-      go.disabled = true; go.textContent = "Carregando…";
-      fetch(`/api/excecoes/${encodeURIComponent(a.exceptionId)}/apply`, {
-        method:  "POST",
-        headers: {"Content-Type": "application/json"},
-        body:    JSON.stringify({
-          companyId:   a.companyId,
-          date:        fin,          // legacy field, used as fallback
-          initialDate: ini,
-          finalDate:   fin,
-        }),
-      })
-        .then(r => r.json().then(d => ({ok: r.ok, d})))
-        .then(({ok, d}) => {
-          if (!ok || d.error) {
-            status.textContent = d.error || "Falha na análise.";
-            return;
-          }
-          this.closeManagedDateRange();
-          this.openManagedReport(d);
-          // Refresh the list so lastApplied propagates.
-          this.loadList();
-        })
-        .catch(() => { status.textContent = "Erro de rede."; })
-        .finally(() => {
-          go.disabled = false; go.textContent = "Gerar análise";
-        });
-    },
-
-    // ── managed_portfolio: A4 report modal ──────────────────────────────
-    openManagedReport(payload) {
-      const root = document.getElementById("sp-managed-report-body");
-      if (root) this._renderManagedReport(root, payload);
-      const modal = document.getElementById("sp-managed-report");
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
-      // Install once-only print listeners — Chart.js renders canvases at
-      // their on-screen pixel size and does NOT recompute when the @media
-      // print rules expand the parent. Without these the printed bars
-      // either overflow the page or get cut off (the symptom in the
-      // operator screenshot).  Re-resize before, then again after so the
-      // on-screen layout is restored when the print dialog closes.
-      if (!this._managedPrintHandlersInstalled) {
-        const resizeAll = () => {
-          if (!this._managedCharts) return;
-          for (const c of Object.values(this._managedCharts)) {
-            try { c.resize(); } catch (e) {}
-          }
-        };
-        window.addEventListener("beforeprint", resizeAll);
-        window.addEventListener("afterprint",  resizeAll);
-        this._managedPrintHandlersInstalled = true;
-      }
-    },
-
-    closeManagedReport() {
-      const modal = document.getElementById("sp-managed-report");
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
-      // Free Chart.js instances so reopening the report renders fresh
-      // canvases without "Canvas already in use" warnings.
-      if (this._managedCharts) {
-        for (const c of Object.values(this._managedCharts)) {
-          try { c.destroy(); } catch (e) {}
-        }
-        this._managedCharts = {};
-      }
-    },
-
-    _managedCharts: {},
-
-    _renderManagedReport(root, p) {
-      const fmtPct = v => (v == null ? "—" :
-        (Number(v) * 100).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2}) + "%");
-      // The monthly matrix uses the integer-precision rendering pattern
-      // shown in the user's reference (single decimal in the table).
-      const fmtPct2 = v => (v == null ? "-" :
-        (Number(v) * 100).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-      const fmtMoney = v => (v == null ? "—" :
-        Number(v).toLocaleString("pt-BR", {style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2}));
-      const fmtNum = v => (v == null ? "—" :
-        Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 6}));
-
-      const daily      = p.daily || [];
-      const monthly    = p.monthly || [];
-      const donut      = p.donut || [];
-      const snap       = p.snapshot || {count: 0, totalBalance: 0, matched: [], missing: []};
-      const txs        = p.transactions || [];
-      const benchmark  = p.benchmark || null;
-      const bDaily     = p.benchmarkDaily || [];
-      const finalRet   = daily.length ? daily[daily.length - 1].accumulated : null;
-
-      // ── Monthly matrix (year × month). Compounds the daily series
-      // within each calendar year for the rightmost "ANO" column so the
-      // operator gets the year-to-date number in the same row.  Output
-      // shape mirrors the screenshot provided by the operator. ────────
-      const MONTHS_ABBR = ["JAN","FEV","MAR","ABR","MAI","JUN","JUL","AGO","SET","OUT","NOV","DEZ"];
-      const buildMatrix = (series) => {
-        // series: [{month: "YYYY-MM", return: float}, ...]
-        const byYear = {};
-        for (const r of series) {
-          const [y, m] = r.month.split("-");
-          if (!byYear[y]) byYear[y] = {};
-          byYear[y][Number(m)] = r.return;
-        }
-        // Render newest year on top.
-        const years = Object.keys(byYear).sort((a, b) => b.localeCompare(a));
-        return years.map(y => {
-          let yearFactor = 1;
-          const cells = [];
-          for (let mi = 1; mi <= 12; mi++) {
-            const r = byYear[y][mi];
-            if (r == null) {
-              cells.push(null);
-            } else {
-              cells.push(r);
-              yearFactor *= (1 + r);
-            }
-          }
-          const hadAny = cells.some(c => c != null);
-          return {
-            year: y,
-            cells,
-            yearReturn: hadAny ? (yearFactor - 1) : null,
-          };
-        });
-      };
-      const matrix = buildMatrix(monthly);
-
-      const renderMatrix = (rows) => {
-        if (!rows.length) return "";
-        const cellTd = (val) => {
-          if (val == null) return `<td class="num" style="color:#9ca3af;">-</td>`;
-          const color = val >= 0 ? "#1d4ed8" : "#b91c1b";
-          return `<td class="num" style="color:${color};">${fmtPct2(val)}</td>`;
-        };
-        return `
-          <table style="font-size: 9pt;">
-            <thead><tr>
-              <th></th>
-              ${MONTHS_ABBR.map(m => `<th class="num" style="text-align:center;">${m}</th>`).join("")}
-              <th class="num" style="text-align:center; border-left: 1px solid #d1d5db;">ANO</th>
-            </tr></thead>
-            <tbody>
-              ${rows.map(r => `
-                <tr>
-                  <td style="font-weight:600;">${this._esc(r.year)}</td>
-                  ${r.cells.map(cellTd).join("")}
-                  <td class="num" style="font-weight:600; color:${(r.yearReturn || 0) >= 0 ? '#1d4ed8' : '#b91c1b'}; border-left: 1px solid #d1d5db;">
-                    ${r.yearReturn == null ? "-" : fmtPct2(r.yearReturn)}
-                  </td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>`;
-      };
-
-      // ── HTML scaffold (canvases attached after innerHTML is set so
-      // Chart.js can find them in the DOM). Layout order per spec:
-      // donut+summary → line chart → monthly matrix → transactions.
-      // ── Two-page A4 layout ──────────────────────────────────────────
-      // Page 1 (visão executiva — caps at ~28cm):
-      //   header  (~1cm)
-      //   donut + summary side table  (~5cm)
-      //   line chart  (~5cm)
-      //   monthly matrix  (~3cm)
-      //   class-contribution bar chart  (~5cm)
-      //   warnings + footer  (~0.5cm)
-      // Page 2 (detalhamento):
-      //   latest 10 transactions (compact font)
-      //   holdings table sorted by balance desc
-      //
-      // Page break is forced via the `.sp-page-break` class so we don't
-      // depend on print engines correctly inferring an implicit break.
-      const TX_PRINT_LIMIT = 10;
-      const txPrint = txs.slice(0, TX_PRINT_LIMIT);
-      const txExtra = Math.max(0, txs.length - txPrint.length);
-
-      // Holdings list — sort matched_rows by balance desc for the
-      // page-2 table. Filter empty rows so we don't print "0.00 / 0%"
-      // padding when a (wallet, security) had a zero balance on the
-      // final date.
-      const totalBalance = snap.totalBalance || 0;
-      const holdings = (snap.matched || []).slice().sort(
-        (a, b) => (Number(b.balance) || 0) - (Number(a.balance) || 0));
-
-      // CDI baseline is shown automatically on the line chart even when
-      // no benchmark is configured. When the configured benchmark IS
-      // CDI, the backend collapses both into the cdi block so we don't
-      // draw two identical lines.
-      const cdi    = p.cdi || null;
-      const cDaily = p.cdiDaily || [];
-
-      root.innerHTML = `
-        <!-- ═════════ Page 1 — visão executiva ═════════ -->
-        <header style="border-bottom: 1px solid #1f2937; padding-bottom: 4px; margin-bottom: 4px;">
-          <h2>${this._esc(p.name || "Carteira gerencial")}</h2>
-        </header>
-
-        ${p.warning ? `<p style="font-size:9pt; color:#92400e; background:#fef3c7; padding:4px 6px; border-radius:4px; margin:0;">${this._esc(p.warning)}</p>` : ""}
-
-        <div style="display: grid; grid-template-columns: 6cm 1fr; gap: 0.8cm; align-items: start;">
-          <div style="position: relative; height: 5.5cm;">
-            <canvas id="sp-managed-chart-donut"></canvas>
-          </div>
-          <div>
-            <h3 style="margin-top: 0;">Resumo</h3>
-            <table style="font-size: 8.5pt;">
-              <tbody>
-                <tr><td style="width:55%;">Janela</td>
-                    <td class="num">${this._esc(p.initialDate || "")} → ${this._esc(p.finalDate || "")}</td></tr>
-                <tr><td>Carteiras</td>
-                    <td class="num">${(p.sourceWalletNames || []).length}</td></tr>
-                <tr><td>Quantidade de ativos</td>
-                    <td class="num"><strong>${snap.count}</strong></td></tr>
-                <tr><td>Saldo total</td>
-                    <td class="num"><strong>${fmtMoney(snap.totalBalance)}</strong></td></tr>
-                <tr><td>Ganho no período</td>
-                    <td class="num" style="color:${(snap.totalGain || 0) >= 0 ? '#065f46' : '#991b1b'};"><strong>${fmtMoney(snap.totalGain || 0)}</strong></td></tr>
-                ${benchmark ? `
-                  <tr><td>Benchmark</td>
-                      <td class="num">${this._esc(benchmark.name)}</td></tr>
-                ` : ""}
-                ${donut.slice(0, 5).map(d => `
-                  <tr>
-                    <td style="color:#374151;">· ${this._esc(d.variable1)}</td>
-                    <td class="num">${fmtMoney(d.balance)}</td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <h3>Rentabilidade acumulada · ${daily.length ? fmtPct(finalRet) : "—"}${
-          benchmark && bDaily.length
-            ? ` · ${this._esc(benchmark.name)}: ${fmtPct(bDaily[bDaily.length - 1].accumulated)}`
-            : ""}${
-          cdi && cDaily.length && (!benchmark || (benchmark && benchmark.id !== cdi.id))
-            ? ` · CDI: ${fmtPct(cDaily[cDaily.length - 1].accumulated)}`
-            : ""}</h3>
-        <div style="position: relative; height: 5cm; width: 100%;">
-          <canvas id="sp-managed-chart-line"></canvas>
-        </div>
-
-        ${matrix.length ? `
-          <h3>Rentabilidades mensais</h3>
-          ${renderMatrix(matrix)}
-        ` : ""}
-
-        ${(p.contributionByClass || []).length ? `
-          <h3>Contribuição por classe</h3>
-          <div style="position: relative; height: 5cm; width: 100%;">
-            <canvas id="sp-managed-chart-bars"></canvas>
-          </div>
-        ` : ""}
-
-        ${snap.missing && snap.missing.length ? `
-          <p style="font-size:8pt; color:#92400e; margin: 4px 0 0 0;">
-            ${snap.missing.length} ativo(s) sem documento em <code>publishedPositionSecurities</code> na data final.
-          </p>
-        ` : ""}
-
-        <!-- ═════════ Page 2 — detalhamento ═════════ -->
-        <div class="sp-page-break"></div>
-
-        <header style="border-bottom: 1px solid #1f2937; padding-bottom: 4px; margin-bottom: 4px;">
-          <h2 style="font-size: 12pt;">${this._esc(p.name || "Carteira gerencial")} — Detalhamento</h2>
-          <p style="font-size: 8pt; color: #4b5563; margin: 0;">
-            Janela: ${this._esc(p.initialDate || "")} → ${this._esc(p.finalDate || "")}
-          </p>
-        </header>
-
-        <h3>Últimas transações${txExtra ? ` <span style="font-size:8pt; color:#6b7280; font-weight:400;">(top ${txPrint.length} de ${txs.length})</span>` : ` (${txs.length})`}</h3>
-        <div>
-          ${txPrint.length ? `
-            <table style="font-size: 7.5pt;">
-              <thead><tr>
-                <th>Data Op.</th>
-                <th>Tipo</th>
-                <th>Carteira</th>
-                <th>Ativo</th>
-                <th style="text-align:right;">Quant.</th>
-                <th style="text-align:right;">Saldo</th>
-              </tr></thead>
-              <tbody>
-                ${txPrint.map(t => `
-                  <tr>
-                    <td>${this._esc(t.operationDate)}</td>
-                    <td>${this._esc(t.type)}</td>
-                    <td>${this._esc(t.walletName || t.walletId)}</td>
-                    <td>${this._esc(t.beehusName || t.securityId)}</td>
-                    <td class="num">${fmtNum(t.quantity)}</td>
-                    <td class="num">${fmtMoney(t.balance)}</td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          ` : `<p style="font-size:8pt; color:#6b7280; margin:0;">Sem transações nas carteiras + ativos selecionados.</p>`}
-        </div>
-
-        <h3>Ativos por saldo (data final)</h3>
-        <div>
-          ${holdings.length ? `
-            <table style="font-size: 7.5pt;">
-              <thead><tr>
-                <th>mainId</th>
-                <th>beehusName</th>
-                <th>variable1</th>
-                <th>Carteira</th>
-                <th style="text-align:right;">Saldo</th>
-                <th style="text-align:right;">% total</th>
-              </tr></thead>
-              <tbody>
-                ${holdings.map(h => {
-                  const pct = totalBalance > 0
-                    ? (Number(h.balance) || 0) / totalBalance
-                    : 0;
-                  return `
-                    <tr>
-                      <td>${this._esc(h.mainId || "—")}</td>
-                      <td>${this._esc(h.beehusName || h.securityId)}</td>
-                      <td>${this._esc(h.variable1 || "—")}</td>
-                      <td>${this._esc(h.walletName || h.walletId)}</td>
-                      <td class="num">${fmtMoney(h.balance)}</td>
-                      <td class="num">${(pct * 100).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2})}%</td>
-                    </tr>`;
-                }).join("")}
-                <tr style="background:#f9fafb;">
-                  <td colspan="4" style="font-weight:600;">Total</td>
-                  <td class="num" style="font-weight:600;">${fmtMoney(totalBalance)}</td>
-                  <td class="num" style="font-weight:600;">100,00%</td>
-                </tr>
-              </tbody>
-            </table>
-          ` : `<p style="font-size:8pt; color:#6b7280; margin:0;">Nenhum ativo com posição na data final.</p>`}
-        </div>
-
-        <p style="font-size:7.5pt; color:#9ca3af; margin: 6px 0 0 0; text-align:right;">
-          Análise gerada em ${new Date().toLocaleString("pt-BR")}.
-        </p>
-      `;
-
-      // ── Chart.js: line + donut ──────────────────────────────────────
-      // Guard against Chart undefined when the partial is loaded without
-      // the CDN script (e.g. legacy embeds that didn't add the <script>).
-      if (typeof Chart === "undefined") return;
-
-      // Destroy any previous instances before painting new ones so
-      // re-opening the report on a different exception doesn't trip the
-      // "Canvas is already in use" warning.
-      if (this._managedCharts) {
-        for (const c of Object.values(this._managedCharts)) {
-          try { c.destroy(); } catch (e) {}
-        }
-      }
-      this._managedCharts = {};
-
-      // ── Palette resolution (declared up here so every chart below
-      // can share it) ────────────────────────────────────────────────
-      const FALLBACK_PALETTE = [
-        "#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#9333ea",
-        "#0891b2", "#65a30d", "#e11d48", "#a16207", "#475569",
-      ];
-      const palette = (Array.isArray(p.palette) && p.palette.length)
-        ? p.palette : FALLBACK_PALETTE;
-      const hexToRgba = (hex, alpha) => {
-        const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
-        if (!m) return `rgba(37,99,235,${alpha})`;
-        return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})`;
-      };
-      // Brand convention (per operator): position 7 of the palette is
-      // the primary accent (used by the portfolio line) and position 5
-      // is the secondary (benchmark line). Positions are 1-indexed in
-      // the operator's mental model — so palette[6] / palette[4] in
-      // JS. The `|| palette[0]` fallbacks cover palettes shorter than
-      // 7 colours (in practice every Oikos palette has 11 slots, so
-      // these almost never fire — the fallback exists for the built-in
-      // FALLBACK_PALETTE which only has 10).
-      const pickColour = (idx, fb) => palette[idx] || palette[0] || fb;
-      const seriesColour    = pickColour(6, "#2563eb");   // 7ª — principal
-      const benchmarkColour = pickColour(4, "#9ca3af");   // 5ª — secundária
-      const cdiColour       = "#9ca3af";                  // CDI baseline stays neutral grey
-
-      const lineCtx = document.getElementById("sp-managed-chart-line");
-      if (lineCtx && daily.length) {
-        // The x-axis is the union of every series' dates so the chart
-        // starts at the operator-picked `initialDate` (anchor point at
-        // 0%) and extends to whichever series ends last. Each dataset
-        // maps its own values onto this canonical axis — missing dates
-        // leave a gap that Chart.js bridges via `spanGaps`.
-        const dateSet = new Set();
-        // Anchor at 0% — without this the first plotted point is the
-        // day-1 return, which makes the line look like it "starts mid
-        // air" instead of growing from zero.
-        const anchor = p.initialDate || daily[0].date;
-        dateSet.add(anchor);
-        for (const r of daily)  dateSet.add(r.date);
-        for (const r of bDaily) dateSet.add(r.date);
-        for (const r of cDaily) dateSet.add(r.date);
-        const labels = [...dateSet].sort();
-
-        const seriesAt = (rows) => {
-          const byDate = {[anchor]: 0};
-          for (const r of rows) byDate[r.date] = r.accumulated;
-          return labels.map(d => byDate[d] != null ? byDate[d] * 100 : null);
-        };
-
-        const datasets = [{
-          label: "Carteira",
-          data: seriesAt(daily),
-          borderColor: seriesColour,
-          backgroundColor: hexToRgba(seriesColour, 0.12),
-          fill: true,
-          tension: 0.15,
-          pointRadius: 0,
-          borderWidth: 1.5,
-          spanGaps: true,
-        }];
-        if (benchmark && bDaily.length) {
-          datasets.push({
-            label: benchmark.name || "Benchmark",
-            data: seriesAt(bDaily),
-            borderColor: benchmarkColour,
-            backgroundColor: "rgba(0,0,0,0)",
-            borderDash: [4, 3],
-            fill: false,
-            tension: 0.15,
-            pointRadius: 0,
-            borderWidth: 1.2,
-            spanGaps: true,
-          });
-        }
-        // Always-on CDI baseline. Suppressed when the configured
-        // benchmark IS CDI (backend collapses that case into the cdi
-        // block, so `benchmark.id === cdi.id` would draw a duplicate).
-        const showCdiSeparate =
-          cdi && cDaily.length &&
-          (!benchmark || (benchmark && benchmark.id !== cdi.id));
-        if (showCdiSeparate) {
-          datasets.push({
-            label: "CDI",
-            data: seriesAt(cDaily),
-            borderColor: cdiColour,
-            backgroundColor: "rgba(0,0,0,0)",
-            borderDash: [2, 2],
-            fill: false,
-            tension: 0.15,
-            pointRadius: 0,
-            borderWidth: 1.1,
-            spanGaps: true,
-          });
-        }
-        const hasMultipleSeries = datasets.length > 1;
-        this._managedCharts.line = new Chart(lineCtx, {
-          type: "line",
-          data: {labels, datasets},
-          options: {
-            animation: false,
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {display: hasMultipleSeries, position: "top",
-                       labels: {font: {size: 9}, boxWidth: 12}},
-              tooltip: {enabled: false},
-            },
-            scales: {
-              x: {ticks: {maxTicksLimit: 8, font: {size: 9}}, grid: {display: false}},
-              y: {
-                // Anchor the y-axis at 0% so the visual baseline lines
-                // up with the anchor point we prepend above. `suggestedMin`
-                // (not `min`) lets the chart breathe downward if any
-                // series dips below 0.
-                suggestedMin: 0,
-                ticks: {callback: v => v.toFixed(2) + "%", font: {size: 9}},
-                grid: {color: "#f3f4f6"},
-              },
-            },
-          },
-        });
-      }
-
-      // Map donut classes → palette index. Both the donut slices and
-      // the bar chart consume `classColour[variable1]` so the eye can
-      // trace each class between the two charts.
-      const classColour = {};
-      donut.forEach((d, i) => { classColour[d.variable1] = palette[i % palette.length]; });
-
-      // Inline Chart.js plugin that paints labels directly on each
-      // donut slice — class name + % of total — so the printed PDF
-      // doesn't depend solely on the legend below the donut. Slices
-      // smaller than 4% are skipped (label would be illegible at
-      // print size). Text is drawn as black-on-white-halo so it
-      // reads on every palette colour (light or dark background).
-      const donutLabelsPlugin = {
-        id: "donutLabels",
-        afterDatasetsDraw(chart) {
-          const ds = chart.data.datasets[0];
-          if (!ds) return;
-          const total = ds.data.reduce((a, b) => a + (Number(b) || 0), 0);
-          if (total <= 0) return;
-          const meta = chart.getDatasetMeta(0);
-          const ctx = chart.ctx;
-          ctx.save();
-          ctx.font = "bold 8pt sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.lineJoin = "round";
-          meta.data.forEach((arc, i) => {
-            const value = Number(ds.data[i]) || 0;
-            const pct = value / total;
-            if (pct < 0.04) return;
-            const props = arc.getProps(
-              ["x", "y", "startAngle", "endAngle",
-               "innerRadius", "outerRadius"], true);
-            const angle = (props.startAngle + props.endAngle) / 2;
-            const radius = (props.innerRadius + props.outerRadius) / 2;
-            const lx = props.x + Math.cos(angle) * radius;
-            const ly = props.y + Math.sin(angle) * radius;
-            const labelTxt = chart.data.labels[i] || "";
-            const pctTxt = (pct * 100).toLocaleString("pt-BR",
-              {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "%";
-            // White halo for legibility on any slice colour, then
-            // dark fill on top.
-            const drawText = (txt, y) => {
-              ctx.strokeStyle = "rgba(255,255,255,0.95)";
-              ctx.lineWidth = 3;
-              ctx.strokeText(txt, lx, y);
-              ctx.fillStyle = "#111827";
-              ctx.fillText(txt, lx, y);
-            };
-            drawText(labelTxt, ly - 6);
-            ctx.font = "8pt sans-serif";
-            drawText(pctTxt, ly + 6);
-            ctx.font = "bold 8pt sans-serif";
-          });
-          ctx.restore();
-        },
-      };
-
-      const donutCtx = document.getElementById("sp-managed-chart-donut");
-      if (donutCtx && donut.length) {
-        this._managedCharts.donut = new Chart(donutCtx, {
-          type: "doughnut",
-          data: {
-            labels: donut.map(d => d.variable1),
-            datasets: [{
-              data: donut.map(d => d.balance),
-              backgroundColor: donut.map(d => classColour[d.variable1]),
-              borderColor: "white",
-              borderWidth: 1,
-            }],
-          },
-          options: {
-            animation: false,
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: "55%",
-            plugins: {
-              legend: {position: "bottom", labels: {font: {size: 8.5}, boxWidth: 10}},
-              tooltip: {enabled: false},
-            },
-          },
-          plugins: [donutLabelsPlugin],
-        });
-      }
-
-      const barsCtx = document.getElementById("sp-managed-chart-bars");
-      const barsData = p.contributionByClass || [];
-      if (barsCtx && barsData.length) {
-        // Reuse the donut's palette by class name so the bars align
-        // visually with the donut slices. Unknown classes (rare) fall
-        // back to a slate grey.
-        this._managedCharts.bars = new Chart(barsCtx, {
-          type: "bar",
-          data: {
-            labels: barsData.map(d => d.variable1),
-            datasets: [{
-              label: "Ganho (R$)",
-              data:  barsData.map(d => d.contribution),
-              backgroundColor: barsData.map(d => classColour[d.variable1] || "#94a3b8"),
-              borderColor:     barsData.map(d => classColour[d.variable1] || "#475569"),
-              borderWidth: 1,
-            }],
-          },
-          options: {
-            animation: false,
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {legend: {display: false}, tooltip: {enabled: false}},
-            scales: {
-              x: {ticks: {font: {size: 9}}, grid: {display: false}},
-              y: {
-                ticks: {
-                  font: {size: 9},
-                  callback: v => Number(v).toLocaleString("pt-BR",
-                    {style: "currency", currency: "BRL", maximumFractionDigits: 0}),
-                },
-                grid: {color: "#f3f4f6"},
-              },
-            },
-          },
-        });
-      }
-    },
-
     saveException() {
       const name = document.getElementById("sp-setup-name").value.trim();
       const cid  = this._setup.companyId;
@@ -3794,35 +2836,7 @@ if (typeof Funcoes === 'undefined') {
       if (!name) { alert("Informe um nome."); return; }
 
       let body;
-      if (this._setup.kind === "managed_portfolio") {
-        // managed_portfolio reuses class_strip's source-wallets picker —
-        // `classSourceIds` is the operator's selection in the "Carteiras
-        // de origem" pane. The remaining fields (positionDate +
-        // selectedSecurities) come from the inline managed step 4.
-        const srcs = (this._setup.classSourceIds || []).slice();
-        if (!srcs.length) { alert("Selecione ao menos uma carteira de origem."); return; }
-        const posDate = (this._setup.managedDate || "").trim();
-        // Operator can save a partial setup (no date / no pairs yet) and
-        // come back later — the backend accepts an empty positionDate +
-        // selectedSecurities. We only warn when the date is missing so
-        // they don't lose the picker selection unintentionally.
-        if (!posDate && (this._setup.managedPairs || []).length) {
-          alert("Defina uma Data base antes de salvar — os ativos selecionados precisam da data de referência.");
-          return;
-        }
-        body = {
-          kind:               "managed_portfolio",
-          companyId:          cid,
-          name,
-          sourceWalletIds:    srcs,
-          positionDate:       posDate,
-          selectedSecurities: (this._setup.managedPairs || []).map(p => ({
-            walletId:   p.walletId,
-            securityId: p.securityId,
-          })),
-          benchmarkSecurityId: this._setup.managedBenchmarkId || "",
-        };
-      } else if (this._setup.kind === "class_strip") {
+      if (this._setup.kind === "class_strip") {
         const srcs = (this._setup.classSourceIds || []).slice();
         if (!srcs.length) { alert("Selecione ao menos uma carteira de origem."); return; }
         // Strip empty rows + check duplicates + cross-wallet conflicts up
@@ -3940,23 +2954,15 @@ if (typeof Funcoes === 'undefined') {
           return Promise.all([
             fetch(`/api/excecoes/wallets?companyId=${encodeURIComponent(e.companyId)}`).then(r => r.json()),
             fetch(`/api/beehus/filters/groupings?companyId=${encodeURIComponent(e.companyId)}`).then(r => r.json()),
-            // Benchmarks: missing from this Promise.all was the reason
-            // the dropdown stayed empty when an existing
-            // managed_portfolio exception was reopened for editing —
-            // `_renderManagedBenchmarkDropdown` below reads from
-            // `this._setup.managedBenchmarks`, which only the create
-            // flow's onSetupCompanyChange used to populate.
-            fetch(`/api/excecoes/managed-portfolio/benchmarks?companyId=${encodeURIComponent(e.companyId)}`).then(r => r.json()).catch(() => ({benchmarks: []})),
             // Cross-company list — alimenta os pickers de outputs/target,
             // que aceitam carteiras de qualquer empresa visível.
             fetch(`/api/excecoes/wallets?crossCompany=1`).then(r => r.json()).catch(() => ({wallets: []})),
           ])
-            .then(([walletsRes, groupingsRes, benchmarksRes, crossRes]) => {
+            .then(([walletsRes, groupingsRes, crossRes]) => {
               const wallets = (walletsRes && walletsRes.wallets) || [];
               this._setup.walletsForCompany = wallets;
               this._setup.walletsCrossCompany = (crossRes && crossRes.wallets) || [];
               this._setup.classGroupings = Array.isArray(groupingsRes) ? groupingsRes : (groupingsRes.body || []);
-              this._setup.managedBenchmarks = (benchmarksRes && benchmarksRes.benchmarks) || [];
               const sel = document.getElementById("sp-setup-source");
               sel.innerHTML = '<option value="">Selecione...</option>'
                 + wallets.map(w => `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`).join("");
@@ -3984,30 +2990,6 @@ if (typeof Funcoes === 'undefined') {
                 // groupings if they want to narrow the available wallets.
                 this._setup.classGroupingIds = new Set();
                 this._renderClassPicker();
-                return;
-              }
-
-              if (this._setup.kind === "managed_portfolio") {
-                this._setup.classSourceIds = (e.sourceWalletIds || []).slice();
-                this._setup.classGroupingIds = new Set();
-                this._setup.managedDate  = e.positionDate || "";
-                this._setup.managedPairs = (e.selectedSecurities || []).map(p => ({
-                  walletId:   p.walletId,
-                  securityId: p.securityId,
-                  // Resolve display names from the wallet list we just
-                  // loaded + the security-name cache. For securities
-                  // we use the id as a fallback until the picker
-                  // re-fetches the per-date snapshot.
-                  walletName: (this._setup.walletsForCompany.find(w => w.id === p.walletId) || {}).name
-                              || p.walletId,
-                  beehusName: p.securityId,
-                }));
-                this._setup.managedBenchmarkId = e.benchmarkSecurityId || "";
-                this._renderClassPicker();
-                this._renderManagedBenchmarkDropdown();
-                const dateInput = document.getElementById("sp-setup-managed-date");
-                if (dateInput) dateInput.value = this._setup.managedDate;
-                this._renderManagedPairs();
                 return;
               }
 
@@ -4058,34 +3040,47 @@ if (typeof Funcoes === 'undefined') {
       const selected = ids.map(id => byId[id]).filter(Boolean);
       if (!selected.length) { alert("As exceções selecionadas não estão mais visíveis. Recarregue a lista."); return; }
 
-      // Read each selected row's Data Base from the live inputs. Missing
-      // dates abort the whole batch — there's no longer a global fallback.
+      // Single bulk date chosen in the confirm modal (default today),
+      // applied to ALL selected exceptions. Replaces the old per-row Data
+      // Base column. The {id: date} map is what the rest of the bulk flow
+      // (preview/apply) already consumes, so only the date SOURCE changed.
+      const dateInput = document.getElementById("sp-confirm-date");
+      const date = (dateInput && dateInput.value) || this._todayISO();
+      if (dateInput) dateInput.value = date;
       const dates = {};
-      const missing = [];
-      selected.forEach(e => {
-        const d = (this._rowDates && this._rowDates[e.id]) || "";
-        if (!d) missing.push(e.name);
-        else dates[e.id] = d;
-      });
-      if (missing.length) {
-        alert(`Defina a Data Base das exceções:\n- ${missing.join("\n- ")}`);
-        return;
-      }
+      selected.forEach(e => { dates[e.id] = date; });
 
-      // Freeze the lot — checkbox / date-input changes after this point
-      // don't shift what the modal is reviewing or what `Confirmar` will
-      // apply. Each exception carries its own snapshotted date.
-      this._bulkConfirm = {exceptions: selected, dates, previews: {}};
+      // Freeze the selection — checkbox changes after this point don't shift
+      // what the modal is reviewing. The bulk date can still be changed in
+      // the modal (onBulkDateChange re-previews).
+      this._bulkConfirm = {exceptions: selected, dates, date, previews: {}};
 
       document.getElementById("sp-confirm-modal").classList.remove("hidden");
-      const distinct = [...new Set(Object.values(dates))].sort();
-      const dateLabel = distinct.length === 1 ? distinct[0] : `${distinct.length} datas distintas`;
       document.getElementById("sp-confirm-subtitle").textContent =
-        `${selected.length} exceção(ões) — ${dateLabel}`;
+        `${selected.length} exceção(ões) — ${date}`;
       document.getElementById("sp-confirm-count").textContent = String(selected.length);
       document.getElementById("sp-confirm-status").textContent = "";
       document.getElementById("sp-confirm-run-btn").disabled = false;
 
+      this._renderBulkConfirm();
+      this._loadBulkPreviews();
+    },
+
+    // Operator changed the single bulk date in the confirm modal: re-point
+    // every selected exception at the new date, clear stale previews, and
+    // reload them. No-op if no batch is being reviewed.
+    onBulkDateChange() {
+      if (!this._bulkConfirm || !this._bulkConfirm.exceptions) return;
+      const input = document.getElementById("sp-confirm-date");
+      const date = (input && input.value) || this._todayISO();
+      if (input) input.value = date;
+      const dates = {};
+      this._bulkConfirm.exceptions.forEach(e => { dates[e.id] = date; });
+      this._bulkConfirm.dates = dates;
+      this._bulkConfirm.date = date;
+      this._bulkConfirm.previews = {};
+      document.getElementById("sp-confirm-subtitle").textContent =
+        `${this._bulkConfirm.exceptions.length} exceção(ões) — ${date}`;
       this._renderBulkConfirm();
       this._loadBulkPreviews();
     },

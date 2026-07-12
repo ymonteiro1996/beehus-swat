@@ -1272,6 +1272,208 @@
       "addedAt": "2026-06-12T14:18:06Z",
       "lastSeenAt": "2026-06-12T14:18:06Z",
       "hits": 1
+    },
+    "AQUISICAO DE COTAS NO FUNDO TESOURO SEL FIRF PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "54996629000162",
+      "lastDescriptionRaw": "AQUISICAO DE COTAS NO FUNDO TESOURO SEL FIRF PCO",
+      "addedAt": "2026-06-16T13:53:12Z",
+      "lastSeenAt": "2026-06-16T13:53:12Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO CDB PLUS FIRF CP PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b26d",
+      "securityName": "Btg Pactual CDB Plus FI RF CP",
+      "securityMainId": "27.717.359/0001-30",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO CDB PLUS FIRF CP PCO",
+      "addedAt": "2026-06-25T19:44:27Z",
+      "lastSeenAt": "2026-06-25T19:44:27Z",
+      "hits": 1
+    },
+    "FUNDO - 09.215.250/0001-13 - BTG PACTUAL DI": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "",
+      "lastDescriptionRaw": "fundo - 09.215.250/0001-13 - BTG PACTUAL DI",
+      "addedAt": "2026-06-30T19:44:46Z",
+      "lastSeenAt": "2026-06-30T19:44:46Z",
+      "hits": 1
+    },
+    "GANHO RENDIMENTO - - - DEVOLUCAO_TX -": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Ganho Rendimento - - - Devolucao_tx -",
+      "addedAt": "2026-07-01T23:10:06Z",
+      "lastSeenAt": "2026-07-01T23:10:06Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "AMORTIZACAO - GENERICO - WAREHOUSE_NAGRO - ID 109 FIDC NP": {
+      "beehusTransactionType": "amortization",
+      "securityId": "67ffbf7056efc7ce2275bc12",
+      "securityName": "Credito Agro FIDC NP",
+      "securityMainId": "45.693.226/0001-53",
+      "lastDescriptionRaw": "Amortização - generico - Warehouse_Nagro - ID 109 FIDC NP",
+      "addedAt": "2026-07-03T13:35:24Z",
+      "lastSeenAt": "2026-07-03T13:35:24Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO OIKOS G FIM PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbf0656efc7ce2275ba46",
+      "securityName": "Oikos G FICFI MM",
+      "securityMainId": "55.064.365/0001-71",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO OIKOS G FIM PCO",
+      "addedAt": "2026-07-03T18:40:45Z",
+      "lastSeenAt": "2026-07-03T18:40:45Z",
+      "hits": 1
+    },
+    "CASHBACK B2B - CREDITO": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "CASHBACK B2B - CRÉDITO",
+      "addedAt": "2026-07-03T18:41:34Z",
+      "lastSeenAt": "2026-07-03T18:41:34Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO ABS VRTX FCFM AC PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbb9f56efc7ce2275ae82",
+      "securityName": "Absolute Vertex Access FICFI MM",
+      "securityMainId": "29.177.012/0001-78",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO ABS VRTX FCFM AC PCO",
+      "addedAt": "2026-07-03T18:46:42Z",
+      "lastSeenAt": "2026-07-03T18:46:42Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO TESOURO SIMPL RF PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9df4871f5e8c88f760549",
+      "securityName": "Btg Pactual Digital Tesouro Selic Simples FI RF",
+      "securityMainId": "29562673000117",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO TESOURO SIMPL RF PCO",
+      "addedAt": "2026-07-08T21:23:02Z",
+      "lastSeenAt": "2026-07-08T21:23:02Z",
+      "hits": 1
+    },
+    "LIQ BOLSA (CORRETAGEM BTC ALUGUEL)": {
+      "beehusTransactionType": "brokerageFee",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "LIQ BOLSA (Corretagem BTC Aluguel)",
+      "addedAt": "2026-07-08T21:25:06Z",
+      "lastSeenAt": "2026-07-08T21:25:06Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "DE COTAS NO FUNDO - CDB PLUS FIRF CP PCO - CDB PLUS FIRF CP PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "682dce042e7a3005cb8cf1ab",
+      "securityName": "BTG Pactual CDB PLUS PREV",
+      "securityMainId": "BTGPACTUALCDBPLUSPREV",
+      "lastDescriptionRaw": "de cotas no fundo - CDB PLUS FIRF CP PCO - CDB PLUS FIRF CP PCO",
+      "addedAt": "2026-07-08T21:28:34Z",
+      "lastSeenAt": "2026-07-08T21:28:34Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO - TESOURO SIMPL RF PCO - TESOURO SIMPL RF PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67d9df4871f5e8c88f760549",
+      "securityName": "Btg Pactual Digital Tesouro Selic Simples FI RF",
+      "securityMainId": "29562673000117",
+      "lastDescriptionRaw": "de cotas no fundo - TESOURO SIMPL RF PCO - TESOURO SIMPL RF PCO",
+      "addedAt": "2026-07-08T21:30:44Z",
+      "lastSeenAt": "2026-07-08T21:30:44Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO - MORE ACOES FIA PCO - M ACOES FIC FI ACOES": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68e82da46d2e3dd123ca5430",
+      "securityName": "M Ações FIC FIA",
+      "securityMainId": "15.559.416/0001-11",
+      "lastDescriptionRaw": "de cotas no fundo - MORE ACOES FIA PCO - M ACOES FIC FI ACOES",
+      "addedAt": "2026-07-08T21:33:43Z",
+      "lastSeenAt": "2026-07-08T21:33:43Z",
+      "hits": 1
+    },
+    "COTAS NO FUNDO - BP CDBI FICRF CP PCO - BTG PACTUAL CDB I FIC FI RF CREDITO PRIVADO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "6a4c39041a4128dff37539d8",
+      "securityName": "BTG Pactual CDB I FI RF",
+      "securityMainId": "16565016000181",
+      "lastDescriptionRaw": "cotas no fundo - BP CDBI FICRF CP PCO - BTG PACTUAL CDB I FIC FI RF CREDITO PRIVADO",
+      "addedAt": "2026-07-08T21:38:55Z",
+      "lastSeenAt": "2026-07-08T21:38:55Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO GAMA PRL DVR GLB PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "69d3e15278c1345fa8679467",
+      "securityName": "Gama Pearl Diver Crédito Estruturado Global Fundo MM",
+      "securityMainId": "61516572000112",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO GAMA PRL DVR GLB PCO",
+      "addedAt": "2026-07-08T22:05:23Z",
+      "lastSeenAt": "2026-07-08T22:05:23Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO M M CA MULT CP PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "68e82da66d2e3dd123ca5472",
+      "securityName": "MM CA MM FIC FIM",
+      "securityMainId": "49.793.563/0001-73",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO M M CA MULT CP PCO",
+      "addedAt": "2026-07-08T22:07:20Z",
+      "lastSeenAt": "2026-07-08T22:07:20Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO OAK GL CUSD FCFM PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "69fbee8b42f3d0ce446d662f",
+      "securityName": "Oaktree GL Credit USD FICFIM IE",
+      "securityMainId": "40660810000199",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO OAK GL CUSD FCFM PCO",
+      "addedAt": "2026-07-08T22:14:04Z",
+      "lastSeenAt": "2026-07-08T22:14:04Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO BPAC IBV IND FIA PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbd4b56efc7ce2275b3a2",
+      "securityName": "Btg Pactual Reference Ibovespa Indexado FIA",
+      "securityMainId": "32.743.215/0001-99",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO BPAC IBV IND FIA PCO",
+      "addedAt": "2026-07-08T22:15:48Z",
+      "lastSeenAt": "2026-07-08T22:15:48Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO BP SP500 BRL FIM PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "6a3d89d886ea629551468d9c",
+      "securityName": "BTG Pactual SP 500 BRL FIM",
+      "securityMainId": "36499594000174",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO BP SP500 BRL FIM PCO",
+      "addedAt": "2026-07-08T22:18:17Z",
+      "lastSeenAt": "2026-07-08T22:18:17Z",
+      "hits": 1
+    },
+    "DE COTAS NO FUNDO REAL INVEST FCFA PCO": {
+      "beehusTransactionType": "buySell",
+      "securityId": "69123efda598ef537a74013f",
+      "securityName": "Real Investor FIC de FIF em Ações RL",
+      "securityMainId": "10500884000105",
+      "lastDescriptionRaw": "DE COTAS NO FUNDO REAL INVEST FCFA PCO",
+      "addedAt": "2026-07-08T22:20:45Z",
+      "lastSeenAt": "2026-07-08T22:20:45Z",
+      "hits": 1
     }
   }
 }

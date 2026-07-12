@@ -341,8 +341,14 @@ if __name__ == "__main__":
 
     if "--rebuild" in sys.argv:
         sys.path.insert(0, os.path.dirname(__file__))
-        from db import db as _db
-        total, mapped = rebuild_training_data(_db)
+        # Offline CLI: connect to Mongo explicitly (the web app never does).
+        # URI from $SWAT_MONGO_URI or the saved user_connections.json entry.
+        import db as _dbmod
+        mongo_client = _dbmod.connect_for_cli()
+        try:
+            total, mapped = rebuild_training_data(_dbmod.db)
+        finally:
+            mongo_client.close()
         print(f"Rebuild done: {total} rows, {mapped} labelled.")
 
     if "--eval" in sys.argv:

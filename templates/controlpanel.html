@@ -3,6 +3,14 @@
 {% block title %}Painel de Controle{% endblock %}
 
 {% block head %}
+{% if request.args.get('_frame') == '1' %}
+<style>
+  /* Dentro do shell (templates/shell.html), o botão "Token" vive no sidebar
+     global — então escondemos o chip Token da favorites-bar para não duplicar.
+     Fora do shell (acesso direto a /controlpanel) o chip continua visível. */
+  #chip-token { display: none !important; }
+</style>
+{% endif %}
 <style>
   /* Home Issues table — same single-scroll model used by Strip
      (`.sp-table-wrap`): only horizontal scroll inside the wrap; vertical
@@ -302,46 +310,6 @@
   #tool-loader-label { font-size: 13px; font-weight: 500; color: #374151; }
   html.dark #tool-loader-label { color: #e5e7eb; }
 
-  /* ── Day-trade flow (Lançamentos chip → inline view) ──────────────────
-     Same look-and-feel as /excecoes > Ajustes day-trade. Scoped under
-     `.dt-` so they can't collide with the existing pills/badges on the
-     Issues dashboard or with anything inside the iframe tools. */
-  .dt-pill         { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; }
-  .dt-pill-info    { background: #dbeafe; color: #1e40af; }
-  .dt-pill-warn    { background: #fef3c7; color: #92400e; }
-  .dt-pill-success { background: #dcfce7; color: #166534; }
-  .dt-pill-error   { background: #fee2e2; color: #991b1b; }
-  .dt-pill-muted   { background: #f3f4f6; color: #4b5563; }
-  .dt-step-num     { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #2563eb; color: white; font-size: 11px; font-weight: 700; margin-right: 8px; }
-  .dt-xfer        { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
-  .dt-xfer-pane   { display: flex; flex-direction: column; min-height: 160px; }
-  .dt-xfer-pane h4 { font-size: 10px; text-transform: uppercase; color: #6b7280; margin: 0 0 4px 2px; display: flex; justify-content: space-between; }
-  .dt-xfer select { flex: 1; min-height: 140px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 11px; padding: 4px; background: white; }
-  .dt-xfer-actions { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
-  .dt-xfer-actions button { width: 32px; height: 28px; font-size: 12px; }
-  .dt-mode-seg button { padding: 1px 8px; font-size: 10px; line-height: 14px; border: 1px solid #d1d5db; background: white; }
-  .dt-mode-seg button.active { background: #2563eb; color: white; border-color: #2563eb; }
-  .dt-mode-seg button:first-child { border-radius: 6px 0 0 6px; }
-  .dt-mode-seg button:last-child  { border-radius: 0 6px 6px 0; border-left: 0; }
-  .dt-row-zeroed  { background: #fef2f2; }
-  .dt-row-added   { background: #eff6ff; }
-
-  /* Collapsable per-(wallet, date) panel inside the patched-positions card.
-     Each panel is born collapsed: only the patched rows (zerar/adicionar)
-     and the embedded transactions are visible; the baseline rows hide
-     until the operator clicks the header. The chevron rotates 90° to
-     communicate the open/closed state. */
-  .dt-panel-header  { cursor: pointer; user-select: none; }
-  .dt-chevron       { display: inline-block; width: 10px; font-size: 10px; color: #6b7280; transition: transform .15s ease; }
-  .dt-panel.dt-collapsed .dt-chevron        { transform: rotate(-90deg); }
-  .dt-panel.dt-collapsed .dt-tbody-baseline { display: none; }
-
-  /* Per-panel transactions sub-table. Lives at the bottom of each panel
-     body so the operator sees the position rows and the txns that will
-     accompany them in one place — no more global preview at card-bottom. */
-  .dt-panel-txns        { border-top: 1px solid #e5e7eb; background: #f9fafb; padding: 8px 12px; }
-  .dt-panel-txns h5     { font-size: 11px; font-weight: 600; color: #374151; margin: 0 0 4px 0; }
-
   /* ── Strip (Position Stripping) — extraído para partial reaproveitado
      pela página /stripping. Ver templates/partials/_strip_styles.html. */
   {% include 'partials/_strip_styles.html' %}
@@ -526,9 +494,10 @@
   <div class="fb-group">
     <span class="fb-group-label">Transações</span>
     <div class="fb-group-chips">
-      <button class="fb-chip" data-kind="process" data-deep="identify"          title="Identificar Transações"      onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>Identificar</button>
-      <button class="fb-chip" data-kind="process" data-deep="delete"            title="Editar Transações"            onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>Editar Txn</button>
-      <button class="fb-chip" data-kind="delete"  data-deep="delete-only"       title="Excluir Transações"          onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>Excluir Txn</button>
+      <!-- Chip único "Transações": a tela /beehus#identify agora unifica
+           Identificar + Editar + Excluir (a antiga view "delete"/"delete-only"
+           e o controlador DeleteTxn foram removidos). -->
+      <button class="fb-chip" data-kind="process" data-deep="identify"          title="Transações — Identificar / Editar / Excluir" onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>Transações</button>
     </div>
   </div>
 
@@ -536,15 +505,9 @@
     <span class="fb-group-label">Lançamentos</span>
     <div class="fb-group-chips">
       <button class="fb-chip" data-kind="delete"  data-deep="delete-prov"       title="Excluir Provisões"           onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>Excluir Prov</button>
-      <button id="chip-daytrade" class="fb-chip" data-kind="process" title="Detectar buy/sell intraday e criar securityContributionAdjustment + patch de posição" onclick="Daytrade.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>Day-trade</button>
-      <!-- Strip de Posições — inline port of /excecoes > Position Stripping.
-           Activates Strip.open(), which swaps the dashboard for #strip-view
-           (sibling of #daytrade-view) and reuses the /api/excecoes/* endpoints. -->
-      <button id="chip-strip" class="fb-chip" data-kind="delete" title="Strip de Posições — Position Stripping (inline)" onclick="Strip.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121M9.121 9.121a3 3 0 10-4.242 4.242 3 3 0 004.242-4.242zM14.121 14.121a3 3 0 104.242 4.242 3 3 0 00-4.242-4.242z"/></svg>Stripping</button>
-      <!-- Repetir Posições — abre /repetir-posicoes inline (mesma técnica que
-           Funcoes.openCarteira). Sem URL params: a página inicializa com
-           campos vazios e sem prévia, deixando o operador montar a consulta. -->
-      <button type="button" id="chip-repetir" class="fb-chip" data-kind="flow"   title="Posição Projetada — replicar a posição mais recente no próximo dia útil" onclick="Repetir.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0114-5M20 14a8 8 0 01-14 5"/></svg>Projetada</button>
+      <!-- "Day-trade", "Stripping" e "Projetada" removidos daqui: agora estão no
+           sidebar (Day-trade → /excecoes#day-trade; Stripping → /stripping;
+           Projetada → /repetir-posicoes). -->
     </div>
   </div>
 
@@ -555,14 +518,6 @@
       <button class="fb-chip" data-kind="nav"     data-deep="explosion-prop"    title="Proporcionalizar Explosão" onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l3-3m0 0l3 3m-3-3v12M21 12l-3 3m0 0l-3-3m3 3V3M9 21h6"/></svg>Explosão</button>
       <button class="fb-chip" data-kind="nav"     data-deep="nav-groupings-dates" title="Calcular NAV Groupings" onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14-4H5m14 8H9m10 4H9"/></svg>NAV Groupings</button>
       <button class="fb-chip" data-kind="publish" data-deep="publish-dates"     title="Publicar / Despublicar Agrupamentos" onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19V6m0 0l-7 7m7-7l7 7"/></svg>Publicação</button>
-    </div>
-  </div>
-
-  <div class="fb-group">
-    <span class="fb-group-label">Rotina Diária</span>
-    <div class="fb-group-chips">
-      <button class="fb-chip" data-kind="flow"    data-deep="daily-flow"        title="Fluxo (data única ou faixa)" onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Fluxo</button>
-      <button class="fb-chip" data-kind="delete"  data-deep="revert-flow"       title="Reverter (data única ou faixa)" onclick="Funcoes.open(this)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg>Reverter</button>
     </div>
   </div>
 
@@ -695,206 +650,6 @@ try {
      iframes are created lazily on first visit. -->
 <div id="tool-view" class="hidden-view"></div>
 
-<!-- ─── Day-trade view (Lançamentos chip → inline panel) ──────────────────
-     In-page replica of /excecoes > Ajustes day-trade. No iframe, no
-     redirect — the entire 3-step workflow runs against the same
-     `/api/excecoes/intraday/*` endpoints used by the Exceções page. The
-     view sits as a sibling of #controlpanel-view so Daytrade.open / .close
-     swap them via the same .hidden-view class. -->
-<div id="daytrade-view" class="hidden-view px-6 pt-5 pb-6 space-y-4">
-
-  <!-- Card 1: filter — toolbar layout mirrors `Identificar transactions`
-       on the Beehus Console (templates/beehus_console.html, section
-       i-card-filters): a small section title + a single CSS-grid row with
-       label-above-input columns + a unified action row. Optional groupings
-       + wallets selectors live in a collapsible block toggled from the
-       action row, identical to that page's "+ Groupings & Wallets" pattern. -->
-  <div class="bg-white rounded-xl shadow px-6 py-4">
-    <h2 class="text-sm font-semibold text-gray-800 mb-1">Day-trade — Lançamentos</h2>
-
-    <div class="grid gap-3 items-start" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
-      <div>
-        <label class="block text-[10px] font-medium uppercase tracking-wide text-gray-500 mb-0.5">
-          Empresa <span class="text-red-500">*</span>
-        </label>
-        <select id="dt-company" onchange="Daytrade.onCompanyChange()"
-          class="w-full max-w-[240px] border rounded px-3 py-1.5 text-xs bg-white text-gray-700">
-          <option value="">Carregando empresas...</option>
-        </select>
-      </div>
-
-      <!-- Initial + final dates share a single grid cell so the two inputs
-           sit right next to each other (separated only by an arrow) instead
-           of being pushed apart by the auto-fit grid. Each date keeps its
-           own label ("Data inicial / Data final" — the column-level label
-           swaps to "Data inicial" via JS when faixa is active). The
-           `invisible` class on the final-date wrapper preserves its slot
-           width so toggling única/faixa doesn't shift the row. -->
-      <div>
-        <div class="flex items-end gap-1.5">
-          <div>
-            <span class="dt-mode-seg inline-flex mb-0.5">
-              <button type="button" id="dt-mode-single" class="active" onclick="Daytrade.onModeChange('single')">única</button>
-              <button type="button" id="dt-mode-range"  onclick="Daytrade.onModeChange('range')">faixa</button>
-            </span>
-            <label class="block text-[10px] font-medium uppercase tracking-wide text-gray-500 mb-0.5" id="dt-initialDate-label">
-              Data de liquidação <span class="text-red-500">*</span>
-            </label>
-            <input id="dt-initialDate" type="date"
-              class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700" style="width:150px" />
-          </div>
-          <div id="dt-finalDate-wrap" class="invisible flex items-end gap-1.5">
-            <span class="text-gray-400 text-xs leading-none pb-2.5">→</span>
-            <div>
-              <label class="block text-[10px] font-medium uppercase tracking-wide text-gray-500 mb-0.5">
-                Data final <span class="text-red-500">*</span>
-              </label>
-              <input id="dt-finalDate" type="date"
-                class="border rounded px-3 py-1.5 text-xs bg-white text-gray-700" style="width:150px" />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="flex gap-2 items-center flex-wrap mt-3 pt-3 border-t">
-      <button onclick="Daytrade.runCheck()"
-        class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-1.5 text-xs font-semibold">
-        Verificar day-trades
-      </button>
-      <button onclick="Daytrade.resetFilters()"
-        class="border rounded px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100">
-        Limpar filtros
-      </button>
-      <button id="dt-toggle-advanced" onclick="Daytrade.toggleAdvanced()"
-        class="border rounded px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
-        title="Mostrar/ocultar selectores de grouping e wallet">
-        + Groupings &amp; Wallets
-      </button>
-      <span id="dt-status" class="text-[11px] text-gray-500 ml-2"></span>
-    </div>
-
-    <div id="dt-warnings" class="space-y-1 mt-2"></div>
-
-    <!-- Advanced filters: collapsed by default; toggled by + Groupings & Wallets.
-         Hidden entirely in "Todas as empresas" mode (groupings/wallets are
-         per-company, so they can't apply to a multi-company iteration). -->
-    <div id="dt-advanced-wrap" class="hidden mt-3 pt-3 border-t space-y-3">
-      <p class="text-[10px] text-gray-400">
-        Sem seleção, busca em todas as wallets da empresa. Selecionar groupings filtra a lista de wallets disponíveis (união).
-      </p>
-      <div>
-        <p class="text-[11px] font-medium text-gray-600 mb-1">Groupings</p>
-        <div class="dt-xfer">
-          <div class="dt-xfer-pane">
-            <h4>Disponíveis <span id="dt-grp-available-count">0</span></h4>
-            <select id="dt-grp-available" multiple ondblclick="Daytrade.addGroupingSelected()"></select>
-          </div>
-          <div class="dt-xfer-actions">
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.addGroupingSelected()" title="Adicionar destacadas">→</button>
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.addGroupingAll()" title="Adicionar todas">»</button>
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.removeGroupingSelected()" title="Remover destacadas">←</button>
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.removeGroupingAll()" title="Limpar">«</button>
-          </div>
-          <div class="dt-xfer-pane">
-            <h4>Selecionados <span id="dt-grp-selected-count">0</span></h4>
-            <select id="dt-grp-selected" multiple ondblclick="Daytrade.removeGroupingSelected()"></select>
-          </div>
-        </div>
-      </div>
-      <div>
-        <p class="text-[11px] font-medium text-gray-600 mb-1">Wallets</p>
-        <div class="dt-xfer">
-          <div class="dt-xfer-pane">
-            <h4>Disponíveis <span id="dt-wal-available-count">0</span></h4>
-            <select id="dt-wal-available" multiple ondblclick="Daytrade.addWalletSelected()"></select>
-          </div>
-          <div class="dt-xfer-actions">
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.addWalletSelected()" title="Adicionar destacadas">→</button>
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.addWalletAll()" title="Adicionar todas">»</button>
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.removeWalletSelected()" title="Remover destacadas">←</button>
-            <button class="border rounded text-gray-700 hover:bg-gray-100" onclick="Daytrade.removeWalletAll()" title="Limpar">«</button>
-          </div>
-          <div class="dt-xfer-pane">
-            <h4>Selecionadas <span id="dt-wal-selected-count">0</span></h4>
-            <select id="dt-wal-selected" multiple ondblclick="Daytrade.removeWalletSelected()"></select>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Card 2: detected groups -->
-  <div id="dt-groups-section" class="bg-white rounded-xl shadow px-6 py-4 hidden">
-    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-      <p class="text-xs font-semibold text-gray-700">
-        Day-trades detectados <span class="text-gray-400 font-normal" id="dt-groups-count"></span>
-      </p>
-      <div class="flex items-center gap-2">
-        <button onclick="Daytrade.toggleGroupsAll(true)"  class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Marcar todos</button>
-        <button onclick="Daytrade.toggleGroupsAll(false)" class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Desmarcar todos</button>
-        <button id="dt-build-patches-btn" onclick="Daytrade.runBuildPatches()" disabled
-          class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-semibold">
-          Gerar posições patcheadas (<span id="dt-build-count">0</span>) →
-        </button>
-      </div>
-    </div>
-    <div class="border rounded overflow-hidden">
-      <table class="w-full text-xs">
-        <thead class="bg-gray-50 text-gray-500 uppercase">
-          <tr>
-            <th class="px-2 py-1.5 text-center w-8"><input type="checkbox" id="dt-groups-master" onchange="Daytrade.toggleGroupsAll(this.checked)" /></th>
-            <th class="px-2 py-1.5 text-left min-w-[110px]">Data liq.</th>
-            <th class="px-2 py-1.5 text-left min-w-[160px]">Carteira</th>
-            <th class="px-2 py-1.5 text-left min-w-[200px]">Security</th>
-            <th class="px-2 py-1.5 text-right min-w-[60px]">#Tx</th>
-            <th class="px-2 py-1.5 text-right min-w-[140px]">Contribuição (Σ saldo)</th>
-            <th class="px-2 py-1.5 text-left min-w-[60px]">Moeda</th>
-          </tr>
-        </thead>
-        <tbody id="dt-groups-tbody"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Card 3: patched positions + transactions preview -->
-  <div id="dt-patched-section" class="bg-white rounded-xl shadow px-6 py-4 hidden">
-    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-      <p class="text-xs font-semibold text-gray-700">
-        Posições patcheadas <span class="text-gray-400 font-normal" id="dt-patched-count"></span>
-      </p>
-      <div class="flex items-center gap-2">
-        <button onclick="Daytrade.togglePatchesAll(true)"  class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Marcar todas</button>
-        <button onclick="Daytrade.togglePatchesAll(false)" class="border rounded px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100">Desmarcar todas</button>
-        <button id="dt-apply-btn" onclick="Daytrade.runApply()" disabled
-          class="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded px-3 py-1.5 text-xs font-semibold">
-          Enviar selecionadas (<span id="dt-apply-count">0</span>)
-        </button>
-      </div>
-    </div>
-    <p class="text-[10px] text-gray-400 mb-2">
-      Cada bloco abre mostrando apenas as linhas patcheadas (zerar/adicionar)
-      e as transações <span class="font-mono">securityContributionAdjustment</span>
-      planejadas. Clique no cabeçalho para expandir e ver as linhas baseline
-      (não tocadas) da posição original.
-    </p>
-    <div id="dt-patched-list" class="space-y-3"></div>
-  </div>
-
-  <!-- Card 4: apply results -->
-  <div id="dt-results" class="bg-white rounded-xl shadow px-6 py-4 hidden">
-    <p class="text-xs font-semibold text-gray-700 mb-2">Resultado do envio</p>
-    <div id="dt-results-list" class="space-y-1"></div>
-  </div>
-</div>
-
-<!-- Chart.js: usada APENAS pelo relatório A4 da exceção "Carteira
-     gerencial" do strip partial (gráfico de linha + donut). Carregada
-     também no /stripping standalone; aqui no controlpanel evita a
-     necessidade de inicialização lazy quando o operador entra pelo
-     chip "Stripping". -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-
 <!-- Strip de Posições — view extraída para partial reaproveitado pela
      página /stripping. Ver templates/partials/_strip_view.html. -->
 {% include 'partials/_strip_view.html' %}
@@ -929,10 +684,9 @@ try {
     <button
       data-date="{{ card.date }}"
       onclick="selectDate('{{ card.date }}')"
-      class="date-card border-2 border-gray-200 rounded-lg px-2 py-1.5 text-center bg-white hover:border-blue-300 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap overflow-hidden
+      class="date-card border-2 border-gray-200 rounded-lg px-2 py-1.5 text-center bg-white hover:border-blue-300 transition-colors flex items-center justify-center whitespace-nowrap overflow-hidden
              {% if loop.last %}active{% endif %}">
-      <span class="card-date text-[10px] font-semibold text-gray-500 truncate">{{ card.date }}</span>
-      <span class="card-total text-sm font-bold text-gray-700 leading-none flex-shrink-0">{{ card.total }}</span>
+      <span class="card-date text-xs font-semibold text-gray-600 truncate">{{ card.date }}</span>
     </button>
     {% endfor %}
   </div>
@@ -971,7 +725,7 @@ try {
 
 {% block modals %}
 <div id="modal" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" style="display:none!important">
-  <div class="bg-white rounded-xl shadow-xl w-full max-w-[95vw] max-h-[90vh] flex flex-col">
+  <div class="relative bg-white rounded-xl shadow-xl w-full max-w-[95vw] max-h-[90vh] flex flex-col">
     <div class="flex items-center justify-between px-6 py-4 border-b">
       <div>
         <p id="modal-title"       class="font-bold text-gray-800 text-base"></p>
@@ -1038,6 +792,49 @@ try {
   </div>
 </div>
 
+<!-- Wallet-issues modal (Verificar por carteira)
+     Opened by clicking a company name in the first column. Two views inside a
+     single modal: (1) a wallet picker (filterable list, issue-count badges),
+     and (2) the pending issues of the selected wallet on the active date,
+     grouped by issue type. "← Voltar" returns to the picker. -->
+<div id="wallet-issues-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
+     style="display:none;z-index:56"
+     onclick="if(event.target===this) closeWalletIssues()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between px-6 py-4 border-b">
+      <div class="min-w-0 flex items-center gap-3">
+        <button id="wi-back" onclick="_wiShowPicker()" style="display:none"
+                class="text-gray-400 hover:text-gray-600 text-sm flex-shrink-0"
+                title="Voltar para a seleção de carteira">&larr; Voltar</button>
+        <div class="min-w-0">
+          <p id="wi-title"    class="font-bold text-gray-800 text-base truncate"></p>
+          <p id="wi-subtitle" class="text-gray-500 text-xs truncate"></p>
+        </div>
+      </div>
+      <button onclick="closeWalletIssues()" class="text-gray-400 hover:text-gray-600 text-xl flex-shrink-0 ml-3">&times;</button>
+    </div>
+
+    <!-- View 1: wallet picker -->
+    <div id="wi-picker" class="flex flex-col flex-1 min-h-0">
+      <div class="px-6 py-2 border-b bg-gray-50 flex items-center gap-2 text-xs">
+        <input id="wi-filter" type="text" placeholder="Filtrar carteira..."
+               oninput="_wiRenderPicker()"
+               class="ec-input flex-1" style="font-family: inherit" />
+      </div>
+      <div class="overflow-y-auto flex-1 px-6 py-3">
+        <p id="wi-picker-msg" class="text-center text-gray-400 py-6">Carregando...</p>
+        <div id="wi-picker-list" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- View 2: issues for the selected wallet -->
+    <div id="wi-issues" class="overflow-y-auto flex-1 px-6 py-3" style="display:none">
+      <p id="wi-issues-msg" class="text-center text-gray-400 py-6">Carregando...</p>
+      <div id="wi-issues-content" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Wallets sub-modal -->
 <div id="wallets-modal" class="fixed inset-0 bg-black/30 flex items-center justify-center" style="display:none;z-index:60">
   <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[60vh] flex flex-col">
@@ -1055,6 +852,89 @@ try {
         </thead>
         <tbody id="wallets-tbody"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- Complement upload modal -->
+<div id="complement-modal" onclick="_closeComplementModal()" class="fixed inset-0 bg-black/30 flex items-center justify-center" style="display:none;z-index:75">
+  <div onclick="event.stopPropagation()" class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]">
+    <!-- header -->
+    <div class="flex items-center justify-between px-5 py-3 border-b flex-shrink-0">
+      <div>
+        <p class="font-bold text-gray-800 text-sm">Importar Complemento</p>
+        <p class="text-[10px] text-gray-400">Enriquece os dados de ativos não mapeados com informações adicionais antes de reprocessar.</p>
+      </div>
+      <button onclick="_closeComplementModal()" class="text-gray-400 hover:text-gray-600 ml-4 flex-shrink-0">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <!-- body -->
+    <div class="px-5 py-4 flex flex-col gap-4 overflow-y-auto">
+      <div id="complement-upload-section" class="flex flex-col gap-4">
+      <!-- format description -->
+      <div class="text-xs text-gray-600 bg-gray-50 rounded-lg p-3 space-y-1">
+        <p class="font-semibold text-gray-700">Formato do arquivo</p>
+        <p>Formatos aceitos: <span class="font-mono">.xlsx</span>, <span class="font-mono">.csv</span>, <span class="font-mono">.json</span>, <span class="font-mono">.txt</span></p>
+        <p>A primeira linha é sempre tratada como cabeçalho e ignorada.</p>
+        <p><strong>Coluna 1</strong> — <span class="font-mono">unprocessedId</span> (trim + case-insensitive)</p>
+        <p><strong>Coluna 2</strong> — texto complementar a ser mesclado com o UID original</p>
+      </div>
+      <!-- warning -->
+      <div class="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+        <svg class="w-3.5 h-3.5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>
+        <span>Ao confirmar, o mapeamento será reprocessado do início com o complemento incorporado. Ajustes feitos na sessão atual que ainda não foram finalizados serão perdidos.</span>
+      </div>
+      <!-- dropzone -->
+      <label id="complement-dropzone" for="complement-file-input"
+        class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-lg py-8 cursor-pointer hover:border-slate-400 hover:bg-slate-50 transition-colors">
+        <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+        </svg>
+        <span class="text-xs text-gray-500">Clique ou arraste o arquivo aqui</span>
+        <span id="complement-filename" class="text-xs font-semibold text-slate-700 hidden"></span>
+        <input id="complement-file-input" type="file" accept=".xlsx,.csv,.json,.txt" class="hidden">
+      </label>
+      </div><!-- /complement-upload-section -->
+      <!-- preview section (shown after parse) -->
+      <div id="complement-preview-section" class="hidden flex flex-col gap-2">
+        <p id="complement-preview-count" class="text-xs text-gray-500"></p>
+        <div class="overflow-x-auto border border-gray-200 rounded">
+          <table class="w-full text-xs border-collapse">
+            <thead><tr class="bg-gray-50">
+              <th class="text-left px-2 py-1.5 font-semibold text-gray-600 border-b border-gray-200">unprocessedId</th>
+              <th class="text-left px-2 py-1.5 font-semibold text-gray-600 border-b border-gray-200">Complemento</th>
+            </tr></thead>
+            <tbody id="complement-preview-rows"></tbody>
+          </table>
+        </div>
+        <p id="complement-parse-error" class="text-xs text-red-600 hidden"></p>
+      </div>
+      <!-- merge priority -->
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-2">Prioridade ao mesclar</p>
+        <div class="flex flex-col gap-1.5">
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input type="radio" name="complement-priority" value="uid" checked class="mt-0.5 accent-slate-600">
+            <span class="text-xs text-gray-700"><strong>UID original (padrão)</strong> — mantém as features extraídas do UID; o complemento preenche apenas os campos ausentes.</span>
+          </label>
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input type="radio" name="complement-priority" value="complement" class="mt-0.5 accent-slate-600">
+            <span class="text-xs text-gray-700"><strong>Complemento</strong> — as features extraídas do complemento sobrescrevem as do UID quando ambas estiverem presentes.</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <!-- footer -->
+    <div class="flex items-center px-5 py-3 border-t flex-shrink-0 gap-2">
+      <button id="complement-back-btn" onclick="_complementBack()" class="hidden px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">← Voltar</button>
+      <div class="flex items-center gap-2 ml-auto">
+        <button onclick="_closeComplementModal()" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Cancelar</button>
+        <button id="complement-confirm-btn" onclick="_complementConfirm()" disabled
+          class="px-3 py-1.5 text-xs font-semibold text-white bg-slate-500 rounded hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
+          Carregar e Pré-visualizar
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -1120,12 +1000,14 @@ try {
          when at least one wallet has a snapshot — those are the strongest
          signal for the right pick. -->
     <div class="px-5 pt-2 border-b bg-gray-50 flex items-center gap-1 text-xs">
+      {% if identificar_enabled %}
       <button id="sec-search-tab-positions" type="button"
         onclick="_switchSecuritySearchSource('positions')"
         class="px-3 py-1.5 rounded-t border-b-2 border-transparent text-gray-500 hover:text-blue-600">
         <span>Posições da carteira</span>
         <span id="sec-search-positions-badge" class="ml-1 text-[10px] text-gray-400"></span>
       </button>
+      {% endif %}
       <button id="sec-search-tab-cadastro" type="button"
         onclick="_switchSecuritySearchSource('cadastro')"
         class="px-3 py-1.5 rounded-t border-b-2 border-transparent text-gray-500 hover:text-blue-600">
@@ -1229,6 +1111,87 @@ try {
   };
   let _cellDetailData = null;      // last response from /cell-detail (for re-filtering)
 
+  // Contagem de colunas (vinda do backend) usada para montar linhas "vazias"
+  // quando uma empresa só tem transações pendentes e é anexada via /txn-counts.
+  const _N_ISSUE_TYPES = {{ types|length }};
+  const _N_EXTRA_COLS  = {{ extra_cols|length }};
+
+  // ── Coluna TXN (transações não identificadas) — carregada à parte ──────────
+  // O endpoint G (transactions) é o mais caro do /rows (~60% do tempo medido),
+  // então a grade renderiza primeiro com E + /results e a coluna TXN é preenchida
+  // depois por /api/controlpanel/txn-counts. Mantém o conjunto de empresas
+  // correto: empresas que só têm transações pendentes (ausentes da grade inicial)
+  // são ANEXADAS quando esta rota retorna.
+  function _txnCellHtml(companyId, companyName, tx) {
+    // tx === null → estado "carregando" ("…"); senão {count, label, cls}.
+    const data = `data-txn-company="${_escHtml(companyId)}" data-txn-name="${_escHtml(companyName)}"`;
+    if (!tx) {
+      return `<td class="px-1 py-1.5 text-center text-gray-300 col-extras-first js-txn-cell" ${data}><span class="opacity-40">…</span></td>`;
+    }
+    if (tx.count > 0) {
+      return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first cursor-pointer hover:opacity-75 js-open-txn js-txn-cell" ${data}
+                data-company-id="${_escHtml(companyId)}" data-date="${_escHtml(_currentDate || '')}"
+                title="Abrir Identificar Transações para ${_escHtml(companyName)} em ${_escHtml(_currentDate || '')}">${_escHtml(tx.label)}</td>`;
+    }
+    return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first js-txn-cell" ${data}>${_escHtml(tx.label)}</td>`;
+  }
+
+  function _emptyRowWithTxn(companyId, companyName, tx) {
+    const issueCells = Array(_N_ISSUE_TYPES).fill(
+      `<td class="px-1 py-1.5 text-center text-gray-300">—</td>`).join("");
+    const extraCells = Array.from({length: _N_EXTRA_COLS}, (_, i) =>
+      `<td class="px-1 py-1.5 text-center text-gray-300${i === 0 ? ' col-extras-first' : ''}">—</td>`).join("");
+    return `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(companyName.toLowerCase())}">
+      ${_companyCellHtml(companyId, companyName)}
+      ${issueCells}
+      ${_txnCellHtml(companyId, companyName, tx)}
+      ${extraCells}
+    </tr>`;
+  }
+
+  // Company-name cell (first column). Clickable → opens the "Verificar por
+  // carteira" modal (select a wallet, see its pending issues on the active
+  // date). Reading companyId/name from data-* (via the delegated tbody
+  // handler) instead of an inline onclick avoids XSS + apostrophe breakage
+  // for names like "D'Or", mirroring the issue-cell pattern.
+  function _companyCellHtml(companyId, companyName) {
+    return `<td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate cursor-pointer hover:text-indigo-600 js-open-wallet-issues"
+                data-company-id="${_escHtml(companyId)}"
+                data-company-name="${_escHtml(companyName)}"
+                title="Ver issues por carteira — ${_escHtml(companyName)}">${_escHtml(companyName)}</td>`;
+  }
+
+  function _loadTxnCounts(date) {
+    fetch(`/api/controlpanel/txn-counts?date=${encodeURIComponent(date)}`)
+      .then(r => r.json())
+      .then(({ items }) => {
+        if (date !== _currentDate) return;   // usuário trocou de data — descarta
+        const byId = {};
+        (items || []).forEach(it => { byId[it.companyId] = it; });
+        // 1) Atualiza as células TXN das linhas já renderizadas.
+        document.querySelectorAll("#tbody .js-txn-cell").forEach(cell => {
+          const cid  = cell.dataset.txnCompany;
+          const name = cell.dataset.txnName || cid;
+          const it   = byId[cid];
+          const tx   = it ? it.txn : {count: 0, label: "—", cls: "text-gray-300"};
+          cell.outerHTML = _txnCellHtml(cid, name, tx);
+          delete byId[cid];                  // consumida
+        });
+        // 2) Empresas que só têm transações pendentes (não vieram do /rows) →
+        //    anexa linhas "vazias" com a coluna TXN preenchida.
+        const leftover = Object.values(byId);
+        if (leftover.length) {
+          leftover.sort((a, b) => a.company.localeCompare(b.company));
+          const tbody = document.getElementById("tbody");
+          leftover.forEach(it =>
+            tbody.insertAdjacentHTML("beforeend",
+              _emptyRowWithTxn(it.companyId, it.company, it.txn)));
+          filterRows();
+        }
+      })
+      .catch(() => {/* TXN é best-effort; silencia para não derrubar a grade */});
+  }
+
   function selectDate(date) {
     _currentDate = date;
 
@@ -1247,7 +1210,7 @@ try {
     fetch(`/api/controlpanel/rows?${params}`).then(r => r.json()).then(({ rows }) => {
       document.getElementById("tbody").innerHTML = rows.map(r =>
         `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(r.company.toLowerCase())}">
-          <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(r.company)}">${_escHtml(r.company)}</td>
+          ${_companyCellHtml(r.companyId, r.company)}
           ${r.cells.map(c => c.count > 0
             ? `<td class="px-1 py-1.5 text-center ${c.cls} cursor-pointer hover:opacity-75 js-open-modal"
                  data-company-id="${_escHtml(r.companyId)}"
@@ -1255,29 +1218,11 @@ try {
                  data-issue-type="${_escHtml(c.type)}">${_escHtml(c.label)}</td>`
             : `<td class="px-1 py-1.5 text-center ${c.cls}">${_escHtml(c.label)}</td>`
           ).join("")}
-          ${(() => {
-            // TXN column: unidentified-transaction count. Clickable when > 0 —
-            // opens Identificar Transações for this company + selected date.
-            const tx = r.txn || {count: 0, label: "—", cls: "text-gray-300"};
-            return tx.count > 0
-              ? `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first cursor-pointer hover:opacity-75 js-open-txn"
-                    data-company-id="${_escHtml(r.companyId)}"
-                    data-date="${_escHtml(_currentDate || '')}"
-                    title="Abrir Identificar Transações para ${_escHtml(r.company)} em ${_escHtml(_currentDate || '')}">${_escHtml(tx.label)}</td>`
-              : `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first">${_escHtml(tx.label)}</td>`;
-          })()}
+          ${/* TXN: placeholder "…" — preenchido depois por _loadTxnCounts (G é
+                o endpoint mais caro, carregado após a tela renderizar). */
+            _txnCellHtml(r.companyId, r.company, null)}
           ${(r.extras || []).map((e, i) => {
             const sep = i === 0 ? " col-extras-first" : "";
-            // GAP with count > 0: drill into Conciliação for this company+date.
-            // The link is rendered inline (not via JS handler) so the user
-            // gets right-click → "open in new tab" semantics for free, and
-            // we don't widen the click target with another delegated listener.
-            if (e.key === "gap" && e.count > 0) {
-              return `<td class="px-1 py-1.5 text-center ${e.cls}${sep} cursor-pointer hover:opacity-75 js-open-gap"
-                        data-company-id="${_escHtml(r.companyId)}"
-                        data-date="${_escHtml(_currentDate || '')}"
-                        title="Abrir Conciliação para ${_escHtml(r.company)} em ${_escHtml(_currentDate || '')}">${_escHtml(e.label)}</td>`;
-            }
             // Wallet/grouping progress columns become clickable when the
             // denominator is known (total > 0). The "—" placeholder cells
             // (total = 0, no work to inspect) stay inert. Click opens the
@@ -1296,6 +1241,10 @@ try {
       document.getElementById("msg").style.display   = "none";
       document.getElementById("table").style.display = "";
       filterRows();
+
+      // Tela já visível com E + /results; agora busca a coluna TXN (endpoint G,
+      // o mais caro) em segundo plano e preenche os "…".
+      _loadTxnCounts(date);
     });
   }
 
@@ -1336,10 +1285,10 @@ try {
   // path. Reading from data-* via dataset avoids both (HTML parser decodes
   // attributes, JS never re-parses them as strings).
   document.getElementById("tbody").addEventListener("click", e => {
-    // GAP drill-down: send the operator to Conciliação for this company+date.
-    const gapTd = e.target.closest("td.js-open-gap");
-    if (gapTd) {
-      _openConciliacao(gapTd.dataset.companyId, gapTd.dataset.date);
+    // Company name (first column): open the per-wallet issue checker.
+    const companyTd = e.target.closest("td.js-open-wallet-issues");
+    if (companyTd) {
+      openWalletIssues(companyTd.dataset.companyId, companyTd.dataset.companyName);
       return;
     }
     // Progress-column drill-down (Posições Processadas / NAV Wallet /
@@ -1365,28 +1314,6 @@ try {
     openModal(td.dataset.companyId, td.dataset.companyName, td.dataset.issueType);
   });
 
-  // ── GAP → Conciliação drill-down ───────────────────────────────────────
-  // Conciliação's index already auto-inits from ?companyId=&date= (see
-  // templates/conciliacao.html), so all we have to do is point the shell
-  // at /conciliacao with those params; navigateTo() in shell.html forces
-  // an iframe reload when extraParams are present, which the auto-init
-  // hook then picks up. Falls back to a same-tab redirect for users
-  // visiting /controlpanel directly (outside the shell).
-  function _openConciliacao(companyId, date) {
-    if (!companyId) return;
-    const qs = new URLSearchParams();
-    qs.set("companyId", companyId);
-    if (date) qs.set("date", date);
-    if (window.parent && window.parent !== window) {
-      window.parent.postMessage(
-        {type: "navigate", path: "/conciliacao", params: qs.toString()},
-        "*",
-      );
-    } else {
-      window.location.href = "/conciliacao?" + qs.toString();
-    }
-  }
-
   // ── TXN → Identificar Transações drill-down ────────────────────────────
   // Opens the Identificar Transações tool INLINE (same iframe as the
   // "Identificar" chip, so the favorites bar stays visible — we do NOT navigate
@@ -1395,6 +1322,190 @@ try {
   // counter the operator just clicked.
   function _openIdentifyTxn(companyId, date) {
     Funcoes.openIdentifyWith(companyId, date);
+  }
+
+  // ── Wallet-issues modal (Verificar por carteira) ────────────────────────
+  // Clicking a company name opens this modal. View 1 (`#wi-picker`) lists the
+  // company's wallets with a pending-issue count and a filter box; picking one
+  // switches to View 2 (`#wi-issues`) with that wallet's issues on the active
+  // date, grouped by issue type. Both views come from
+  // /api/controlpanel/wallet-issues (single pre-processing call per company).
+  let _wiCompanyId = null, _wiCompanyName = "", _wiWallets = null;
+
+  async function openWalletIssues(companyId, companyName) {
+    if (!_currentDate || !companyId) return;
+    _wiCompanyId   = companyId;
+    _wiCompanyName = companyName || companyId;
+    _wiWallets     = null;
+
+    document.getElementById("wallet-issues-modal").style.display = "flex";
+    _wiShowPicker();
+    document.getElementById("wi-title").textContent    = `Verificar por carteira — ${_wiCompanyName}`;
+    document.getElementById("wi-subtitle").textContent = `${_wiCompanyName} • ${_currentDate}`;
+    document.getElementById("wi-filter").value = "";
+
+    const msg  = document.getElementById("wi-picker-msg");
+    const list = document.getElementById("wi-picker-list");
+    msg.style.display  = "";
+    msg.textContent    = "Carregando...";
+    list.style.display = "none";
+    list.innerHTML     = "";
+
+    try {
+      const params = new URLSearchParams({companyId, date: _currentDate});
+      const r = await fetch(`/api/controlpanel/wallet-issues?${params}`);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        msg.textContent = `Erro: ${err.error || r.status}`;
+        return;
+      }
+      const data = await r.json();
+      _wiWallets = data.wallets || [];
+      _wiRenderPicker();
+    } catch (e) {
+      msg.textContent = "Erro de rede: " + e;
+    }
+  }
+
+  function closeWalletIssues() {
+    document.getElementById("wallet-issues-modal").style.display = "none";
+    _wiCompanyId = null; _wiWallets = null;
+  }
+
+  // Toggle back to the wallet picker (from the issues view).
+  function _wiShowPicker() {
+    document.getElementById("wi-picker").style.display = "flex";
+    document.getElementById("wi-issues").style.display = "none";
+    document.getElementById("wi-back").style.display   = "none";
+    document.getElementById("wi-subtitle").textContent = `${_wiCompanyName} • ${_currentDate}`;
+  }
+
+  function _wiRenderPicker() {
+    const list = document.getElementById("wi-picker-list");
+    const msg  = document.getElementById("wi-picker-msg");
+    if (!_wiWallets) return;
+    const q = (document.getElementById("wi-filter").value || "").trim().toLowerCase();
+    const rows = _wiWallets.filter(w => !q || (w.walletName || "").toLowerCase().includes(q));
+
+    if (!_wiWallets.length) {
+      msg.style.display = ""; msg.textContent = "Nenhuma carteira nesta empresa.";
+      list.style.display = "none"; return;
+    }
+    msg.style.display = "none";
+    list.style.display = "";
+
+    const withIssues = _wiWallets.filter(w => w.issueCount > 0).length;
+    const header = `<p class="text-[11px] text-gray-500 mb-2">
+        <span class="font-semibold text-gray-700">${withIssues}</span> de
+        <span class="font-semibold text-gray-700">${_wiWallets.length}</span>
+        carteira(s) com issues pendentes em ${_escHtml(_currentDate)}
+      </p>`;
+
+    if (!rows.length) {
+      list.innerHTML = header + `<p class="text-center text-gray-400 py-4">Nenhuma carteira corresponde ao filtro.</p>`;
+      return;
+    }
+
+    list.innerHTML = header + `<div class="flex flex-col gap-1">` + rows.map(w => {
+      const badge = w.issueCount > 0
+        ? `<span class="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 flex-shrink-0">${w.issueCount} issue${w.issueCount > 1 ? "s" : ""}</span>`
+        : `<span class="inline-block px-2 py-0.5 rounded text-[10px] bg-green-100 text-green-700 flex-shrink-0">sem issues</span>`;
+      return `<button type="button"
+                data-wallet-id="${_escHtml(w.walletId)}"
+                data-wallet-name="${_escHtml(w.walletName || w.walletId)}"
+                class="js-wi-pick w-full flex items-center justify-between gap-3 px-3 py-2 rounded border border-gray-100 hover:bg-gray-50 text-left">
+                <span class="text-gray-700 text-xs truncate" title="${_escHtml(w.walletId)}">${_escHtml(w.walletName || w.walletId)}</span>
+                ${badge}
+              </button>`;
+    }).join("") + `</div>`;
+  }
+
+  // Delegated pick handler (avoids inline onclick with wallet names/ids).
+  document.getElementById("wi-picker-list").addEventListener("click", e => {
+    const btn = e.target.closest("button.js-wi-pick");
+    if (!btn) return;
+    loadWalletIssues(btn.dataset.walletId, btn.dataset.walletName);
+  });
+
+  async function loadWalletIssues(walletId, walletName) {
+    if (!_wiCompanyId || !_currentDate || !walletId) return;
+    document.getElementById("wi-picker").style.display = "none";
+    document.getElementById("wi-issues").style.display = "";
+    document.getElementById("wi-back").style.display   = "";
+    document.getElementById("wi-subtitle").textContent = `${walletName || walletId} • ${_currentDate}`;
+
+    const msg     = document.getElementById("wi-issues-msg");
+    const content = document.getElementById("wi-issues-content");
+    msg.style.display     = "";
+    msg.textContent       = "Carregando...";
+    content.style.display = "none";
+    content.innerHTML     = "";
+
+    try {
+      const params = new URLSearchParams({companyId: _wiCompanyId, date: _currentDate, walletId});
+      const r = await fetch(`/api/controlpanel/wallet-issues?${params}`);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        msg.textContent = `Erro: ${err.error || r.status}`;
+        return;
+      }
+      _wiRenderIssues(await r.json());
+    } catch (e) {
+      msg.textContent = "Erro de rede: " + e;
+    }
+  }
+
+  function _wiRenderIssues(data) {
+    const msg     = document.getElementById("wi-issues-msg");
+    const content = document.getElementById("wi-issues-content");
+    const groups  = data.types || [];
+
+    if (!data.total) {
+      msg.style.display = "";
+      msg.textContent   = "Nenhum issue pendente para esta carteira na data selecionada.";
+      content.style.display = "none";
+      return;
+    }
+    msg.style.display     = "none";
+    content.style.display = "";
+
+    const secCell = (i) => {
+      const name = i.beehusName || "";
+      const mid  = i.mainId || "";
+      if (!name && !mid && !i.securityId) return '<span class="text-gray-300">—</span>';
+      return `${_escHtml(name || "— sem cadastro")}${mid ? ` <span class="text-gray-400">· ${_escHtml(mid)}</span>` : ""}`;
+    };
+
+    content.innerHTML = `
+      <p class="text-[11px] text-gray-500 mb-3">
+        <span class="font-semibold text-gray-700">${data.total}</span>
+        issue(s) pendente(s) em ${groups.length} tipo(s)
+      </p>` + groups.map(g => `
+      <div class="mb-4">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="font-semibold text-gray-700 text-xs">${_escHtml(g.label)}</span>
+          <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">${g.issues.length}</span>
+        </div>
+        <table class="w-full text-xs border-collapse">
+          <thead class="bg-gray-50 text-gray-400 uppercase text-[9px]">
+            <tr>
+              <th class="px-2 py-1 text-left font-medium">External ID</th>
+              <th class="px-2 py-1 text-left font-medium">Security</th>
+              <th class="px-2 py-1 text-left font-medium">Unprocessed Security</th>
+              <th class="px-2 py-1 text-left font-medium">Criado em</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${g.issues.map(i => `
+              <tr class="border-b border-gray-50">
+                <td class="px-2 py-1 text-gray-600">${_escHtml(i.externalId || "—")}</td>
+                <td class="px-2 py-1 text-gray-700">${secCell(i)}</td>
+                <td class="px-2 py-1 text-gray-500 break-all">${_escHtml(i.unprocessedSecurityId || "—")}</td>
+                <td class="px-2 py-1 text-gray-400 whitespace-nowrap">${_escHtml(i.createdAt || "—")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`).join("");
   }
 
   // ── Cell-detail modal (Posições Processadas / NAV Wallet / NAV Grouping
@@ -1708,9 +1819,8 @@ try {
     const grid = document.getElementById("date-cards");
     grid.innerHTML = newCards.map((c, i) => `
       <button data-date="${_escHtml(c.date)}" onclick="selectDate(this.dataset.date)"
-        class="date-card border-2 border-gray-200 rounded-lg px-2 py-1.5 text-center bg-white hover:border-blue-300 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap overflow-hidden${i === newCards.length - 1 ? " active" : ""}">
-        <span class="card-date text-[10px] font-semibold text-gray-500 truncate">${_escHtml(c.date)}</span>
-        <span class="card-total text-sm font-bold text-gray-700 leading-none flex-shrink-0">${Number(c.total) || 0}</span>
+        class="date-card border-2 border-gray-200 rounded-lg px-2 py-1.5 text-center bg-white hover:border-blue-300 transition-colors flex items-center justify-center whitespace-nowrap overflow-hidden${i === newCards.length - 1 ? " active" : ""}">
+        <span class="card-date text-xs font-semibold text-gray-600 truncate">${_escHtml(c.date)}</span>
       </button>`).join("");
     if (newCards.length) {
       const last = newCards[newCards.length - 1].date;
@@ -1809,6 +1919,10 @@ try {
   // snapshot — those are the strongest signal for the right pick.
   let _secSearchSource = "cadastro";
   let _secSearchPositionsCount = null;  // null = not loaded yet
+  // Identification (the wallet-positions source) runs in a separate instance.
+  // When off, this instance hides the "Posições da carteira" tab and never
+  // calls /wallet-positions; the global "Cadastro" search remains available.
+  const IDENTIFICAR_ENABLED = {{ 'true' if identificar_enabled else 'false' }};
 
   function _openSecuritySearch(uid) {
     _secSearchUid = uid;
@@ -1818,7 +1932,11 @@ try {
     document.getElementById("sec-search-msg").textContent = "Carregando…";
     document.getElementById("sec-search-msg").style.display = "block";
     document.getElementById("sec-search-count").textContent = "";
-    document.getElementById("sec-search-positions-badge").textContent = "";
+    // The "Posições da carteira" tab + badge only exist when identification is
+    // enabled (gated by the identificar_enabled Jinja flag). Guard so the
+    // Cadastro-only flow on a Mongo-free instance doesn't throw on a null element.
+    const _posBadge = document.getElementById("sec-search-positions-badge");
+    if (_posBadge) _posBadge.textContent = "";
     _secSearchPositionsCount = null;
 
     // Populate type dropdown once from the cached _securityTypes list
@@ -1839,7 +1957,7 @@ try {
     // Default tab: wallet positions when we have wallets for this uid;
     // otherwise fall back to the global cadastro.
     const wallets = _walletsByUid[uid] || [];
-    _secSearchSource = wallets.length ? "positions" : "cadastro";
+    _secSearchSource = (IDENTIFICAR_ENABLED && wallets.length) ? "positions" : "cadastro";
     _setSecuritySearchTab(_secSearchSource);
 
     document.getElementById("security-search-modal").style.display = "flex";
@@ -1862,8 +1980,10 @@ try {
     const input     = document.getElementById("sec-search-input");
     const active   = "border-blue-600 text-blue-700 font-semibold bg-white";
     const inactive = "border-transparent text-gray-500 hover:text-blue-600";
+    // `positions` is absent when identification is off (tab hidden by Jinja);
+    // guard every access so the Cadastro tab still works on a Mongo-free instance.
     if (source === "positions") {
-      positions.className = "px-3 py-1.5 rounded-t border-b-2 " + active;
+      if (positions) positions.className = "px-3 py-1.5 rounded-t border-b-2 " + active;
       cadastro.className  = "px-3 py-1.5 rounded-t border-b-2 " + inactive;
       // Type filter only makes sense over the global cadastro — wallets
       // typically carry a handful of types, so hide it to reduce noise.
@@ -1871,7 +1991,7 @@ try {
       input.placeholder = "Filtrar posições por nome, mainId, ticker, taxId, ISIN, selicCode...";
     } else {
       cadastro.className  = "px-3 py-1.5 rounded-t border-b-2 " + active;
-      positions.className = "px-3 py-1.5 rounded-t border-b-2 " + inactive;
+      if (positions) positions.className = "px-3 py-1.5 rounded-t border-b-2 " + inactive;
       typeSel.style.display = "";
       input.placeholder = "Buscar por nome, mainId, ticker, taxId, ISIN, selicCode...";
     }
@@ -1879,6 +1999,7 @@ try {
 
   function _switchSecuritySearchSource(source) {
     if (source !== "positions" && source !== "cadastro") return;
+    if (source === "positions" && !IDENTIFICAR_ENABLED) return;  // tab hidden when off
     if (source === _secSearchSource) return;
     _secSearchSource = source;
     _setSecuritySearchTab(source);
@@ -2087,6 +2208,7 @@ try {
         securityId: sec.securityId,
         mainId:     sec.mainId,
         beehusName: sec.beehusName,
+        indexer:    sec.indexer || "",
         score:      "manual",
         confidence: "manual",
         matched_on: ["manual"],
@@ -2102,7 +2224,7 @@ try {
       tr.dataset.hasMatch = "1";
 
       const cells = tr.querySelectorAll("td");
-      // cells: 0=cb, 1=uid, 2=type, 3=conf, 4=secEnc, 5=mainId, 6=match, 7=cart, 8=pu, 9=preço
+      // cells: 0=cb, 1=uid, 2=type, 3=conf, 4=secEnc, 5=mainId, 6=indexer, 7=match, 8=cart, 9=pu, 10=preço
       const editIcon = `<svg class="w-3 h-3 inline-block text-gray-300 group-hover:text-blue-500 ml-1 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>`;
       if (cells[4]) {
         cells[4].className = "px-2 py-1.5 truncate cursor-pointer group hover:bg-blue-50";
@@ -2115,13 +2237,20 @@ try {
         cells[5].innerHTML = `<span class="font-mono text-[10px] text-gray-500">${_escHtml(sec.mainId)}</span>`;
       }
       if (cells[6]) {
-        cells[6].innerHTML = `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold bg-purple-100 text-purple-700" title="Seleção manual">manual</span>`;
+        cells[6].className = "px-2 py-1.5 truncate";
+        cells[6].title = sec.indexer || "";
+        cells[6].innerHTML = sec.indexer
+          ? `<span class="text-[10px] text-gray-600">${_escHtml(sec.indexer)}</span>`
+          : `<span class="text-gray-300 text-[10px]">—</span>`;
+      }
+      if (cells[7]) {
+        cells[7].innerHTML = `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold bg-purple-100 text-purple-700" title="Seleção manual">manual</span>`;
       }
       // Enable + check the row's checkbox
       const cb = cells[0]?.querySelector("input[type=checkbox]");
       if (cb) { cb.disabled = false; cb.checked = true; }
       // Reset price cell until we fetch it
-      if (cells[9]) cells[9].innerHTML = `<span class="text-gray-300">—</span>`;
+      if (cells[10]) cells[10].innerHTML = `<span class="text-gray-300">—</span>`;
     }
 
     _closeSecuritySearch();
@@ -2137,9 +2266,9 @@ try {
         const tr2 = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(uid)}"]`);
         if (!tr2) return;
         const cells = tr2.querySelectorAll("td");
-        if (cells[9]) {
-          cells[9].title = lastPrice?.date || "";
-          cells[9].innerHTML = _fmtNum(lastPrice?.value);
+        if (cells[10]) {
+          cells[10].title = lastPrice?.date || "";
+          cells[10].innerHTML = _fmtNum(lastPrice?.value);
         }
       })
       .catch(() => {});
@@ -2170,7 +2299,7 @@ try {
     const opts = _securityTypes.map(t =>
       `<option value="${_escHtml(t)}"${t === selected ? " selected" : ""}>${_escHtml(t)}</option>`).join("");
     return `<select onchange="_saveOverride('${_escHtml(uid).replace(/'/g,"\\'")}', this.value)"
-      class="border rounded px-1.5 py-0.5 text-[10px] font-semibold text-gray-700 bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">
+      class="w-full min-w-0 border rounded px-1.5 py-0.5 text-[10px] font-semibold text-gray-700 bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">
       ${opts}</select>`;
   }
 
@@ -2269,9 +2398,18 @@ try {
   function _updateSelectionCount() {
     // Count only visible+checked rows so the badge matches what the
     // action buttons (Aplicar / Gerar JSON / Cadastrar) will actually use.
-    const checked = _visibleCheckedMappingRows().length;
+    const rows = _visibleCheckedMappingRows();
+    const checked = rows.length;
     const el = document.getElementById("selection-count");
     if (el) el.textContent = `${checked} selecionado${checked !== 1 ? "s" : ""}`;
+    // "Mapear no sistema" only sends rows that have a target security, so its
+    // counter reflects what the PATCH will actually map (a checked row without a
+    // match is skipped). Disable the button when there's nothing to map.
+    const mappable = rows.filter(tr => tr.dataset.securityId).length;
+    const cnt = document.getElementById("apply-mapping-count");
+    if (cnt) cnt.textContent = mappable;
+    const btn = document.getElementById("apply-mapping-btn");
+    if (btn) btn.disabled = mappable === 0;
   }
 
   function _buildFilterBar(rows) {
@@ -2300,6 +2438,10 @@ try {
         <span id="selection-count" class="text-gray-400">0 selecionados</span>
       </span>
       <span class="ml-auto flex items-center gap-2">
+        <button id="complement-btn" onclick="_openComplementModal()" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-500 text-white rounded hover:bg-slate-600 text-xs font-semibold" title="Importar informações complementares para melhorar o match de ativos não mapeados">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12"/></svg>
+          Complemento
+        </button>
         <button onclick="_openRegistrationModal()" class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-xs font-semibold">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
           Cadastrar ativos
@@ -2308,10 +2450,11 @@ try {
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
           Gerar JSON Mapeamento
         </button>
-        <button id="apply-mapping-btn" onclick="_applyMappingDirect()" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-semibold"
-          title="Envia os mapeamentos selecionados direto para o sistema (PATCH na API Beehus)">
+        <button id="apply-mapping-btn" onclick="_applyMappingDirect()" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+          title="Envia os mapeamentos selecionados direto para o sistema (PATCH na API Beehus). O número é a quantidade de linhas marcadas com security que serão mapeadas.">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
           Mapear no sistema
+          <span id="apply-mapping-count" class="inline-flex items-center justify-center min-w-[1.25rem] px-1 py-0.5 rounded-full bg-white/25 text-white text-[10px] font-bold leading-none">0</span>
         </button>
       </span>
     </div>`;
@@ -2381,6 +2524,7 @@ try {
     btn.disabled = true;
     btn.innerHTML = `<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Aplicando…`;
 
+    let applied = false;
     try {
       const r = await api("POST", "/api/controlpanel/apply-mapping", {
         companyId: _currentCompanyId,
@@ -2399,14 +2543,20 @@ try {
         alert(`Falha ao aplicar mapeamento: ${data.error || `HTTP ${r.status}`}${detail}`);
         return;
       }
+      applied = true;
       btn.innerHTML = `&#10003; ${data.applied || checked.length} mapeados`;
       // Uncheck applied rows so they can't be re-applied accidentally.
       document.querySelectorAll("#modal-tbody input[type=checkbox]:checked").forEach(cb => { cb.checked = false; });
-      _updateSelectionCount?.();
-      setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 4000);
+      _updateSelectionCount?.();  // zera o badge "selecionados" imediatamente
+      // Restore the button (and its counter/disabled state) after the
+      // confirmation message has been shown.
+      setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; _updateSelectionCount(); }, 4000);
     } finally {
       // Token state may have changed (refreshed age, or cleared on 401).
       Token.refresh();
+      // On any non-success path (401, HTTP error, thrown), restore the button
+      // immediately so it doesn't stay stuck on "Aplicando…".
+      if (!applied) { btn.innerHTML = orig; btn.disabled = false; _updateSelectionCount(); }
     }
   }
 
@@ -2636,7 +2786,7 @@ try {
     { canonical: "GPA", patterns: ["GPA"] },
     { canonical: "Movida", patterns: ["MOVIDA"] },
     { canonical: "Opea", patterns: ["OPEA"] },
-    { canonical: "Petrobrás", patterns: ["PETROBRAS"] },
+    { canonical: "Petrobras", patterns: ["PETROBRAS"] },
     { canonical: "Iguatemi", patterns: ["IGUATEMI"] },
     { canonical: "Light", patterns: ["LIGHT"] },
     { canonical: "Seara", patterns: ["SEARA"] },
@@ -2646,7 +2796,7 @@ try {
     { canonical: "Barretos", patterns: ["BARRETOS"] },
     { canonical: "Dexco", patterns: ["DEXCO"] },
     { canonical: "Multiplan", patterns: ["MULTIPLAN"] },
-    { canonical: "Petrobrás", patterns: ["PETRÓLEO BRASILEIRO S.A"] },
+    { canonical: "Petrobras", patterns: ["PETRÓLEO BRASILEIRO S.A"] },
     { canonical: "SLC", patterns: ["SLC"] },
     { canonical: "Allos", patterns: ["ALLOS SA", "ALLOS"] },
     { canonical: "Automob", patterns: ["AUTOMOB"] },
@@ -3413,6 +3563,7 @@ try {
     const securityType = p ? "bond" : detected;
 
     let beehusName, values;
+    let fallbackEmissorShort = "";
     if (p) {
       beehusName = p.beehusName;
       values = {
@@ -3430,17 +3581,37 @@ try {
         redemptionSettlementDays: 0,
       };
     } else {
-      // Fallback: heurísticas antigas para linhas que não casam com nenhum spec.
-      const maturity = _extractMaturity(uid);
-      const ix       = _extractIndexerPct(uid);
+      // Fallback: quando o parser rígido (grade de formatos §15/§16) não casa,
+      // prioriza os campos já extraídos pelo matcher (extract_features, no
+      // security_matcher.py — mesma origem do tooltip de diagnóstico), que são
+      // mais confiáveis do que reprocessar o uid do zero. Heurísticas antigas
+      // (_extractMaturity/_extractIndexerPct/_inferType) só cobrem o que `ex`
+      // não tiver.
+      const instrumentType = _EXTRACTED_INSTRUMENT_TO_TYPE[String(ex.instrument || "").toUpperCase()];
+      const isDeb = ex.instrument === "DEB" || ex.instrument === "DEBENTURE";
+      const inferredType = instrumentType
+        ? (isDeb ? (_isInfraDebenture(uid) ? "infrastructureDebenture" : "debenture") : instrumentType)
+        : _inferType(detected, uid);
+
+      const emissorRaw = ex.issuer || "";
+      fallbackEmissorShort = emissorRaw
+        ? ((isDeb || ex.instrument === "CRI" || ex.instrument === "CRA")
+            ? _getDevedorCanonical(emissorRaw) : _getShortEmissor(emissorRaw))
+        : "";
+
+      const ix = _extractIndexerPct(uid);
+      const indexerVal = ex.indexer || ix.indexer;
+
       beehusName = cand.beehusName || "";
       values = {
-        type: _inferType(detected, uid),
+        type: inferredType,
         ticker: cand.mainId || "",
-        maturityDate: maturity,
-        indexer: ix.indexer,
+        maturityDate: ex.maturity_date || _extractMaturity(uid),
+        indexer: indexerVal,
         indexerPercentual: ix.pct,
-        yield: null,
+        // ex.rate não distingue spread de percentual do indexador — só dá pra
+        // usar sem ambiguidade quando pré-fixado (o rate É o yield).
+        yield: (indexerVal === "PRE" && ex.rate) ? Number(ex.rate) : null,
         currency: "BRL",
         country: "BR",
         subscriptionSettlementDays: 0,
@@ -3451,6 +3622,16 @@ try {
     }
 
     const row = { uid, include: true, asset, securityType, beehusName, values };
+    // Guardados para o recálculo do beehusName ao trocar o `type` no dropdown
+    // (_recomputeBondBeehusName) — evita reprocessar o texto bruto do zero.
+    row._rawUid = uid;
+    row._emissorShort = (p && p.emissorShort) || fallbackEmissorShort || "";
+    if (securityType === "bond" && values.type) {
+      // A partir daqui a fórmula de nome vem sempre de _recomputeBondBeehusName
+      // (beehusName-regra-final.md §4.2-4.4), não do `p.beehusName` do parser —
+      // que ainda reflete a regra antiga (com taxa/rótulo).
+      row.beehusName = _recomputeBondBeehusName(row);
+    }
     _regEnsureDefaults(row);
     return row;
   }
@@ -3584,7 +3765,15 @@ try {
       const w = f.width ? ` style="min-width:${f.width}px"` : "";
       const titleAttr = f.title ? ` title="${_escHtml(f.title)}"` : "";
       let input;
-      if (f.input === "number") {
+      if (f.input === "select") {
+        const opts = (f.options || []).map(o =>
+          `<option value="${_escHtml(o.value)}"${v === o.value ? " selected" : ""}>${_escHtml(o.label)}</option>`
+        ).join("");
+        input = `<select${w} class="${base}" onchange="_regOnFieldChange(${i},'${f.key}',this.value)">
+          <option value=""${!v ? " selected" : ""}></option>
+          ${opts}
+        </select>`;
+      } else if (f.input === "number") {
         input = `<input type="number" step="any" value="${v ?? ""}"${w}
           class="${base} text-right"
           oninput="_regSetVal(${i},'${f.key}',this.value===''?null:Number(this.value))" />`;
@@ -3595,8 +3784,9 @@ try {
         input = `<input type="text" value="${_escHtml(v ?? "")}"${w}
           class="${base}" oninput="_regSetVal(${i},'${f.key}',this.value)" />`;
       }
+      const reqMark = f.required ? '<span class="text-red-500"> *</span>' : "";
       return `<label class="flex flex-col gap-0.5"${titleAttr}>
-        <span class="text-[9px] uppercase tracking-wide text-gray-400">${_escHtml(f.label)}</span>
+        <span class="text-[9px] uppercase tracking-wide text-gray-400">${_escHtml(f.label)}${reqMark}</span>
         ${input}
       </label>`;
     }).join("");
@@ -3645,6 +3835,85 @@ try {
 
   function _regSetVal(i, key, value) {
     if (_regRows[i]) _regRows[i].values[key] = value;
+  }
+
+  // Setter para campos com efeito colateral no beehusName sugerido (hoje: `type`
+  // em bond). Sempre sobrescreve o beehusName atual, mesmo se editado manualmente
+  // pelo usuário — decisão explícita (2026-07-03): trocar o subtipo sempre
+  // recalcula a sugestão, não preserva edição anterior.
+  function _regOnFieldChange(i, key, value) {
+    const row = _regRows[i];
+    if (!row) return;
+    row.values[key] = value;
+    if (key === "type" && row.securityType === "bond") {
+      row.beehusName = _recomputeBondBeehusName(row);
+    }
+    _renderRegistrationTable(false);
+  }
+
+  // Prefixo de exibição por `type` de bond — beehusName-regra-final.md §4.2-4.4.
+  const _BOND_TYPE_PREFIX = {
+    cdb: "CDB", cra: "CRA", cri: "CRI", lca: "LCA", lci: "LCI", lcd: "LCD",
+    lf: "LF", "lf-sub": "LF", lig: "LIG", lc: "LC", ccb: "CCB",
+    debenture: "DEB", infrastructureDebenture: "DEB", np: "NP",
+  };
+  // Tipos sem emissor no nome (§4.2, nota LIG/NP).
+  const _BOND_TYPE_NO_EMISSOR = new Set(["lig", "np"]);
+  // Mapa do `instrument` já extraído por extract_features (security_matcher.py,
+  // via _BOND_INSTRUMENT_RE) para o `type` do dropdown — usado para pré-
+  // selecionar o subtipo quando o parser rígido (§15/§16) não reconhece o
+  // formato bruto, mas o matcher já identificou o instrumento com confiança.
+  // CPRF, FIDC, LFSN, LFS, FND não têm correspondência confiável no domínio de
+  // 20 tipos — ficam de fora de propósito (dropdown fica em branco nesses casos).
+  const _EXTRACTED_INSTRUMENT_TO_TYPE = {
+    CDB: "cdb", CRA: "cra", CRI: "cri", LCA: "lca", LCI: "lci", LCD: "lcd",
+    CCB: "ccb", LF: "lf", LIG: "lig", CDCA: "cd",
+    DEB: "debenture", DEBENTURE: "debenture",  // desambiguado p/ infrastructureDebenture em _buildRegRow
+  };
+  // Tipos sem fórmula definida (gap documentado) — beehusName = texto bruto do
+  // ativo, sem transformação (decisão do usuário, 2026-07-03).
+  const _BOND_TYPE_PASSTHROUGH = new Set(["inflation", "precatorio", "over"]);
+
+  // Limpeza de nome para bond internacional (fixed/floating) — §4.1: ponto→vírgula
+  // em taxas, remove " - " antes de taxa, remove sufixo ISIN, data → inglês.
+  function _cleanOffshoreBondName(raw) {
+    let s = String(raw || "");
+    s = s.replace(/(\d+)\.(\d+)/g, "$1,$2");
+    s = s.replace(/\s+-\s+(?=\d+[.,]\d+)/g, " ");
+    s = s.replace(/\s*-\s*[A-Z]{2}[A-Z0-9]{10}\s*$/, "");
+    const EN = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/, (_, y, m, d) => `${d}/${EN[parseInt(m, 10)]}/${y}`);
+    s = s.replace(/\b(\d{1,2})-(\d{2})-(\d{4})\b/, (_, d, m, y) => `${d}/${EN[parseInt(m, 10)]}/${y}`);
+    return s.trim();
+  }
+
+  // Recalcula o beehusName sugerido de uma linha `bond` para o `type` selecionado
+  // no dropdown. Usa o emissor já extraído na montagem da linha (`row._emissorShort`)
+  // e a data/indexador já em `row.values` — não reprocessa o texto bruto do zero.
+  function _recomputeBondBeehusName(row) {
+    const type = row.values.type;
+    const rawUid = row._rawUid || row.uid || "";
+    if (!type) return rawUid;
+    if (_BOND_TYPE_PASSTHROUGH.has(type)) return rawUid;
+    if (type === "fixed" || type === "floating") return _cleanOffshoreBondName(rawUid);
+
+    const emissorShort = row._emissorShort || "";
+    const ddmmyyyy = _isoToDdmmyyyy(row.values.maturityDate || "");
+    const datePt = ddmmyyyy ? _dateToPtAbbr(ddmmyyyy) : "";
+    const isPre = row.values.indexer === "PRE";
+
+    let prefix;
+    if (type === "cd") {
+      prefix = /\bCDCA\b/i.test(rawUid) ? "CDCA" : "CD";
+    } else {
+      prefix = _BOND_TYPE_PREFIX[type] || type.toUpperCase();
+    }
+
+    const parts = [prefix];
+    if (!_BOND_TYPE_NO_EMISSOR.has(type) && emissorShort) parts.push(emissorShort);
+    if (isPre) parts.push("Pré");
+    if (datePt) parts.push(datePt);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
   }
 
   // Troca o securityType (tipo de ativo) de um card e re-renderiza para exibir
@@ -3734,6 +4003,90 @@ try {
   // type="") and for the post-match render. Keeping one source of truth means
   // a manual selection made while the matcher is still running uses the same
   // markup as the server-suggested row that replaces it.
+  function _uidTooltip(r) {
+    const f = r.extracted || {};
+    const t = r.type || '';
+    const conf = r.typeConfidence ? ' (' + (r.typeConfidence * 100).toFixed(0) + '%)' : '';
+
+    function fmtIso(s) {
+      if (!s) return '';
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      return m ? m[3] + '/' + m[2] + '/' + m[1] : s;
+    }
+
+    // Per-type feature schema: [label, extracted_key, optional_formatter]
+    const SCHEMAS = {
+      brazilianFund:          [['CNPJ',        'taxId'],
+                               ['Cód. fundo',  'fund_code'],
+                               ['ISIN',        'isin'],
+                               ['Nome',        'name']],
+      stockEtf:               [['Ticker',      'ticker'],
+                               ['ISIN',        'isin'],
+                               ['Nome',        'name']],
+      bond:                   [['Instrumento', 'instrument'],
+                               ['Sub-tipo',    'bond_type'],
+                               ['CETIP',       'cetip_code'],
+                               ['Cód. interno','internal_code'],
+                               ['ISIN',        'isin'],
+                               ['Emissor',     'issuer'],
+                               ['Indexador',   'indexer'],
+                               ['Taxa',        'rate'],
+                               ['Vencimento',  'maturity_date', fmtIso]],
+      brazilianGovernmentBond:[['Tipo',        'bond_type'],
+                               ['Cupom',       'coupon'],
+                               ['Cód. Selic',  'selic_code'],
+                               ['Indexador',   'indexer'],
+                               ['ISIN',        'isin'],
+                               ['Vencimento',  'maturity_date', fmtIso]],
+      fund:                   [['ISIN',        'isin'],
+                               ['Cód. externo','external_code'],
+                               ['Nome',        'name']],
+      futures:                [['Ticker',      'ticker'],
+                               ['Contrato',    'contract'],
+                               ['ISIN',        'isin']],
+      options:                [['Ticker',      'ticker'],
+                               ['Subjacente',  'underlying'],
+                               ['Tipo',        'option_type'],
+                               ['Strike',      'strike'],
+                               ['Vencimento',  'expiry', fmtIso],
+                               ['Mês venc.',   'expiry_month'],
+                               ['Ano venc.',   'expiry_year'],
+                               ['ISIN',        'isin']],
+      otc:                    [['Cód. externo','external_code'],
+                               ['ISIN',        'isin'],
+                               ['Emissor',     'issuer'],
+                               ['Nome',        'name']],
+      brazilianRepo:          [['ISIN',        'isin'],
+                               ['Emissor',     'issuer'],
+                               ['Nome',        'name']],
+    };
+
+    const lines = [r.unprocessedSecurityId, '', 'Tipo: ' + (t || '—') + conf];
+    const fields = SCHEMAS[t] || [];
+    fields.forEach(function(spec) {
+      const label = spec[0], key = spec[1], fmt = spec[2];
+      let val = f[key] || '';
+      if (val && fmt) val = fmt(val);
+      lines.push(label + ': ' + (val || '—'));
+    });
+
+    // Complement tokens (shown for all types when present)
+    [1, 2, 3].forEach(function(i) {
+      const v = f['complement_' + i];
+      if (v) lines.push('Complemento ' + i + ': ' + v);
+    });
+
+    // Fallback for unrecognised types — show whatever was extracted
+    if (!fields.length) {
+      [['ISIN','isin'],['CNPJ','taxId'],['Ticker','ticker'],
+       ['Instrumento','instrument'],['Nome','name']].forEach(function(s) {
+        if (f[s[1]]) lines.push(s[0] + ': ' + f[s[1]]);
+      });
+    }
+
+    return lines.join('\n');
+  }
+
   function _buildMappingRowHtml(r) {
     const tc = r.typeConfidence;
     const tcPct = tc ? (tc * 100).toFixed(0) + "%" : "—";
@@ -3744,17 +4097,21 @@ try {
     const c = r.candidate;
     const hasMatch = c && c.score > 0;
     const secId = c?.securityId || "";
-    let secCell, mainIdCell, scoreBadge;
+    let secCell, mainIdCell, indexerCell, scoreBadge;
     const editIcon = `<svg class="w-3 h-3 inline-block text-gray-300 group-hover:text-blue-500 ml-1 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>`;
     if (c) {
       secCell = `<span class="text-[10px] text-gray-700 truncate">${_escHtml(c.beehusName)}</span>${editIcon}`;
       mainIdCell = `<span class="font-mono text-[10px] text-gray-500">${_escHtml(c.mainId)}</span>`;
+      indexerCell = c.indexer
+        ? `<span class="text-[10px] text-gray-600">${_escHtml(c.indexer)}</span>`
+        : `<span class="text-gray-300 text-[10px]">—</span>`;
       scoreBadge = c.score === "manual"
         ? `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold bg-purple-100 text-purple-700" title="Seleção manual">manual</span>`
         : `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold ${_matchScoreCls(c.score)}" style="cursor:help" title="${_escHtml(_matchScoreTooltip(c))}">${Math.min(100, c.score)}%</span>`;
     } else {
       secCell = `<span class="text-gray-300 text-[10px]">— selecionar</span>${editIcon}`;
       mainIdCell = `<span class="text-gray-300 text-[10px]">—</span>`;
+      indexerCell = `<span class="text-gray-300 text-[10px]">—</span>`;
       scoreBadge = `<span class="text-gray-300">—</span>`;
     }
 
@@ -3774,38 +4131,149 @@ try {
       <td class="px-1 py-1.5 text-center">
         <input type="checkbox" ${cbChecked} onchange="_updateSelectionCount()" class="rounded" />
       </td>
-      <td class="px-2 py-1.5 text-gray-400 font-mono text-[10px] truncate" title="${_escHtml(r.unprocessedSecurityId)}">${_escHtml(r.unprocessedSecurityId)}</td>
+      <td class="px-2 py-1.5 text-gray-400 font-mono text-[10px] truncate" title="${_escHtml(_uidTooltip(r))}">${_escHtml(r.unprocessedSecurityId)}</td>
       <td class="px-2 py-1.5 clf-type">${r.type ? _typeSelect(r.unprocessedSecurityId, r.type) : '<span class="text-gray-300">—</span>'}</td>
       <td class="px-1 py-1.5 clf-conf text-center">${tcBadge}</td>
       <td class="px-2 py-1.5 truncate cursor-pointer group hover:bg-blue-50"
           title="${c ? _escHtml(c.beehusName) + ' — clique para alterar' : 'Clique para selecionar um security'}"
           onclick="_openSecuritySearch('${_escHtml(r.unprocessedSecurityId).replace(/'/g,"\\'")}')">${secCell}</td>
       <td class="px-2 py-1.5 truncate" title="${c ? _escHtml(c.mainId) : ''}">${mainIdCell}</td>
+      <td class="px-2 py-1.5 truncate" title="${c && c.indexer ? _escHtml(c.indexer) : ''}">${indexerCell}</td>
       <td class="px-1 py-1.5 text-center">${scoreBadge}</td>
       <td class="px-1 py-1.5 text-center">
         <button onclick="_openWallets('${_escHtml(r.unprocessedSecurityId).replace(/'/g,"\\'")}')"
           class="inline-block px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-[10px] font-semibold hover:bg-blue-100 hover:text-blue-700 cursor-pointer" title="Ver carteiras">${r.walletCount}</button>
       </td>
-      <td class="px-1 py-1.5 text-right">${_fmtNum(r.pu)}</td>
-      <td class="px-1 py-1.5 text-right" title="${lpTitle}">${_fmtNum(lp?.value)}</td>
+      <td class="px-1 py-1.5 text-right whitespace-nowrap tabular-nums">${_fmtNum(r.pu)}</td>
+      <td class="px-1 py-1.5 text-right whitespace-nowrap tabular-nums" title="${lpTitle}">${_fmtNum(lp?.value)}</td>
     </tr>`;
+  }
+
+  // Single full-modal loading overlay shown while the matcher is identifying.
+  function _mappingLoader(show) {
+    const card = document.querySelector("#modal > div");
+    const existing = document.getElementById("mapping-loader");
+    if (!show) { existing?.remove(); return; }
+    if (!card || existing) return;
+    const ov = document.createElement("div");
+    ov.id = "mapping-loader";
+    ov.className = "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-white/75 rounded-xl";
+    ov.innerHTML = `<svg class="w-10 h-10 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg><span class="text-sm font-medium text-gray-500">Identificando…</span>`;
+    card.appendChild(ov);
+  }
+
+  // Shared fetch + result-merge used by both the initial load and complement reprocess.
+  function _runMatchFetch(items, extraBody) {
+    const tbody = document.getElementById("modal-tbody");
+    const msg   = document.getElementById("modal-msg");
+    _mappingLoader(true);
+    const body = Object.assign(
+      { items, companyId: _currentCompanyId, date: _currentDate },
+      extraBody
+    );
+    fetch("/api/controlpanel/match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(r => r.json()).then(({ results }) => {
+      const byId = {};
+      (results || []).forEach(r => byId[r.unprocessedId] = r);
+
+      // Merge match results into existing _mappingRows. A row whose
+      // candidate.score === "manual" was picked by the operator while the
+      // matcher was still running — preserve that pick instead of letting
+      // the server suggestion overwrite it.
+      _mappingRows.forEach(row => {
+        const m = byId[row.unprocessedSecurityId];
+        if (!m) return;
+        row.type           = m.predicted_type || "";
+        row.typeConfidence = m.type_confidence || 0;
+        row.pu             = m.pu ?? null;
+        row.extracted      = m.extracted || {};
+        const isManual = row.candidate && row.candidate.score === "manual";
+        if (!isManual) {
+          row.candidate = m.candidate || null;
+          row.lastPrice = m.lastPrice ?? null;
+        }
+      });
+
+      // Manual picks sort to the top.
+      _mappingRows.sort((a, b) => {
+        const sa = a.candidate?.score === "manual" ? Infinity : (a.candidate?.score || 0);
+        const sb = b.candidate?.score === "manual" ? Infinity : (b.candidate?.score || 0);
+        return sb - sa;
+      });
+
+      // Insert or refresh the filter bar above the table.
+      const tableParent = tbody.closest(".overflow-y-auto");
+      if (tableParent) {
+        const existing = document.getElementById("mapping-filters");
+        if (!existing) {
+          const bar = document.createElement("div");
+          bar.id = "mapping-filters";
+          bar.innerHTML = _buildFilterBar(_mappingRows);
+          tableParent.parentElement.insertBefore(bar, tableParent);
+        } else {
+          existing.innerHTML = _buildFilterBar(_mappingRows);
+        }
+      }
+
+      tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
+      if (msg) msg.style.display = "none";
+      _mappingLoader(false);
+      _updateSelectionCount();
+
+      // Fallback: fetch price individually for candidates whose price was not
+      // resolved in the batch (mirrors the manual-selection flow exactly).
+      const _lpDateParam = _currentDate ? `&date=${encodeURIComponent(_currentDate)}` : "";
+      _mappingRows.forEach(row => {
+        if (!row.candidate || row.candidate.score === "manual") return;
+        if (row.lastPrice && row.lastPrice.value != null) return;
+        const sid = row.candidate.securityId;
+        if (!sid) return;
+        fetch(`/api/controlpanel/last-price?securityId=${encodeURIComponent(sid)}${_lpDateParam}`)
+          .then(r => r.json())
+          .then(({ lastPrice }) => {
+            if (!lastPrice || lastPrice.value == null) return;
+            row.lastPrice = lastPrice;
+            const tr2 = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(row.unprocessedSecurityId)}"]`);
+            if (!tr2) return;
+            const cells2 = tr2.querySelectorAll("td");
+            if (cells2[10]) {
+              cells2[10].title = lastPrice.date || "";
+              cells2[10].innerHTML = _fmtNum(lastPrice.value);
+            }
+          })
+          .catch(() => {});
+      });
+    }).catch(err => {
+      console.error("match error:", err);
+      if (msg) msg.style.display = "none";
+      // Drop the loader; skeleton rows stay so the operator can still pick manually.
+      _mappingLoader(false);
+    });
   }
 
   function _renderMapeamento(issues) {
     const thead = document.getElementById("modal-thead");
     const tbody = document.getElementById("modal-tbody");
     const msg   = document.getElementById("modal-msg");
+    // Fixed layout so the declared column widths (summing to 100%) are honoured
+    // and the `truncate` cells clip long ids/names instead of stretching the
+    // table past the modal (the modal body scrolls vertically only).
+    thead.parentElement.style.tableLayout = "fixed";
     thead.innerHTML = `<tr>
-      <th class="px-1 py-2 text-center w-6"><input type="checkbox" onchange="_selectAll(this.checked)" title="Selecionar todos" /></th>
-      <th class="px-2 py-2 text-left" style="width:28%">Unprocessed Security</th>
-      <th class="px-2 py-2 text-left" style="width:10%">Tipo</th>
-      <th class="px-1 py-2 text-center w-14">Conf.</th>
-      <th class="px-2 py-2 text-left" style="width:18%">Security Encontrado</th>
-      <th class="px-2 py-2 text-left" style="width:12%">mainId</th>
-      <th class="px-1 py-2 text-center w-12">Match</th>
-      <th class="px-1 py-2 text-center w-10">Cart.</th>
-      <th class="px-1 py-2 text-right w-20">PU</th>
-      <th class="px-1 py-2 text-right w-20">Preço</th>
+      <th class="px-1 py-2 text-center" style="width:3%"><input type="checkbox" onchange="_selectAll(this.checked)" title="Selecionar todos" /></th>
+      <th class="px-2 py-2 text-left" style="width:19%">Unprocessed Security</th>
+      <th class="px-2 py-2 text-left" style="width:11%">Tipo</th>
+      <th class="px-1 py-2 text-center" style="width:6%">Conf.</th>
+      <th class="px-2 py-2 text-left" style="width:16%">Security Encontrado</th>
+      <th class="px-2 py-2 text-left" style="width:11%">mainId</th>
+      <th class="px-2 py-2 text-left" style="width:7%">Indexador</th>
+      <th class="px-1 py-2 text-center" style="width:6%">Match</th>
+      <th class="px-1 py-2 text-center" style="width:5%">Cart.</th>
+      <th class="px-1 py-2 text-right" style="width:8%">PU</th>
+      <th class="px-1 py-2 text-right" style="width:8%">Preço</th>
     </tr>`;
     tbody.innerHTML = "";
     msg.innerHTML = "";
@@ -3841,73 +4309,18 @@ try {
     tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
     _updateSelectionCount();
 
-    // Small inline indicator below the table — replaces the page-blocking
-    // loader that used to hide the rows until the matcher returned.
-    msg.innerHTML = `<span class="inline-flex items-center gap-2 text-xs text-gray-400">
-      <svg class="w-4 h-4 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-      Buscando correspondências…
-    </span>`;
-    msg.style.display = "block";
+    // Single full-modal spinner while the matcher identifies all rows.
+    msg.style.display = "none";
 
     const items = ids.map(id => ({ unprocessedId: id }));
-
-    fetch("/api/controlpanel/match", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, companyId: _currentCompanyId, date: _currentDate })
-    }).then(r => r.json()).then(({ results }) => {
-      const byId = {};
-      (results || []).forEach(r => byId[r.unprocessedId] = r);
-
-      // Merge match results into existing _mappingRows. A row whose
-      // candidate.score === "manual" was picked by the operator while the
-      // matcher was still running — preserve that pick instead of letting
-      // the server suggestion overwrite it.
-      _mappingRows.forEach(row => {
-        const m = byId[row.unprocessedSecurityId];
-        if (!m) return;
-        row.type           = m.predicted_type || "";
-        row.typeConfidence = m.type_confidence || 0;
-        row.pu             = m.pu ?? null;
-        row.extracted      = m.extracted || {};   // isin/ticker/taxId/type for the asset-info line
-        const isManual = row.candidate && row.candidate.score === "manual";
-        if (!isManual) {
-          row.candidate = m.candidate || null;
-          row.lastPrice = m.lastPrice ?? null;
-        }
-      });
-
-      // Manual picks sort to the top — they have no numeric score to
-      // compare against the matcher's 0–100 range.
-      _mappingRows.sort((a, b) => {
-        const sa = a.candidate?.score === "manual" ? Infinity : (a.candidate?.score || 0);
-        const sb = b.candidate?.score === "manual" ? Infinity : (b.candidate?.score || 0);
-        return sb - sa;
-      });
-
-      // Insert filter bar above table (depends on the set of types the
-      // matcher returned, so it has to wait until now).
-      const tableParent = tbody.closest(".overflow-y-auto");
-      if (tableParent) {
-        const bar = document.createElement("div");
-        bar.id = "mapping-filters";
-        bar.innerHTML = _buildFilterBar(_mappingRows);
-        tableParent.parentElement.insertBefore(bar, tableParent);
-      }
-
-      tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
-      msg.style.display = "none";
-      _updateSelectionCount();
-    }).catch(err => {
-      console.error("match error:", err);
-      msg.style.display = "none";
-      // Skeleton rows remain in place so the operator can still pick a
-      // security manually even if the matcher fails.
-    });
+    _runMatchFetch(items, {});
   }
 
   function _renderDefault(issues) {
-    document.getElementById("modal-thead").innerHTML = `<tr>
+    const thead0 = document.getElementById("modal-thead");
+    // Reset to auto layout (the Mapeamento render switches it to fixed).
+    thead0.parentElement.style.tableLayout = "";
+    thead0.innerHTML = `<tr>
       <th class="px-3 py-2 text-left">External ID</th>
       <th class="px-3 py-2 text-left">Carteira</th>
       <th class="px-3 py-2 text-left">Security</th>
@@ -4105,6 +4518,10 @@ try {
           return;
         }
         document.getElementById("modal-description").textContent = issues[0]?.description || "";
+        // Default to auto layout; _renderMapeamento opts into fixed. Reset here
+        // so switching from Mapeamento to another issue type doesn't inherit it.
+        document.getElementById("modal-thead").parentElement.style.tableLayout = "";
+        _mappingLoader(false);  // drop any stale loader from a previous open
         if      (type === "security_unmapped")              _renderMapeamento(issues);
         else if (type === "security_missing_price")          _renderRegistroPreco(issues);
         else if (type === "security_missing_classification") _renderClassificacao(issues);
@@ -4116,6 +4533,7 @@ try {
   function closeModal() {
     document.getElementById("modal").style.display = "none";
     document.getElementById("modal-description").textContent = "";
+    _mappingLoader(false);
     document.getElementById("mapping-filters")?.remove();
     document.getElementById("c3-toolbar")?.remove();
     _mappingRows = [];
@@ -4125,7 +4543,7 @@ try {
   function copyToClipboard() {
     let headers, rows;
     if (_currentType === "security_unmapped") {
-      headers = ["Unprocessed Security", "Tipo Previsto", "Confiança", "Security Encontrado", "mainId", "Match", "Carteiras", "PU (unprocessed)", "Último Preço"];
+      headers = ["Unprocessed Security", "Tipo Previsto", "Confiança", "Security Encontrado", "mainId", "Indexador", "Match", "Carteiras", "PU (unprocessed)", "Último Preço"];
       rows    = _mappingRows.map(r => {
         const c = r.candidate;
         return [
@@ -4134,6 +4552,7 @@ try {
           r.typeConfidence ? (r.typeConfidence * 100).toFixed(0) + "%" : "",
           c?.beehusName || "",
           c?.mainId || "",
+          c?.indexer || "",
           c == null ? "" : (c.score === "manual" ? "manual" : Math.min(100, c.score) + "%"),
           r.walletCount,
           r.pu != null ? r.pu : "",
@@ -4186,10 +4605,17 @@ try {
     const rm = document.getElementById("registration-modal");
     const wm = document.getElementById("wallets-modal");
     const cd = document.getElementById("cell-detail-modal");
+    const wi = document.getElementById("wallet-issues-modal");
     if (sm.style.display !== "none") _closeSecuritySearch();
     else if (rm.style.display !== "none") rm.style.display = "none";
     else if (wm.style.display !== "none") wm.style.display = "none";
     else if (cd && cd.style.display !== "none") closeCellDetail();
+    // In the wallet-issues modal, Escape first steps back from the issues
+    // view to the wallet picker; a second Escape closes the modal.
+    else if (wi && wi.style.display !== "none") {
+      if (document.getElementById("wi-issues").style.display !== "none") _wiShowPicker();
+      else closeWalletIssues();
+    }
     else closeModal();
   });
 
@@ -4237,6 +4663,168 @@ try {
         setTimeout(() => { btn.innerHTML = origHtml; btn.disabled = false; }, 3000);
       });
   }
+
+  // ── Complement upload modal ────────────────────────────────────────────────
+  let _complementFile = null;
+  let _complementParsed = null;  // {total, preview[]} — populated after parse
+
+  function _openComplementModal() {
+    document.getElementById('complement-modal').style.display = 'flex';
+  }
+
+  function _closeComplementModal() {
+    document.getElementById('complement-modal').style.display = 'none';
+    _complementFile = null;
+    _complementParsed = null;
+    document.getElementById('complement-file-input').value = '';
+    const nameEl = document.getElementById('complement-filename');
+    nameEl.textContent = '';
+    nameEl.classList.add('hidden');
+    const btn = document.getElementById('complement-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Carregar e Pré-visualizar';
+    const dz = document.getElementById('complement-dropzone');
+    dz.classList.remove('border-slate-400', 'bg-slate-50');
+    dz.classList.add('border-gray-300');
+    document.getElementById('complement-upload-section').classList.remove('hidden');
+    document.getElementById('complement-preview-section').classList.add('hidden');
+    document.getElementById('complement-back-btn').classList.add('hidden');
+    document.getElementById('complement-preview-count').textContent = '';
+    document.getElementById('complement-preview-rows').innerHTML = '';
+    const errEl = document.getElementById('complement-parse-error');
+    errEl.textContent = '';
+    errEl.classList.add('hidden');
+  }
+
+  function _complementBack() {
+    _complementParsed = null;
+    document.getElementById('complement-upload-section').classList.remove('hidden');
+    document.getElementById('complement-preview-section').classList.add('hidden');
+    document.getElementById('complement-back-btn').classList.add('hidden');
+    const btn = document.getElementById('complement-confirm-btn');
+    btn.textContent = 'Carregar e Pré-visualizar';
+    btn.disabled = (_complementFile === null);
+  }
+
+  function _complementConfirm() {
+    if (_complementParsed === null) {
+      _complementLoad();
+    } else {
+      _complementReprocess();
+    }
+  }
+
+  function _complementLoad() {
+    if (!_complementFile) return;
+    const btn = document.getElementById('complement-confirm-btn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Carregando…';
+
+    const fd = new FormData();
+    fd.append('file', _complementFile);
+
+    fetch('/api/controlpanel/parse-complement', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          // show error inside preview section
+          document.getElementById('complement-upload-section').classList.add('hidden');
+          document.getElementById('complement-preview-section').classList.remove('hidden');
+          document.getElementById('complement-back-btn').classList.remove('hidden');
+          const errEl = document.getElementById('complement-parse-error');
+          errEl.textContent = data.error || 'Erro ao processar o arquivo.';
+          errEl.classList.remove('hidden');
+          btn.textContent = origText;
+          btn.disabled = true;
+          return;
+        }
+        _complementParsed = data;
+        // populate preview table
+        const n = data.total;
+        const shown = data.preview.length;
+        document.getElementById('complement-preview-count').textContent =
+          n + ' linha' + (n !== 1 ? 's' : '') + ' identificada' + (n !== 1 ? 's' : '') +
+          (n > shown ? ' (exibindo as primeiras ' + shown + ')' : '');
+        const tbody = document.getElementById('complement-preview-rows');
+        tbody.innerHTML = '';
+        data.preview.forEach(function (row) {
+          const tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td class="px-2 py-1 border-b border-gray-100 font-mono text-gray-700 break-all max-w-[12rem]">' + _escHtml(row.uid) + '</td>' +
+            '<td class="px-2 py-1 border-b border-gray-100 text-gray-600 break-all">' + _escHtml(row.complement) + '</td>';
+          tbody.appendChild(tr);
+        });
+        // switch to preview view
+        document.getElementById('complement-upload-section').classList.add('hidden');
+        document.getElementById('complement-preview-section').classList.remove('hidden');
+        document.getElementById('complement-back-btn').classList.remove('hidden');
+        btn.textContent = 'Confirmar e Reprocessar';
+        btn.disabled = false;
+      })
+      .catch(function (err) {
+        btn.textContent = origText;
+        btn.disabled = false;
+        alert('Erro ao carregar arquivo: ' + (err.message || err));
+      });
+  }
+
+  function _complementReprocess() {
+    if (!_complementParsed || !_mappingRows.length) return;
+    const priority = (document.querySelector('input[name="complement-priority"]:checked') || {}).value || "uid";
+    const complements = _complementParsed.rows || [];
+    const items = _mappingRows.map(r => ({ unprocessedId: r.unprocessedSecurityId }));
+    _closeComplementModal();
+    _runMatchFetch(items, { complements, complement_priority: priority });
+  }
+
+  function _escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  (function () {
+    function _onComplementFile(file) {
+      if (!file) return;
+      _complementFile = file;
+      const nameEl = document.getElementById('complement-filename');
+      nameEl.textContent = file.name;
+      nameEl.classList.remove('hidden');
+      document.getElementById('complement-confirm-btn').disabled = false;
+      const dz = document.getElementById('complement-dropzone');
+      dz.classList.add('border-slate-400', 'bg-slate-50');
+      dz.classList.remove('border-gray-300');
+    }
+
+    document.getElementById('complement-file-input').addEventListener('change', function (e) {
+      _onComplementFile(e.target.files[0]);
+    });
+
+    const dz = document.getElementById('complement-dropzone');
+    dz.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      dz.classList.add('border-slate-500', 'bg-slate-100');
+    });
+    dz.addEventListener('dragleave', function () {
+      dz.classList.remove('border-slate-500', 'bg-slate-100');
+    });
+    dz.addEventListener('drop', function (e) {
+      e.preventDefault();
+      dz.classList.remove('border-slate-500', 'bg-slate-100');
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        try {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          document.getElementById('complement-file-input').files = dt.files;
+        } catch (_) {}
+        _onComplementFile(file);
+      }
+    });
+  })();
 
   // Check cache on page load — warmup classifier + cache if needed
   fetch("/api/controlpanel/cache-status").then(r => r.json()).then(data => {
@@ -4915,872 +5503,6 @@ try {
      chip (which calls Funcoes.showIssues, hiding this view too).
      Backend: same `/api/excecoes/intraday/*` endpoints used by /excecoes.
   ══════════════════════════════════════════════════════════════════════ */
-  const Daytrade = {
-    _inited: false,
-    _st: {
-      mode: "single",
-      allCompanies: [],         // [{id, name}] — full visible list, used by "all" mode
-      walletCompany: {},        // walletId -> companyId, populated as check responses come in
-      groupings: [],            // [{id, name, walletIds: [...]}]
-      groupingSelectedIds: new Set(),
-      wallets: [],              // [{id, name}]
-      walletSelectedIds:   new Set(),
-      detectedGroups:    [],
-      selectedGroupKeys: new Set(),
-      walletNames:       {},
-      securityNames:     {},
-      patched:           [],
-      selectedPatchKeys: new Set(),
-      transactions:      [],    // securityContributionAdjustment plans
-    },
-
-    // Format helpers — kept local so the module is self-contained even if
-    // the Issues page later moves its global helpers around.
-    _fmtMoney(v) {
-      return v == null
-        ? '<span class="text-gray-300">--</span>'
-        : Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    },
-    _fmtNum(v) {
-      return v == null
-        ? '<span class="text-gray-300">--</span>'
-        : Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 6, maximumFractionDigits: 6});
-    },
-    _esc(s) {
-      return String(s ?? "").replace(/[&<>"']/g,
-        c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    },
-    _todayISO() {
-      const d = new Date();
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const dd = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${dd}`;
-    },
-
-    // ── Open / close the inline view ──────────────────────────────────
-    async open(btn) {
-      // Hide every iframe tool + the Painel de Controle dashboard, show the day-trade
-      // panel. Funcoes is the source of truth for which chip is active.
-      // `_inDaytrade=true` makes the Reiniciar chip visible while we're
-      // here — see _syncResetChip + resetCurrent for the wiring.
-      Funcoes._hideAllFrames();
-      Funcoes._currentDeep = null;
-      Funcoes._inDaytrade  = true;
-      Funcoes._inStrip     = false;
-      Funcoes._inRepetir   = false;
-      document.getElementById('tool-view').classList.add('hidden-view');
-      document.getElementById('controlpanel-view').classList.add('hidden-view');
-      document.getElementById('strip-view')?.classList.add('hidden-view');
-      document.getElementById('repetir-view')?.classList.add('hidden-view');
-      document.getElementById('daytrade-view').classList.remove('hidden-view');
-      Funcoes._setActiveChip(btn || document.getElementById('chip-daytrade'));
-      Funcoes._syncResetChip();
-
-      // Lazy-init: company list comes from /api/beehus/filters/companies
-      // (same source the iframe tools use). Cached after first open.
-      if (!this._inited) {
-        await this._loadCompanies();
-        document.getElementById("dt-initialDate").value = this._todayISO();
-        document.getElementById("dt-finalDate").value   = this._todayISO();
-        this._inited = true;
-      }
-    },
-
-    close() { Funcoes.showIssues(); },
-
-    async _loadCompanies() {
-      const sel = document.getElementById("dt-company");
-      try {
-        // /api/beehus/filters/companies already applies the user's
-        // settings.json `company_filter` (Configurações). When that filter
-        // is non-empty the response is restricted to those ids; "Todas as
-        // empresas" iterates exactly this list, never the full Mongo set.
-        const r = await fetch("/api/beehus/filters/companies");
-        const data = await r.json();
-        const items = Array.isArray(data) ? data : (data.body || []);
-        items.sort((a, b) => (a.name || "").localeCompare(b.name || "", "pt-BR"));
-        this._st.allCompanies = items;
-        const allLabel = `— Todas as empresas configuradas (${items.length}) —`;
-        sel.innerHTML = '<option value="">Selecione...</option>' +
-          `<option value="__ALL__">${this._esc(allLabel)}</option>` +
-          items.map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name || c.id)}</option>`).join("");
-      } catch (e) {
-        sel.innerHTML = '<option value="">Erro ao carregar empresas</option>';
-        this._st.allCompanies = [];
-      }
-    },
-
-    async onCompanyChange() {
-      const cid = document.getElementById("dt-company").value;
-      this._st.groupingSelectedIds = new Set();
-      this._st.walletSelectedIds   = new Set();
-      this._resetResults();
-      const advWrap = document.getElementById("dt-advanced-wrap");
-      const advBtn  = document.getElementById("dt-toggle-advanced");
-      // "All companies" mode hides the advanced filters AND the toggle
-      // button itself, since groupings and wallets are inherently per-
-      // company. The detect/build/apply phases iterate over every visible
-      // company instead of restricting by them.
-      if (cid === "__ALL__") {
-        this._st.groupings = [];
-        this._st.wallets   = [];
-        if (advWrap) advWrap.classList.add("hidden");
-        if (advBtn)  advBtn.classList.add("hidden");
-        this._renderPanes(); this._renderWalletPanes();
-        return;
-      }
-      // Single-company (or empty) mode: keep the advanced block collapsed
-      // (the operator can open it via the toggle) but expose the toggle.
-      if (advWrap) advWrap.classList.add("hidden");
-      if (advBtn) {
-        advBtn.classList.remove("hidden");
-        advBtn.innerHTML = "+ Groupings &amp; Wallets";
-      }
-      if (!cid) {
-        this._st.groupings = [];
-        this._st.wallets   = [];
-        this._renderPanes(); this._renderWalletPanes();
-        return;
-      }
-      try {
-        const [gResp, wResp] = await Promise.all([
-          fetch(`/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
-          fetch(`/api/beehus/filters/wallets?companyId=${encodeURIComponent(cid)}`).then(r => r.json()),
-        ]);
-        this._st.groupings = Array.isArray(gResp) ? gResp : [];
-        this._st.wallets   = Array.isArray(wResp) ? wResp : [];
-      } catch (e) {
-        this._st.groupings = [];
-        this._st.wallets   = [];
-      }
-      this._renderPanes(); this._renderWalletPanes();
-    },
-
-    onModeChange(mode) {
-      if (mode !== "range") mode = "single";
-      this._st.mode = mode;
-      // `invisible` (visibility:hidden) keeps the grid cell so toggling
-      // única/faixa never reshuffles the Empresa / Data columns — same UX
-      // intent as the screenshot reference.
-      document.getElementById("dt-finalDate-wrap").classList.toggle("invisible", mode !== "range");
-      document.getElementById("dt-mode-single").classList.toggle("active", mode === "single");
-      document.getElementById("dt-mode-range").classList.toggle("active", mode === "range");
-      // Date label keeps the asterisk in both modes; only the wording flips
-      // ("Data inicial" once a range is active, "Data de liquidação" otherwise).
-      const lbl = document.getElementById("dt-initialDate-label");
-      lbl.innerHTML = (mode === "range" ? "Data inicial" : "Data de liquidação")
-        + ' <span class="text-red-500">*</span>';
-    },
-
-    // Toggle the optional groupings + wallets block (mirrors the
-    // "+ Groupings & Wallets" toggle on the Beehus Console identify page).
-    toggleAdvanced() {
-      const adv = document.getElementById("dt-advanced-wrap");
-      const btn = document.getElementById("dt-toggle-advanced");
-      const willShow = adv.classList.contains("hidden");
-      adv.classList.toggle("hidden", !willShow);
-      btn.innerHTML = willShow ? "− Groupings &amp; Wallets" : "+ Groupings &amp; Wallets";
-    },
-
-    // Reset everything in the filter row + collapse the advanced block.
-    // Does not change which view is active — the operator stays on the
-    // day-trade panel, the form just goes back to defaults.
-    resetFilters() {
-      document.getElementById("dt-company").value = "";
-      this._st.groupingSelectedIds = new Set();
-      this._st.walletSelectedIds   = new Set();
-      this._st.groupings = [];
-      this._st.wallets   = [];
-      this._renderPanes(); this._renderWalletPanes();
-      this.onModeChange("single");
-      document.getElementById("dt-initialDate").value = this._todayISO();
-      document.getElementById("dt-finalDate").value   = this._todayISO();
-      // Collapse the advanced block + reset the toggle label.
-      const adv = document.getElementById("dt-advanced-wrap");
-      if (adv && !adv.classList.contains("hidden")) this.toggleAdvanced();
-      const advBtn = document.getElementById("dt-toggle-advanced");
-      if (advBtn) advBtn.classList.remove("hidden");
-      this._resetResults();
-    },
-
-    // Wallets visible in "Disponíveis" = company wallets ∩ union of
-    // selected groupings' walletIds (when at least one grouping is picked).
-    _walletFilter() {
-      if (!this._st.groupingSelectedIds.size) return null;
-      const ids = new Set();
-      for (const g of this._st.groupings) {
-        if (this._st.groupingSelectedIds.has(g.id)) {
-          (g.walletIds || []).forEach(w => ids.add(w));
-        }
-      }
-      return ids;
-    },
-
-    _renderPanes() {
-      const avail = document.getElementById("dt-grp-available");
-      const sel   = document.getElementById("dt-grp-selected");
-      const available = this._st.groupings.filter(g => !this._st.groupingSelectedIds.has(g.id));
-      const selected  = this._st.groupings.filter(g =>  this._st.groupingSelectedIds.has(g.id));
-      avail.innerHTML = available.map(g => `<option value="${this._esc(g.id)}">${this._esc(g.name)}</option>`).join("");
-      sel.innerHTML   = selected .map(g => `<option value="${this._esc(g.id)}">${this._esc(g.name)}</option>`).join("");
-      document.getElementById("dt-grp-available-count").textContent = available.length;
-      document.getElementById("dt-grp-selected-count").textContent  = selected.length;
-      this._renderWalletPanes();
-    },
-
-    _renderWalletPanes() {
-      const filter = this._walletFilter();
-      const avail  = document.getElementById("dt-wal-available");
-      const sel    = document.getElementById("dt-wal-selected");
-      const available = this._st.wallets.filter(w =>
-        (!filter || filter.has(w.id)) && !this._st.walletSelectedIds.has(w.id)
-      );
-      const selected  = this._st.wallets.filter(w => this._st.walletSelectedIds.has(w.id));
-      avail.innerHTML = available.map(w => `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`).join("");
-      sel.innerHTML   = selected .map(w => `<option value="${this._esc(w.id)}">${this._esc(w.name)}</option>`).join("");
-      document.getElementById("dt-wal-available-count").textContent = available.length;
-      document.getElementById("dt-wal-selected-count").textContent  = selected.length;
-    },
-
-    _highlighted(id) {
-      return Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
-    },
-    addGroupingSelected()    { this._highlighted("dt-grp-available").forEach(id => this._st.groupingSelectedIds.add(id)); this._renderPanes(); },
-    addGroupingAll()         { Array.from(document.getElementById("dt-grp-available").options).forEach(o => o.value && this._st.groupingSelectedIds.add(o.value)); this._renderPanes(); },
-    removeGroupingSelected() { this._highlighted("dt-grp-selected").forEach(id => this._st.groupingSelectedIds.delete(id)); this._renderPanes(); },
-    removeGroupingAll()      { this._st.groupingSelectedIds.clear(); this._renderPanes(); },
-    addWalletSelected()    { this._highlighted("dt-wal-available").forEach(id => this._st.walletSelectedIds.add(id)); this._renderWalletPanes(); },
-    addWalletAll()         { Array.from(document.getElementById("dt-wal-available").options).forEach(o => o.value && this._st.walletSelectedIds.add(o.value)); this._renderWalletPanes(); },
-    removeWalletSelected() { this._highlighted("dt-wal-selected").forEach(id => this._st.walletSelectedIds.delete(id)); this._renderWalletPanes(); },
-    removeWalletAll()      { this._st.walletSelectedIds.clear(); this._renderWalletPanes(); },
-
-    // Companies the next call should iterate over. Single-company mode
-    // returns one id; "Todas as empresas" returns the full visible list.
-    _targetCompanyIds() {
-      const v = document.getElementById("dt-company").value;
-      if (v === "__ALL__") return this._st.allCompanies.map(c => c.id);
-      return v ? [v] : [];
-    },
-
-    // Filter envelope shared by every endpoint. Per-call we splice in the
-    // companyId — the backend pins one company per request.
-    _baseFilter() {
-      const ini = document.getElementById("dt-initialDate").value;
-      const fin = this._st.mode === "range"
-        ? document.getElementById("dt-finalDate").value
-        : ini;
-      return {
-        initialDate: ini,
-        finalDate:   fin,
-        groupingIds: Array.from(this._st.groupingSelectedIds),
-        walletIds:   Array.from(this._st.walletSelectedIds),
-      };
-    },
-
-    _payloadFor(companyId) {
-      return { ...this._baseFilter(), companyId };
-    },
-
-    _validateBase() {
-      const cids = this._targetCompanyIds();
-      if (!cids.length)         { alert("Selecione uma empresa."); return false; }
-      const f = this._baseFilter();
-      if (!f.initialDate)       { alert("Informe a data."); return false; }
-      if (this._st.mode === "range" && !f.finalDate) { alert("Informe a data final."); return false; }
-      if (f.initialDate > f.finalDate) { alert("Data inicial > data final."); return false; }
-      return true;
-    },
-
-    _resetResults() {
-      document.getElementById("dt-warnings").innerHTML = "";
-      document.getElementById("dt-status").textContent = "";
-      document.getElementById("dt-groups-section").classList.add("hidden");
-      document.getElementById("dt-patched-section").classList.add("hidden");
-      document.getElementById("dt-results").classList.add("hidden");
-      document.getElementById("dt-build-patches-btn").disabled = true;
-      document.getElementById("dt-apply-btn").disabled         = true;
-      document.getElementById("dt-build-count").textContent = "0";
-      document.getElementById("dt-apply-count").textContent = "0";
-      this._st.detectedGroups = [];
-      this._st.selectedGroupKeys = new Set();
-      this._st.patched = [];
-      this._st.selectedPatchKeys = new Set();
-      this._st.transactions = [];
-      this._st.walletCompany = {};
-    },
-
-    // ── Step 1: detect ──────────────────────────────────────────────
-    async runCheck() {
-      if (!this._validateBase()) return;
-      const cids = this._targetCompanyIds();
-
-      document.getElementById("dt-status").textContent = "Calculando...";
-      this._resetResults();
-
-      // Iterate companies sequentially so the operator gets progress and so
-      // we don't hammer the backend with N parallel scans. WalletIds are
-      // globally unique (Mongo ObjectIds), so concatenating per-company
-      // results into a single state map is safe.
-      let totalCandidate = 0;
-      const errors = [];
-      for (let i = 0; i < cids.length; i++) {
-        const cid = cids[i];
-        if (cids.length > 1) {
-          document.getElementById("dt-status").textContent =
-            `Verificando empresa ${i + 1}/${cids.length}...`;
-        }
-        let resp;
-        try {
-          const r = await fetch("/api/excecoes/intraday/check", {
-            method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(this._payloadFor(cid)),
-          });
-          resp = await r.json();
-          if (!r.ok || resp.error) {
-            errors.push(`${cid}: ${resp.error || "Falha"}`);
-            continue;
-          }
-        } catch (e) {
-          errors.push(`${cid}: erro de rede`);
-          continue;
-        }
-
-        totalCandidate += (resp.candidateWalletCount || 0);
-        const groups = (resp.groups || []).map(g => ({...g, companyId: cid}));
-        this._st.detectedGroups = this._st.detectedGroups.concat(groups);
-        Object.assign(this._st.walletNames,   resp.walletNames   || {});
-        Object.assign(this._st.securityNames, resp.securityNames || {});
-        // Remember which company each wallet belongs to so build/apply can
-        // fan back out per-companyId without re-fetching.
-        for (const wid of Object.keys(resp.walletNames || {})) {
-          this._st.walletCompany[wid] = cid;
-        }
-        for (const g of groups) this._st.walletCompany[g.walletId] = cid;
-      }
-
-      this._st.selectedGroupKeys = new Set(
-        this._st.detectedGroups.map(g => `${g.walletId}|${g.securityId}|${g.date}`),
-      );
-
-      const scope = cids.length > 1 ? `${cids.length} empresa(s)` : "1 empresa";
-      document.getElementById("dt-status").textContent =
-        `${totalCandidate} carteira(s) inspecionada(s) em ${scope}.`;
-      this._renderGroups();
-
-      const warns = [];
-      if (errors.length) {
-        warns.push(`<p class="dt-pill dt-pill-error">${errors.length} erro(s): ${this._esc(errors.slice(0, 3).join("; "))}${errors.length > 3 ? "..." : ""}</p>`);
-      }
-      if (!this._st.detectedGroups.length) {
-        warns.push('<p class="dt-pill dt-pill-muted">Nenhum day-trade detectado para os filtros informados.</p>');
-      }
-      document.getElementById("dt-warnings").innerHTML = warns.join(" ");
-    },
-
-    _renderGroups() {
-      const sec    = document.getElementById("dt-groups-section");
-      const tbody  = document.getElementById("dt-groups-tbody");
-      const count  = document.getElementById("dt-groups-count");
-      const master = document.getElementById("dt-groups-master");
-      const groups = this._st.detectedGroups;
-      const wn = this._st.walletNames, sn = this._st.securityNames;
-
-      if (!groups.length) {
-        sec.classList.add("hidden");
-        tbody.innerHTML = "";
-        return;
-      }
-      sec.classList.remove("hidden");
-      count.textContent = `(${groups.length})`;
-      tbody.innerHTML = groups.map(g => {
-        const key = `${g.walletId}|${g.securityId}|${g.date}`;
-        const wname = wn[g.walletId]   || g.walletId;
-        const sname = sn[g.securityId] || g.securityId;
-        const checked = this._st.selectedGroupKeys.has(key) ? "checked" : "";
-        return `<tr class="border-t border-gray-100">
-          <td class="px-2 py-1.5 text-center">
-            <input type="checkbox" data-dt-group-key="${this._esc(key)}" ${checked} onchange="Daytrade.onGroupToggle(this)" />
-          </td>
-          <td class="px-2 py-1.5">${this._esc(g.date)}</td>
-          <td class="px-2 py-1.5">${this._esc(wname)}</td>
-          <td class="px-2 py-1.5">
-            <div class="font-medium text-gray-800">${this._esc(sname)}</div>
-            <div class="text-[10px] text-gray-400 font-mono">${this._esc(g.securityId)}</div>
-          </td>
-          <td class="px-2 py-1.5 text-right">${g.transactionCount}</td>
-          <td class="px-2 py-1.5 text-right">${this._fmtMoney(g.contribution)}</td>
-          <td class="px-2 py-1.5">${this._esc(g.currencyId || "")}</td>
-        </tr>`;
-      }).join("");
-
-      master.checked = groups.length > 0
-        && groups.every(g => this._st.selectedGroupKeys.has(`${g.walletId}|${g.securityId}|${g.date}`));
-      this._refreshBuildButton();
-    },
-
-    onGroupToggle(cb) {
-      const key = cb.dataset.dtGroupKey;
-      if (cb.checked) this._st.selectedGroupKeys.add(key);
-      else            this._st.selectedGroupKeys.delete(key);
-      document.getElementById("dt-groups-master").checked = this._st.detectedGroups.length > 0
-        && this._st.detectedGroups.every(g => this._st.selectedGroupKeys.has(`${g.walletId}|${g.securityId}|${g.date}`));
-      this._refreshBuildButton();
-    },
-
-    toggleGroupsAll(checked) {
-      this._st.selectedGroupKeys = new Set(
-        checked
-          ? this._st.detectedGroups.map(g => `${g.walletId}|${g.securityId}|${g.date}`)
-          : [],
-      );
-      this._renderGroups();
-    },
-
-    _refreshBuildButton() {
-      const n = this._st.selectedGroupKeys.size;
-      document.getElementById("dt-build-count").textContent = String(n);
-      document.getElementById("dt-build-patches-btn").disabled = (n === 0);
-    },
-
-    // ── Step 2: build patches ─────────────────────────────────────
-    async runBuildPatches() {
-      if (!this._st.selectedGroupKeys.size) return;
-      if (!this._validateBase()) return;
-
-      // Group the operator's selected (walletId, securityId, date) keys by
-      // the company that wallet belongs to. When "Todas as empresas" is
-      // active we issue one /build-patches per company; the backend pins a
-      // single companyId per request.
-      const groupsByCompany = {};
-      for (const k of this._st.selectedGroupKeys) {
-        const [walletId, securityId, date] = k.split("|");
-        const cid = this._st.walletCompany[walletId];
-        if (!cid) continue;
-        (groupsByCompany[cid] = groupsByCompany[cid] || []).push({walletId, securityId, date});
-      }
-      const cids = Object.keys(groupsByCompany);
-      if (!cids.length) {
-        document.getElementById("dt-warnings").innerHTML =
-          '<p class="dt-pill dt-pill-error">Não foi possível mapear os grupos selecionados a uma empresa. Recalcule.</p>';
-        return;
-      }
-
-      document.getElementById("dt-status").textContent = "Calculando posições...";
-      document.getElementById("dt-patched-section").classList.add("hidden");
-      document.getElementById("dt-results").classList.add("hidden");
-      this._st.patched = [];
-      this._st.selectedPatchKeys = new Set();
-      this._st.transactions = [];
-
-      const errors = [];
-      for (let i = 0; i < cids.length; i++) {
-        const cid = cids[i];
-        if (cids.length > 1) {
-          document.getElementById("dt-status").textContent =
-            `Calculando posições — empresa ${i + 1}/${cids.length}...`;
-        }
-        let resp;
-        try {
-          const r = await fetch("/api/excecoes/intraday/build-patches", {
-            method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              ...this._payloadFor(cid),
-              selectedGroups: groupsByCompany[cid],
-            }),
-          });
-          resp = await r.json();
-          if (!r.ok || resp.error) {
-            errors.push(`${cid}: ${resp.error || "Falha"}`);
-            continue;
-          }
-        } catch (e) {
-          errors.push(`${cid}: erro de rede`);
-          continue;
-        }
-        const patched = (resp.patched      || []).map(p => ({...p, companyId: cid}));
-        const txns    = (resp.transactions || []).map(t => ({...t, companyId: cid}));
-        this._st.patched      = this._st.patched.concat(patched);
-        this._st.transactions = this._st.transactions.concat(txns);
-        Object.assign(this._st.walletNames,   resp.walletNames   || {});
-        Object.assign(this._st.securityNames, resp.securityNames || {});
-      }
-
-      this._st.selectedPatchKeys = new Set(
-        this._st.patched
-          .filter(p => (p.zeroedUnprocessedIds || []).length > 0)
-          .map(p => `${p.walletId}|${p.date}`),
-      );
-
-      this._renderPatched();
-      const errMsg = errors.length ? ` (${errors.length} erro(s))` : "";
-      document.getElementById("dt-status").textContent =
-        `${this._st.patched.length} posição(ões) gerada(s) · ${this._st.transactions.length} transação(ões) planejada(s).${errMsg}`;
-      if (errors.length) {
-        const cur = document.getElementById("dt-warnings").innerHTML;
-        document.getElementById("dt-warnings").innerHTML =
-          cur + ` <p class="dt-pill dt-pill-error">${errors.length} erro(s): ${this._esc(errors.slice(0, 3).join("; "))}${errors.length > 3 ? "..." : ""}</p>`;
-      }
-    },
-
-    _renderPatched() {
-      const sec   = document.getElementById("dt-patched-section");
-      const count = document.getElementById("dt-patched-count");
-      const list  = document.getElementById("dt-patched-list");
-      const patched = this._st.patched;
-      const wn = this._st.walletNames;
-
-      const warns = [];
-      const unmapped = new Set();
-      let addedCount = 0;
-      let noPositionCount = 0;
-      patched.forEach(p => {
-        (p.unmappedSecurityIds || []).forEach(s => unmapped.add(s));
-        addedCount += (p.addedUnprocessedIds || []).length;
-        if (!p.hasPosition) noPositionCount++;
-      });
-      if (unmapped.size) {
-        warns.push(`<p class="dt-pill dt-pill-warn">${unmapped.size} security(ies) sem <span class="font-mono">beehusName</span> em <span class="font-mono">db.securities</span> — não há nome para usar como Ativo no patch.</p>`);
-      }
-      if (addedCount) {
-        warns.push(`<p class="dt-pill dt-pill-info">${addedCount} linha(s) day-trade adicionada(s) ao patch (Ativo = <span class="font-mono">beehusName</span> da security, valores zerados).</p>`);
-      }
-      if (noPositionCount) {
-        warns.push(`<p class="dt-pill dt-pill-warn">${noPositionCount} (carteira, data) sem documento em <span class="font-mono">unprocessedSecurityPositions</span>.</p>`);
-      }
-      document.getElementById("dt-warnings").innerHTML = warns.join(" ");
-
-      if (!patched.length) {
-        sec.classList.add("hidden");
-        list.innerHTML = "";
-        return;
-      }
-      sec.classList.remove("hidden");
-      count.textContent = `(${patched.length})`;
-      list.innerHTML = patched.map(p => {
-        const key   = `${p.walletId}|${p.date}`;
-        const wname = wn[p.walletId] || p.walletId;
-        const zeroedSet = new Set(p.zeroedUnprocessedIds || []);
-        const addedSet  = new Set(p.addedUnprocessedIds  || []);
-        const checked   = this._st.selectedPatchKeys.has(key) ? "checked" : "";
-        const disabled  = zeroedSet.size ? "" : "disabled";
-
-        // Two row groups: patched (added or zeroed) and baseline. The
-        // panel is born collapsed → baseline tbody is hidden until the
-        // operator clicks the header. Patched rows + txns stay visible
-        // throughout (they're the operator's primary checkpoint).
-        const renderRow = r => {
-          const cls = r.added ? "dt-row-added" : (r.zeroed ? "dt-row-zeroed" : "");
-          const mark = r.added
-            ? '<span class="dt-pill dt-pill-info"  title="linha adicionada (security não estava na posição original)">adicionar</span>'
-            : (r.zeroed
-                ? '<span class="dt-pill dt-pill-error" title="zerado">zerar</span>'
-                : '<span class="dt-pill dt-pill-muted" title="baseline — não tocado">baseline</span>');
-          return `<tr class="border-t border-gray-100 ${cls}">
-            <td class="px-2 py-1 text-center">${mark}</td>
-            <td class="px-2 py-1 font-mono text-[11px]">${this._esc(r.unprocessedId)}</td>
-            <td class="px-2 py-1 text-right">${this._fmtNum(r.quantity)}</td>
-            <td class="px-2 py-1 text-right">${this._fmtNum(r.pu)}</td>
-            <td class="px-2 py-1 text-right">${this._fmtMoney(r.balance)}</td>
-            <td class="px-2 py-1">${this._esc(r.currencyId || "")}</td>
-          </tr>`;
-        };
-        const patchedRows  = (p.rows || []).filter(r => r.added || r.zeroed);
-        const baselineRows = (p.rows || []).filter(r => !(r.added || r.zeroed));
-        const patchedHtml  = patchedRows .map(renderRow).join("");
-        const baselineHtml = baselineRows.map(renderRow).join("");
-
-        const zeroedExisting = zeroedSet.size - addedSet.size;
-        const headerInfo = [
-          `${(p.rows || []).length} ativo(s)`,
-          zeroedExisting > 0 ? `<span class="dt-pill dt-pill-error">${zeroedExisting} zerado(s)</span>` : "",
-          addedSet.size      ? `<span class="dt-pill dt-pill-info">${addedSet.size} adicionado(s)</span>` : "",
-          zeroedSet.size === 0 ? '<span class="dt-pill dt-pill-muted">nenhum a zerar/adicionar</span>' : "",
-          baselineRows.length > 0 ? `<span class="dt-pill dt-pill-muted">+${baselineRows.length} baseline</span>` : "",
-          p.hasPosition ? "" : '<span class="dt-pill dt-pill-warn">sem doc de posição</span>',
-        ].filter(Boolean).join(" ");
-        const emptyMsg = (p.rows || []).length
-          ? ""
-          : '<p class="text-center text-gray-400 text-xs py-3">Nenhuma linha em unprocessedSecurityPositions.</p>';
-
-        // Inline transactions block: one per (walletId, date), shown right
-        // below the position table for that pair. Mirrors the operator
-        // mental model — "for this carteira on this data, here are the
-        // patched rows AND the txns that go with them".
-        const panelTxns = (this._st.transactions || []).filter(
-          t => t.walletId === p.walletId && t.date === p.date,
-        );
-        const txnHtml = panelTxns.length ? this._renderPanelTxns(panelTxns) : "";
-
-        // `dt-panel dt-collapsed` is the born-collapsed state: baseline
-        // rows are hidden, patched rows + txns visible. The header click
-        // (Daytrade.togglePanel) flips `dt-collapsed`; the checkbox stops
-        // propagation so toggling selection doesn't also flip the body.
-        return `<div class="border rounded dt-panel dt-collapsed">
-          <div class="dt-panel-header bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700 flex justify-between items-center gap-2"
-               onclick="Daytrade.togglePanel(this)">
-            <span class="flex items-center gap-2">
-              <span class="dt-chevron">▾</span>
-              <input type="checkbox" data-dt-patch-key="${this._esc(key)}" ${checked} ${disabled}
-                     onclick="event.stopPropagation()" onchange="Daytrade.onPatchToggle(this)" />
-              <span>${this._esc(wname)} — ${this._esc(p.date)}</span>
-            </span>
-            <span class="text-gray-400 font-normal">${headerInfo}</span>
-          </div>
-          <div class="dt-panel-body">
-            ${(p.rows || []).length ? `<table class="w-full text-xs">
-              <thead class="bg-gray-50 text-gray-500 uppercase">
-                <tr>
-                  <th class="px-2 py-1 text-center min-w-[80px]">Marca</th>
-                  <th class="px-2 py-1 text-left">Ativo</th>
-                  <th class="px-2 py-1 text-right">Quant.</th>
-                  <th class="px-2 py-1 text-right">PU</th>
-                  <th class="px-2 py-1 text-right">Saldo</th>
-                  <th class="px-2 py-1 text-left">Moeda</th>
-                </tr>
-              </thead>
-              <tbody class="dt-tbody-patched">${patchedHtml}</tbody>
-              <tbody class="dt-tbody-baseline">${baselineHtml}</tbody>
-            </table>` : emptyMsg}
-            ${txnHtml}
-          </div>
-        </div>`;
-      }).join("");
-      this._refreshApplyButton();
-    },
-
-    // Per-panel transactions sub-table — one block per (walletId, date),
-    // rendered inside the patched panel's body so the operator sees the
-    // position rows and the txns that will be POSTed alongside them.
-    _renderPanelTxns(txns) {
-      const rows = txns.map(t => {
-        const sname = t.securityBeehusName
-                    || this._st.securityNames[t.securityId]
-                    || t.securityId;
-        const status = t.skip
-          ? `<span class="dt-pill dt-pill-warn" title="${this._esc(t.skipReason || '')}">skip — ${this._esc(t.skipReason || '')}</span>`
-          : '<span class="dt-pill dt-pill-info">criar</span>';
-        return `<tr class="border-t border-gray-100">
-          <td class="px-2 py-1">
-            <div class="font-medium text-gray-800">${this._esc(sname)}</div>
-            <div class="text-[10px] text-gray-400 font-mono">${this._esc(t.securityId)}</div>
-          </td>
-          <td class="px-2 py-1 text-gray-600">${this._esc(t.description || "")}</td>
-          <td class="px-2 py-1 text-right">${this._fmtMoney(t.balance)}</td>
-          <td class="px-2 py-1">${this._esc(t.currencyId || "")}</td>
-          <td class="px-2 py-1">${status}</td>
-        </tr>`;
-      }).join("");
-      return `<div class="dt-panel-txns">
-        <h5>Transações <span class="font-mono">securityContributionAdjustment</span> (${txns.length})</h5>
-        <div class="border rounded overflow-hidden bg-white">
-          <table class="w-full text-xs">
-            <thead class="bg-gray-50 text-gray-500 uppercase">
-              <tr>
-                <th class="px-2 py-1 text-left  min-w-[180px]">Security</th>
-                <th class="px-2 py-1 text-left  min-w-[160px]">Descrição</th>
-                <th class="px-2 py-1 text-right min-w-[120px]">Saldo</th>
-                <th class="px-2 py-1 text-left  min-w-[60px]">Moeda</th>
-                <th class="px-2 py-1 text-left  min-w-[120px]">Status</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      </div>`;
-    },
-
-    // Toggle the patched panel's collapsed state. Called from the header's
-    // onclick — the checkbox inside stops propagation so selection doesn't
-    // accidentally collapse the panel.
-    togglePanel(headerEl) {
-      const panel = headerEl.closest('.dt-panel');
-      if (panel) panel.classList.toggle('dt-collapsed');
-    },
-
-    onPatchToggle(cb) {
-      const key = cb.dataset.dtPatchKey;
-      if (cb.checked) this._st.selectedPatchKeys.add(key);
-      else            this._st.selectedPatchKeys.delete(key);
-      this._refreshApplyButton();
-    },
-
-    togglePatchesAll(checked) {
-      if (checked) {
-        this._st.selectedPatchKeys = new Set(
-          this._st.patched
-            .filter(p => (p.zeroedUnprocessedIds || []).length > 0)
-            .map(p => `${p.walletId}|${p.date}`),
-        );
-      } else {
-        this._st.selectedPatchKeys = new Set();
-      }
-      this._renderPatched();
-    },
-
-    _refreshApplyButton() {
-      const n = this._st.selectedPatchKeys.size;
-      document.getElementById("dt-apply-count").textContent = String(n);
-      document.getElementById("dt-apply-btn").disabled      = (n === 0);
-    },
-
-    // ── Step 3: per-row txn submit + bulk position upload ──────────
-    async runApply() {
-      if (!this._st.selectedPatchKeys.size) { alert("Marque pelo menos uma posição patcheada."); return; }
-      if (!this._validateBase()) return;
-
-      // Fan out the operator's group + patch selections by their wallet's
-      // companyId. Each company gets its own /apply call (the backend pins
-      // a single companyId per request), and txn/submit is per row.
-      const groupsByCompany = {};
-      for (const k of this._st.selectedGroupKeys) {
-        const [walletId, securityId, date] = k.split("|");
-        const cid = this._st.walletCompany[walletId];
-        if (!cid) continue;
-        (groupsByCompany[cid] = groupsByCompany[cid] || []).push({walletId, securityId, date});
-      }
-      const patchesByCompany = {};
-      for (const k of this._st.selectedPatchKeys) {
-        const [walletId, date] = k.split("|");
-        const cid = this._st.walletCompany[walletId];
-        if (!cid) continue;
-        (patchesByCompany[cid] = patchesByCompany[cid] || []).push({walletId, date});
-      }
-
-      const txnPlans = (this._st.transactions || []).filter(t => !t.skip);
-      const totalPatches = Object.values(patchesByCompany).reduce((s, a) => s + a.length, 0);
-      const confirmMsg =
-        `Enviar para a API Beehus:\n` +
-        `  • ${txnPlans.length} transação(ões) securityContributionAdjustment\n` +
-        `  • ${totalPatches} posição(ões) patcheada(s)\n\n` +
-        `Confirmar?`;
-      if (!confirm(confirmMsg)) return;
-
-      document.getElementById("dt-results").classList.remove("hidden");
-      document.getElementById("dt-apply-btn").disabled = true;
-      const list = document.getElementById("dt-results-list");
-      list.innerHTML = '<p class="text-xs text-gray-400">Enviando transações...</p>';
-
-      // Phase 1: sequential per-row txn submit (Correções pattern).
-      const txnResults = [];
-      let authBroke = null;
-      for (let i = 0; i < txnPlans.length; i++) {
-        const t = txnPlans[i];
-        const cid = t.companyId || this._st.walletCompany[t.walletId];
-        list.innerHTML =
-          `<p class="text-xs text-gray-400">Enviando transação ${i + 1}/${txnPlans.length}...</p>`;
-        let r, data;
-        try {
-          r = await fetch("/api/excecoes/intraday/transactions/submit", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              ...this._payloadFor(cid),
-              group: {walletId: t.walletId, securityId: t.securityId, date: t.date},
-            }),
-          });
-          data = await r.json().catch(() => ({}));
-        } catch (e) {
-          txnResults.push({...t, status: "error", error: "rede: " + (e.message || "")});
-          continue;
-        }
-        if (r.ok && data.ok) {
-          txnResults.push({...t, ...data});
-        } else {
-          txnResults.push({...t, ...data,
-                           status: data.status || (r.status === 401 ? "auth_error" : "error"),
-                           error:  data.error || `HTTP ${r.status}`});
-          if (r.status === 401) {
-            authBroke = data;
-            break;
-          }
-        }
-      }
-
-      // Phase 2: bulk position upload — one /apply call per company.
-      const posResults = [];
-      let posError = null;
-      if (!authBroke) {
-        list.innerHTML += '<p class="text-xs text-gray-400 mt-2">Enviando posições patcheadas...</p>';
-        const cids = Object.keys(patchesByCompany);
-        for (let i = 0; i < cids.length; i++) {
-          const cid = cids[i];
-          if (cids.length > 1) {
-            list.innerHTML =
-              `<p class="text-xs text-gray-400">Enviando posições — empresa ${i + 1}/${cids.length}...</p>`;
-          }
-          let data;
-          try {
-            const r = await fetch("/api/excecoes/intraday/apply", {
-              method:  "POST",
-              headers: {"Content-Type": "application/json"},
-              body:    JSON.stringify({
-                ...this._payloadFor(cid),
-                selectedGroups:  groupsByCompany[cid] || [],
-                selectedPatches: patchesByCompany[cid],
-              }),
-            });
-            data = await r.json().catch(() => ({}));
-          } catch (e) {
-            posError = "rede: " + (e.message || "");
-            continue;
-          }
-          if (Array.isArray(data.results)) posResults.push(...data.results);
-          if (data.error && !posError) posError = data.error;
-        }
-      }
-
-      this._renderApplyResults({
-        transactionResults: txnResults,
-        results:            posResults,
-        ...(authBroke ? {error: authBroke.error} : (posError ? {error: posError} : {})),
-      });
-      this._refreshApplyButton();
-    },
-
-    _renderApplyResults(d) {
-      const list = document.getElementById("dt-results-list");
-      const wn = this._st.walletNames || {};
-      const sn = this._st.securityNames || {};
-      let html = "";
-      if (d.error) {
-        html += `<p class="dt-pill dt-pill-error">${this._esc(d.error)}</p>`;
-      }
-      const txns = d.transactionResults || [];
-      if (txns.length) {
-        html += '<p class="text-xs font-semibold text-gray-700 mt-1 mb-1">Transações criadas</p>';
-        html += txns.map(r => {
-          const cls = r.status === "ok" ? "success"
-                    : (r.status === "skipped" ? "muted" : "error");
-          const pill = `<span class="dt-pill dt-pill-${cls}">${this._esc(r.status)}</span>`;
-          let extra = "";
-          if (r.status === "ok") {
-            extra = r.createdId ? ` — id <span class="font-mono text-[10px]">${this._esc(r.createdId)}</span>` : "";
-          } else if (r.error)  extra = ` — ${this._esc(r.error)}`;
-          else if (r.reason)   extra = ` — ${this._esc(r.reason)}`;
-          const wname = wn[r.walletId]   || r.walletId;
-          const sname = r.securityBeehusName
-                      || sn[r.securityId] || r.securityId || "";
-          return `<div class="text-xs text-gray-700">${pill} <strong>${this._esc(sname)}</strong> · ${this._esc(wname)} · ${this._esc(r.date)} · ${this._fmtMoney(r.balance)}${extra}</div>`;
-        }).join("");
-      }
-      const rows = d.results || [];
-      if (rows.length) {
-        html += '<p class="text-xs font-semibold text-gray-700 mt-3 mb-1">Posições patcheadas</p>';
-        html += rows.map(r => {
-          const cls = r.status === "ok" ? "success" : (r.status === "skipped" ? "muted" : "error");
-          const pill = `<span class="dt-pill dt-pill-${cls}">${this._esc(r.status)}</span>`;
-          let extra = "";
-          if (r.status === "ok") extra = ` — ${r.rows} linha(s), ${r.zeroed} zerada(s)`;
-          else if (r.error)  extra = ` — ${this._esc(r.error)}`;
-          else if (r.reason) extra = ` — ${this._esc(r.reason)}`;
-          const wname = wn[r.walletId] || r.walletId;
-          return `<div class="text-xs text-gray-700">${pill} <strong>${this._esc(wname)}</strong> · ${this._esc(r.date)}${extra}</div>`;
-        }).join("");
-      }
-      list.innerHTML = html || '<p class="text-xs text-gray-400">Nenhum resultado.</p>';
-    },
-  };
 </script>
 
 <!-- Strip de Posições — JS extraído para partial reaproveitado pela

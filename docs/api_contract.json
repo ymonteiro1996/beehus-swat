@@ -4,14 +4,6 @@
   "baseUrl": "http://localhost:5000",
 
   "modules": {
-    "setup": {
-      "pages": [{"method": "GET", "path": "/setup"}],
-      "endpoints": [
-        {"method": "POST", "path": "/api/setup/test-connection", "body": {"uri": "string"}, "response": {"ok": true}},
-        {"method": "POST", "path": "/api/setup/save-connection", "body": {"uri": "string"}, "response": {"ok": true}}
-      ]
-    },
-
     "config": {
       "pages": [{"method": "GET", "path": "/config"}, {"method": "GET", "path": "/settings"}],
       "endpoints": [
@@ -75,16 +67,16 @@
         {"method": "GET", "path": "/api/impostos/wallets", "params": {"companyId": "str"}, "response": [{"id": "str", "name": "str"}]},
         {"method": "GET", "path": "/api/impostos/wallet-securities", "params": {"walletId": "str"}, "response": {"securities": [], "positionDate": "str"}}
       ]
-    },
+    }
 
   },
 
   "summary": {
-    "totalModules": 8,
+    "totalModules": 7,
     "totalEndpoints": "50+",
-    "database": "MongoDB Atlas (Beehus)",
+    "database": "Beehus API (sem dependência de Mongo nas rotas web; Mongo só para CLIs offline)",
     "backend": "Python Flask",
     "frontend": "HTML + Tailwind CSS + vanilla JS",
-    "auth": "Per-user MongoDB connection via /setup"
+    "auth": "Bearer token Beehus (configurado in-app)"
   }
 }

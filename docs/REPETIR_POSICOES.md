@@ -92,11 +92,12 @@
 O chip "Repetir" no Painel de Controle **não tem mais modal de
 confirmação rápida**: clicar abre direto `/repetir-posicoes` dentro do
 mesmo Painel (iframe gerenciado por `Funcoes._showPage`, mesmo mecanismo
-de `openCarteira` / `openSettings`). A página inicializa com `#rp-date` e
-`#rp-global-target` vazios e **não roda prévia automaticamente** — o
-operador escolhe a data, marca as listas e dispara "Gerar prévia"
-manualmente. O `runDaily` está ligado ao `onchange` do `#rp-date`, então
-a tabela popula assim que o operador escolhe a data.
+de `openCarteira` / `openSettings`). A página inicializa com a **Data-fonte**
+(`#rp-daily-source-date`) e a Data alvo global vazias e **não roda prévia
+automaticamente** — o operador escolhe a Data-fonte, marca as listas e dispara
+"Gerar prévia" manualmente. O `runDaily` está ligado ao `onchange` da Data-fonte
+(`Repetir.onDailySourceDateChange`), então a tabela popula/atualiza a
+elegibilidade assim que o operador escolhe a data.
 
 Deep links com `?date=YYYY-MM-DD&targetDate=YYYY-MM-DD` continuam
 suportados: nesse caso `Repetir.init()` pré-preenche os dois inputs,
@@ -212,21 +213,28 @@ A página `/repetir-posicoes` (na aba **"Rotina diária"**) mostra:
 0. **Listas a incluir** — painel de checkboxes (um por preset salvo).
    A página inicia com **todas as listas DESMARCADAS** e **não carrega
    o roster automaticamente** — o operador entra com o foco no bloco
-   "Carteiras com divergência (Conciliação NAV)" e só marca uma lista
+   "Carteiras da empresa" e só marca uma lista
    quando quer trabalhar a rotina diária. Botões `Selecionar todas` /
    `Limpar` no header. Cada toggle re-dispara `/api/repetir-posicoes/daily`
    com o querystring `?lists=...` atualizado. (Comportamento anterior:
    a tela abria com todas as listas marcadas e o roster cheio.)
 
-1. **Filtros:** apenas `positionDate` (opcional, default = hoje em BRT).
-   O filtro restringe a tabela a carteiras com `lastDate <= positionDate`.
+1. **Data-fonte** (`#rp-daily-source-date`, opcional) — a data **DE ONDE** as
+   posições serão repetidas. Ao escolhê-la, o `/daily` consulta o
+   **pre-processing (endpoint E)** — *não mais `processedPosition` no Mongo* —
+   e marca como elegíveis só as carteiras das listas que **têm posição
+   processada nessa data exata** (fan-out só nas empresas do roster). Vazia →
+   nenhuma carteira vem pré-elegível e o operador informa a origem por linha.
+   *(Mudança jun/2026: antes era um filtro `lastDate <= positionDate` calculado
+   por `MAX(positionDate)` no Mongo; o backend não tem "última data por
+   carteira", então a origem passou a ser informada pelo operador.)*
 2. **Tabela de carteiras (união das listas marcadas):**
 
    | Coluna | Origem |
    |---|---|
    | Empresa | `db.wallets.companyId` → `db.companies.name` |
    | Carteira | `db.wallets.name` |
-   | Última `processedPosition` | input editável (default = maior `positionDate` em `processedPosition` para a carteira). Operador pode sobrescrever para repetir a partir de uma data anterior, ou digitar uma data quando a carteira não tem `processedPosition` (a linha então fica elegível e entra na prévia, com o aviso `sem processedPosition em sourceDate` se o backend nada encontrar) |
+   | Data-fonte | input editável (default = a **Data-fonte** escolhida no topo, quando a carteira tem posição processada nela; senão vazio, com aviso `sem posição em <data>` / `informe a Data-fonte`). Operador pode sobrescrever por carteira para repetir a partir de outra data |
    | Data alvo | input editável (default = próximo dia útil após `lastDate`, ou o valor da Data alvo global se preenchida) |
    | ✓ | checkbox para incluir/excluir da execução |
 
@@ -279,10 +287,9 @@ A página `/repetir-posicoes` (na aba **"Rotina diária"**) mostra:
                    (`targetDate`) e **Pos. anterior** (`sourceDate`) —
                    para o operador confirmar sobre quais datas a prévia
                    está rodando. É especialmente útil no atalho
-                   "Carteiras com divergência (Conciliação NAV)", em que
-                   essas datas vêm da grade de conciliação (`targetDate` =
-                   data selecionada; `sourceDate` = `formerDate` da
-                   carteira).
+                   "Carteiras da empresa", em que essas datas vêm do
+                   `/results` (`sourceDate` = data selecionada; `targetDate` =
+                   próximo dia útil).
 
                    Botão **"Só com divergência"** no cabeçalho da prévia
                    ativa um filtro **100% CSS** (sem rerender, sem
@@ -716,9 +723,11 @@ cenários (`contributionProjected` e `contributionActual`) — a Δqty
 source→target reflete o mesmo trade nos dois lados.
 
 `couponAmort` vem de `db.transactions` com tipo `coupon` ou
-`amortization` em `(source, target]`. `dividendPerShare` vem de
-`db.securityEvents` com `eventType ∈ {cashDividend,
-interestOnEquity}` e `operationDate = targetDate`. Implementação:
+`amortization` em `(source, target]`. `dividendPerShare` vem dos
+**securityEvents** com `eventType ∈ {cashDividend, interestOnEquity}` e
+`operationDate = targetDate`, lidos via API (`GET /beehus/security-events?
+securities=<csv>` → seam `beehus_catalog.dividend_events_by_sid`, escopado aos
+`securityIds` da carteira — **não mais `db.securityEvents`**). Implementação:
 `_target_processed_position` (lê `executionPrice`),
 `_coupon_amort_by_sid`, `_dividend_events_by_sid`,
 `_security_contribution` em
@@ -1007,7 +1016,8 @@ todas as colunas de diff mostram `—`.
 | `GET`  | `/api/repetir-posicoes/wallet-lists` | Presets nomeados com metadata enriquecida: `{lists: [{name, addedAt, walletIds[], wallets: [{walletId, walletName, companyId, companyName}]}]}`. |
 | `POST` | `/api/repetir-posicoes/wallet-lists` | Upsert de um preset. Body: `{name, walletIds[]}` → `{ok, name, count}`. |
 | `DELETE` | `/api/repetir-posicoes/wallet-lists?name=<n>` | Remove um preset. |
-| `GET`  | `/api/repetir-posicoes/daily?lists=L1,L2&date=YYYY-MM-DD` | Carteiras da união dos presets em `lists` (CSV, **obrigatório** — vazio devolve `wallets: []`), com `companyId`/`companyName` + maior `processedPosition.positionDate`. Sentinela `lists=*` → união de **todos** os presets salvos (usado pelo fast-path do Painel de Controle). Sem `companyId` no querystring — a rotina é company-agnostic. |
+| `GET`  | `/api/repetir-posicoes/daily?lists=L1,L2&date=YYYY-MM-DD` | Carteiras da união dos presets em `lists` (CSV, **obrigatório** — vazio devolve `wallets: []`), com `companyId`/`companyName`. `date` (opcional) = **Data-fonte**: marca elegível (`lastDate`=data, `suggestedTarget`=próximo dia útil) cada carteira que tem posição processada nessa data, verificado via **pre-processing (E) `processedWalletsDetailed`** (fan-out nas empresas do roster), **não mais** via `processedPosition` no Mongo. Sem `date` → `lastDate` vazio. Sentinela `lists=*` → união de **todos** os presets salvos (fast-path do Painel). Sem `companyId` no querystring — a rotina é company-agnostic. |
+| `GET`  | `/api/repetir-posicoes/results-wallets?companyId=...&date=YYYY-MM-DD` | Carteiras da empresa **com resultado de NAV na data** — lê o consolidado `/results` (`beehus_catalog.nav_results` → `walletsWithNavDetailed`) e devolve `{wallets: [{walletId, walletName, nav, navPerShare, amount}], date}`. **Sem filtro de divergência** (substitui o antigo atalho de Conciliação NAV): lista TODAS as carteiras do `/results`. O front (bloco "Carteiras da empresa") dispara a prévia ao clicar, com `source = data` e `target = próximo dia útil`. `{wallets: []}` se a empresa não for visível ou o `/results` não responder. |
 | `POST` | `/api/repetir-posicoes/preview` | Body: `{items: [{walletId, sourceDate, targetDate}, ...]}` → preview por carteira, com regras aplicadas. O backend resolve `companyId` por wallet via `db.wallets`. |
 | `POST` | `/api/repetir-posicoes/b1-prices` | Body: `{items: [{securityId, targetDate}, ...]}` → `{prices: {"<securityId>\|<targetDate>": {pu, date}}}`. Fonte: `db.securityPrices.historyPrice[]` filtrado por `date == targetDate` (match exato, sem carry-forward). Entradas têm apenas `date`/`value`/`adjustedQuantity`; "B1" é rótulo da UI, não campo no banco. `securityId` é consultado tanto como string quanto como `ObjectId` (legado misto). |
 | `POST` | `/api/repetir-posicoes/apply` | Body: `{items: [{walletId, sourceDate, targetDate, acceptedSecurityIds?: [...]}, ...], puOverrides?: {"<walletId>\|<securityId>\|<targetDate>": pu}, includeCash?: bool (default true)}` → agrupa por empresa, constrói **um `.xlsx` por empresa** e envia N chamadas via `upload_unprocessed_security_positions_file`. **`acceptedSecurityIds` é opcional** — omitir / passar `null` aceita todo o output do rule chain (modo "Executar sem prévia"). **Caixa**: cada carteira recebe uma linha `Caixa = "Sim"` com `SaldoBruto = cash.new`, a menos que `includeCash=false`. Resposta: `{uploaded, uploads[{companyId, companyName, status, rows, filename, ...}], results[{cashSent, ...}], totalRows, runId, diffTotals, diffReport}` (ver [§Relatório de log](#relatório-de-log-audit-trail)). |

@@ -31,6 +31,10 @@ Endpoints (see spec for the full table):
     GET  /api/repetir-posicoes/daily?lists=…            — wallet roster for the
                                                           checked lists + last
                                                           processedPosition date
+    GET  /api/repetir-posicoes/results-wallets          — wallets of a company
+                                                          with a NAV result on a
+                                                          date (/results), no
+                                                          divergence filter
     POST /api/repetir-posicoes/preview                  — apply rule chain,
                                                           return side-by-side
                                                           (original × repetição)
@@ -61,6 +65,7 @@ from db import (
     get_company_names,
     get_security_names,
     get_wallet_names,
+    resolve_wallet,
     sum_cash,
     sum_cash_by_dates,
     today_in_brt,
@@ -70,6 +75,7 @@ from beehus_api import (
     BeehusAPIError,
     BeehusAuthError,
 )
+import beehus_catalog
 from pages.precificacao import calculate_curva, _load_lists
 
 bp = Blueprint("repetir_posicoes", __name__)
@@ -521,13 +527,13 @@ def _wallet_company_map(wallet_ids):
     `db.wallets`. Source of truth — the config's stored `companyId` is only
     a hint (a wallet could have been re-assigned upstream after being
     added to the list)."""
-    out = {}
-    oids = _to_oids(wallet_ids)
-    if not oids:
-        return out
-    for w in db.wallets.find({"_id": {"$in": oids}}, {"companyId": 1}):
-        out[str(w["_id"])] = str(w.get("companyId") or "")
-    return out
+    ids = [str(w) for w in (wallet_ids or [])]
+    if not ids:
+        return {}
+    return {
+        wid: str(cid or "")
+        for wid, cid in beehus_catalog.wallet_company_map(ids).items()
+    }
 
 
 # ── Page route ───────────────────────────────────────────────────────────────
@@ -563,11 +569,10 @@ def list_wallets():
     enabled = _all_enabled_wallets()
     wallet_names = get_wallet_names()
     items = []
-    for w in db.wallets.find({"companyId": company_id}, {"name": 1}):
-        wid = str(w["_id"])
+    for wid, nm in beehus_catalog.wallets_for_company(company_id).items():
         items.append({
             "id":      wid,
-            "name":    w.get("name") or wallet_names.get(wid, wid),
+            "name":    nm or wallet_names.get(wid, wid),
             "enabled": wid in enabled,
         })
     items.sort(key=lambda x: (x["name"] or "").lower())
@@ -671,14 +676,12 @@ def save_wallet_list():
     cf = get_company_filter()
     visible = set()
     if wallet_ids:
-        for w in db.wallets.find(
-            {"_id": {"$in": _to_oids(wallet_ids)}},
-            {"companyId": 1},
-        ):
-            cid = str(w.get("companyId") or "")
+        comp_map = beehus_catalog.wallet_company_map([str(w) for w in wallet_ids])
+        for wid, cid in comp_map.items():
+            cid = str(cid or "")
             if cf and cid and cid not in cf:
                 continue
-            visible.add(str(w["_id"]))
+            visible.add(wid)
     clean_ids = [w for w in wallet_ids if w in visible]
 
     cfg = _load_config()
@@ -726,8 +729,13 @@ def daily_listing():
       • `lists` (required for any rows) — comma-separated preset names
         the operator wants to include. Empty / missing → no rows (the
         UI should land with zero rows until the operator picks a list).
-      • `date` (optional, YYYY-MM-DD) — filters to wallets whose latest
-        processed date is **on or before** that date.
+      • `date` (optional, YYYY-MM-DD) — the **Data-fonte**: the date to
+        repeat the positions FROM. When given, each roster wallet is marked
+        eligible (`lastDate` = this date, `suggestedTarget` = next business
+        day) **iff** it has a processed position on that exact date, checked
+        via the pre-processing endpoint (E) instead of a Mongo read. Omitted →
+        rows come with empty `lastDate` and the operator fills the source date
+        per wallet by hand.
 
     Presets the operator passes that don't exist in `walletLists` are
     silently ignored (no 404) — a stale UI shouldn't error out just
@@ -771,33 +779,89 @@ def daily_listing():
     wallet_names  = get_wallet_names()
     company_names = get_company_names()
 
-    pipeline = [
-        {"$match": {"walletId": {"$in": visible}}},
-        {"$group": {"_id": "$walletId",
-                    "lastDate": {"$max": "$positionDate"}}},
-    ]
-    if date_filter:
-        pipeline[0]["$match"]["positionDate"] = {"$lte": date_filter}
-
-    by_wallet = {}
-    for doc in db.processedPosition.aggregate(pipeline):
-        by_wallet[str(doc["_id"])] = str(doc.get("lastDate") or "")[:10]
+    # Source date = the "Data-fonte" the operator informs (the date to repeat
+    # FROM). We no longer discover each wallet's own latest processed date via
+    # a Mongo `MAX(positionDate)` aggregate. Instead, for the chosen date we
+    # ask the pre-processing endpoint (E) which of these wallets actually have
+    # a processed position on that date — those are the rows with something to
+    # repeat. Companies come from the visible wallets (the roster is
+    # company-agnostic), so E is fanned out only over the companies present and
+    # only when the operator has picked a date (no fan-out on a bare page load).
+    source_date = date_filter  # `date` query param, already validated above
+    processed_set = set()
+    if source_date:
+        companies = sorted({wallet_to_co[wid] for wid in visible if wallet_to_co.get(wid)})
+        statuses = beehus_catalog.preprocessing_status_many(companies, source_date)
+        for _cid, st in statuses.items():
+            for it in (st.get("processedWalletsDetailed") or []):
+                if not isinstance(it, dict):
+                    continue
+                w = beehus_catalog.id_str(it.get("walletId")) or str(it.get("walletId") or "")
+                if w:
+                    processed_set.add(w)
 
     rows = []
     for wid in visible:
         cid  = wallet_to_co[wid]
-        last = by_wallet.get(wid) or None
+        # A wallet is repeatable from `source_date` only if it has a processed
+        # position on that exact date. Without a chosen date (or when the
+        # wallet has no position on it), `lastDate` stays empty: the UI shows
+        # the hint and a blank source input the operator can fill manually.
+        has_pos = bool(source_date) and wid in processed_set
+        last = source_date if has_pos else None
         rows.append({
             "walletId":    wid,
             "walletName":  wallet_names.get(wid, wid),
             "companyId":   cid,
             "companyName": company_names.get(cid, cid),
             "lastDate":    last,
-            "suggestedTarget": _next_biz_day(last) if last else "",
+            "suggestedTarget": _next_biz_day(source_date) if has_pos else "",
         })
     rows.sort(key=lambda r: ((r["companyName"] or "").lower(),
                              (r["walletName"]  or "").lower()))
     return jsonify({"wallets": rows})
+
+
+@bp.route("/api/repetir-posicoes/results-wallets")
+def results_wallets():
+    """Carteiras da empresa COM resultado de NAV na data (endpoint consolidado
+    `/results` → `walletsWithNavDetailed`).
+
+    Lista TODAS as carteiras que o `/results` devolve — **sem** filtro de
+    divergência (a Posição Projetada deixou de embutir a Conciliação NAV).
+    Cada carteira aqui tem navPackage/posição processada na data, então é uma
+    origem válida para projetar; o front gera a prévia com `source = data` e
+    `target = próximo dia útil`.
+
+    Query: `companyId`, `date` (YYYY-MM-DD).
+    Retorna `{wallets:[{walletId, walletName, nav, navPerShare, amount}], date}`.
+    `{wallets: []}` quando a empresa não é visível ou o `/results` não responde.
+    """
+    company_id = (request.args.get("companyId") or "").strip()
+    date_str   = (request.args.get("date") or "").strip()
+    if not company_id or not company_visible(company_id) or not date_str:
+        return jsonify({"wallets": [], "date": date_str})
+    try:
+        _safe_date(date_str)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    res = beehus_catalog.nav_results(company_id, date_str)
+    wallet_names = get_wallet_names()
+    wallets = []
+    for w in res.get("walletsWithNavDetailed", []):
+        wid = beehus_catalog.id_str(w.get("walletId"))
+        if not wid:
+            continue
+        wallets.append({
+            "walletId":    wid,
+            "walletName":  w.get("walletName") or wallet_names.get(wid, wid),
+            "nav":         w.get("nav"),
+            "navPerShare": w.get("navPerShare"),
+            "amount":      w.get("amount"),
+        })
+    wallets.sort(key=lambda x: (x["walletName"] or "").lower())
+    return jsonify({"wallets": wallets, "date": date_str})
 
 
 # ── Rule chain ──────────────────────────────────────────────────────────────
@@ -1096,10 +1160,7 @@ def _compute_curva_pu_map(target_dates, wallet_ids=None):
 
 def _load_source_processed(wallet_id, source_date):
     """Return the processedPosition.securities[] for a wallet+date, or []."""
-    doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": source_date},
-        {"securities": 1},
-    )
+    doc = beehus_catalog.processed_doc(wallet_id, source_date)
     if not doc:
         return []
     return doc.get("securities") or []
@@ -1119,12 +1180,7 @@ def _security_meta(security_ids):
     oids = _to_oids(security_ids)
     if not oids:
         return out
-    for s in db.securities.find(
-        {"_id": {"$in": oids}},
-        {"maturityDate": 1, "beehusName": 1,
-         "subscriptionSettlementDays": 1, "subscriptionNavDays": 1,
-         "redemptionSettlementDays": 1,   "redemptionNavDays": 1},
-    ):
+    for s in beehus_catalog.securities_by_ids(oids).values():
         sid = str(s["_id"])
         sub_off = (s.get("subscriptionSettlementDays") or 0) - (s.get("subscriptionNavDays") or 0)
         red_off = (s.get("redemptionSettlementDays")   or 0) - (s.get("redemptionNavDays")   or 0)
@@ -1138,65 +1194,34 @@ def _security_meta(security_ids):
 
 
 def _unprocessed_id_map(company_id, wallet_id, source_date):
-    """Return `{securityId: unprocessedId}` for the wallet's
-    `unprocessedSecurityPositions` snapshot at `source_date`.
+    """Return `{securityId: unprocessedId}` for the wallet at `source_date`,
+    read DIRECTLY from the raw `unprocessed-security-positions` snapshots: every
+    `securities[]` entry carries the authoritative pair
+    `preProcessingData.securityId → unprocessedId` for that wallet. Per
+    securityId we take the `unprocessedId` from the most-recent snapshot ON OR
+    BEFORE `source_date` that holds it — the source-date snapshot when present,
+    else the latest prior (operators occasionally request a `sourceDate` that
+    has a `processedPosition` but no same-day raw snapshot, e.g. the wallet was
+    brought in mid-day, and we'd rather surface a slightly older `unprocessedId`
+    than an empty cell).
 
-    Strategy:
-      1. Load the `unprocessedSecurityPositions` doc for
-         `(walletId, positionDate == source_date)`. If absent, fall back
-         to the most recent prior doc for the same wallet — operators
-         occasionally request a `sourceDate` that has a `processedPosition`
-         but no `unprocessedSecurityPositions` (e.g. the wallet was
-         brought in mid-day), and we'd rather surface a slightly older
-         `unprocessedId` than an empty cell.
-      2. Walk `securityMappings.mappings[]` for the company. Each entry
-         is `{from: unprocessedId, to: securityId}` — keep only those
-         whose `from` appears in the wallet's snapshot, then invert to
-         `{securityId: unprocessedId}`. Mapping collisions (same
-         `securityId` referenced by multiple `from` values) take the
-         last entry seen; the snapshot's local uniqueness usually makes
-         that the right one in practice.
+    Supersedes the previous company-`securityMappings` cross-reference: that
+    `from→to` map COLLIDES (one securityId carries several historical `from`
+    labels — ~38% of the catalog in practice), so the inversion kept whichever
+    `from` happened to appear in the snapshot and silently picked the "last
+    entry seen" on collision. Reading `preProcessingData.securityId` straight
+    from the snapshot is the exact pair the wallet actually held — a strict
+    superset that never loses a security and never guesses the label. Shares the
+    contract with `pages/carteira._unprocessed_id_maps`.
 
-    Failures (no doc, no mapping) → empty dict; the caller renders the
-    column as "—" and the upload falls back to the legacy label."""
+    Failures (no snapshot) → empty dict; the caller renders the column as "—"
+    and the upload falls back to the legacy label."""
     if not wallet_id or not source_date:
         return {}
-
-    doc = db.unprocessedSecurityPositions.find_one(
-        {"walletId": wallet_id, "positionDate": source_date},
-        {"securities.unprocessedId": 1},
-    )
-    if not doc:
-        doc = db.unprocessedSecurityPositions.find_one(
-            {"walletId": wallet_id, "positionDate": {"$lte": source_date}},
-            {"securities.unprocessedId": 1},
-            sort=[("positionDate", -1)],
-        )
-    if not doc:
-        return {}
-
-    uids_in_doc = set()
-    for s in doc.get("securities") or []:
-        uid = s.get("unprocessedId")
-        if uid:
-            uids_in_doc.add(uid)
-    if not uids_in_doc:
-        return {}
-
-    mapping_doc = db.securityMappings.find_one(
-        {"companyId": company_id}, {"mappings": 1}
-    )
-    if not mapping_doc:
-        return {}
-
-    out = {}
-    for m in (mapping_doc.get("mappings") or []):
-        uid = m.get("from")
-        sid = m.get("to")
-        if not uid or not sid or uid not in uids_in_doc:
-            continue
-        out[str(sid)] = uid
-    return out
+    # Single wallet → the seam returns {} or a one-entry {walletId: {sid: uid}};
+    # take that map directly (robust to walletId id-string normalization).
+    m = beehus_catalog.unprocessed_sid_uid_map(company_id, [wallet_id], source_date)
+    return next(iter(m.values()), {})
 
 
 #: Tipos de transações considerados **fluxos de caixa do investidor**
@@ -1264,26 +1289,27 @@ def _load_window_transactions(company_id, wallet_id, source_date, target_date):
     """
     if not wallet_id or not target_date:
         return _empty_txn_bundle()
-    q = {
-        "companyId":       company_id,
-        "walletId":        wallet_id,
-        "liquidationDate": {"$lte": target_date},
-        "trashed":         {"$ne": True},
-    }
-    if source_date:
-        q["liquidationDate"]["$gt"] = source_date
+
+    # Endpoint G só faz range inclusivo [initial, final] por liquidationDate.
+    # A janela original é `(source_date, target_date]` (strict-greater no
+    # source). Buscamos com initial_date = source_date (ou um piso bem antigo
+    # quando não há source) e final_date = target_date, depois reaplicamos no
+    # cliente o `> source_date` estrito e o guard `trashed != True`.
+    initial_date = source_date if source_date else "0001-01-01"
+    cursor = beehus_catalog.transactions_search(
+        company_id,
+        initial_date=initial_date,
+        final_date=target_date,
+        wallet_ids=[wallet_id],
+    )
 
     bundle = _empty_txn_bundle()
-    cursor = db.transactions.find(q, {
-        "securityId":            1,
-        "quantity":              1,
-        "balance":               1,
-        "description":           1,
-        "operationDate":         1,
-        "liquidationDate":       1,
-        "beehusTransactionType": 1,
-    })
     for d in cursor:
+        if d.get("trashed"):
+            continue
+        liq_full = str(d.get("liquidationDate") or "")[:10]
+        if source_date and not (liq_full > source_date):
+            continue
         ttype = d.get("beehusTransactionType") or ""
         sid   = str(d.get("securityId") or "")
         liq   = str(d.get("liquidationDate") or "")[:10]
@@ -1344,35 +1370,18 @@ def _load_window_transactions(company_id, wallet_id, source_date, target_date):
     return bundle
 
 
-def _dividend_events_by_sid(wallet_id, position_date):
-    """`{securityId: Σ balance}` de `db.securityEvents` cujo
-    `operationDate == position_date` e `eventType` está nos eventos
-    "tipo dividendo". O campo upstream tem valores `cashDividend`,
-    `interest`, `interestOnEquity`, `coupon`, `amortization` — o doc
-    de recálculo agrupa "dividend" como `cashDividend` +
-    `interestOnEquity` (cupom e amortização já entram via transactions
-    nos tipos `coupon`/`amortization`).
-    """
-    out = {}
-    if not position_date:
-        return out
-    cursor = db.securityEvents.find(
-        {
-            "operationDate": position_date,
-            "eventType":     {"$in": ["cashDividend", "interestOnEquity"]},
-            "trashed":       {"$ne": True},
-        },
-        {"securityId": 1, "balance": 1},
-    )
-    for d in cursor:
-        sid = str(d.get("securityId") or "")
-        if not sid:
-            continue
-        try:
-            out[sid] = out.get(sid, 0.0) + float(d.get("balance") or 0)
-        except (TypeError, ValueError):
-            pass
-    return out
+def _dividend_events_by_sid(security_ids, position_date):
+    """`{securityId: Σ balance}` dos securityEvents dos `security_ids` cujo
+    `operationDate == position_date` e `eventType` está nos eventos "tipo
+    dividendo" (`cashDividend` + `interestOnEquity`; cupom/amortização já entram
+    via transactions). `balance` é o dividendo por cota.
+
+    Lê via API (`beehus_catalog.dividend_events_by_sid` → endpoint
+    `/beehus/security-events?securities=<csv>`), não mais `db.securityEvents`.
+    Escopa pelos `security_ids` da carteira: só ativos com posição-base
+    (`formerQuantity`>0) contribuem dividendo (`dividendPerShare × formerQuantity`),
+    e esses estão todos no set — equivalente ao antigo scan global por data."""
+    return beehus_catalog.dividend_events_by_sid(security_ids, position_date)
 
 
 def _security_contribution(former_quantity, former_pu, quantity, pu,
@@ -1416,27 +1425,22 @@ def _security_contribution(former_quantity, former_pu, quantity, pu,
     }
 
 
-def _nav_package_for(wallet_id, position_date):
-    """Snapshot de `db.navPackages` para `(walletId, positionDate)`.
+def _nav_package_for(wallet_id, position_date, company_id=None):
+    """Snapshot de navPackages para `(walletId, positionDate)`.
 
     Retorna `{nav, navPerShare, amount, formerAmount, inAndOutFlows,
     currency}` ou `None` quando não há doc para a data. Usado pelos
     blocos NAV (anterior/atual) do header da prévia e como base do
     cálculo da NAV projetada.
 
-    `trashed != True` filtrado pra ignorar pacotes apagados. Não força
-    `companyId` no filtro — `walletId` já é único por carteira; o doc
-    da `wallets` é a fonte canônica de `companyId`.
+    Lê via API (cache consolidado da empresa quando quente, senão 1 chamada
+    direta a nav-contribution) com fallback Mongo; `trashed != True` já
+    garantido pela camada. `company_id` (opcional) evita resolver a empresa
+    via `db.wallets` quando o chamador já a conhece.
     """
     if not wallet_id or not position_date:
         return None
-    doc = db.navPackages.find_one(
-        {"walletId": wallet_id, "positionDate": position_date,
-         "trashed":  {"$ne": True}},
-        {"nav": 1, "navPerShare": 1, "amount": 1, "formerAmount": 1,
-         "inAndOutFlows": 1, "currency": 1,
-         "returnNavPerShare": 1, "returnContribution": 1},
-    )
+    doc = beehus_catalog.nav_doc_for_entity_date(wallet_id, position_date, company_id)
     if not doc:
         return None
     def _f(v):
@@ -1475,18 +1479,8 @@ def _provisions_detail(company_id, wallet_id, target_date):
     if not wallet_id or not target_date:
         return []
     out = []
-    cursor = db.provisions.find(
-        {
-            "companyId":       company_id,
-            "walletId":        wallet_id,
-            "initialDate":     {"$lte": target_date},
-            "liquidationDate": {"$gt":  target_date},
-            "trashed":         {"$ne": True},
-        },
-        {"balance": 1, "description": 1, "initialDate": 1,
-         "liquidationDate": 1, "provisionType": 1, "type": 1,
-         "securityId": 1},
-    )
+    cursor = beehus_catalog.provisions_active(
+        company_id, target_date, wallet_ids=[wallet_id])
     for d in cursor:
         bal = d.get("balance")
         try:
@@ -1592,18 +1586,9 @@ def _find_orphan_transactions(wallet_id, target_date, *,
     # **e** o conjunto `{sid}` aqui basta. Mantida como aggregate única
     # pra continuar barato (índice em walletId + initialDate).
     prov_sids_covering_target = set()
-    cur = db.provisions.aggregate([
-        {"$match": {
-            "walletId":        wallet_id,
-            "initialDate":     {"$lte": target_date},
-            "liquidationDate": {"$gt":  target_date},
-            "trashed":         {"$ne": True},
-            "securityId":      {"$ne": None},
-        }},
-        {"$project": {"securityId": 1}},
-    ])
-    for d in cur:
-        sid = str(d.get("securityId") or "")
+    for p in beehus_catalog.provisions_active(
+            None, target_date, wallet_ids=[wallet_id]):
+        sid = str(p.get("securityId") or "")
         if sid:
             prov_sids_covering_target.add(sid)
 
@@ -1747,10 +1732,7 @@ def _target_processed_position(wallet_id, target_date):
         from the actual upstream snapshot for the same date."""
     if not wallet_id or not target_date:
         return {}
-    doc = db.processedPosition.find_one(
-        {"walletId": wallet_id, "positionDate": target_date},
-        {"securities": 1},
-    )
+    doc = beehus_catalog.processed_doc(wallet_id, target_date)
     if not doc:
         return {}
     out = {}
@@ -1831,8 +1813,9 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     # rule (`RULE_TARGET_PROCESSED_PRICE`) and the per-row diff report.
     target_processed = _target_processed_position(wallet_id, target_date)
 
-    # Dividends ainda vêm de `db.securityEvents` (collection separada).
-    dividend_evt_by_sid = _dividend_events_by_sid(wallet_id, target_date)
+    # Dividends via endpoint `/beehus/security-events` (escopado aos ativos da
+    # carteira — `sec_ids` já reúne os securityIds da posição-fonte + cash events).
+    dividend_evt_by_sid = _dividend_events_by_sid(sec_ids, target_date)
 
     # Securities que aparecem só em transactions/target/cash events e
     # ainda não foram cobertos pelo `_security_meta` inicial. Coletamos
@@ -2508,8 +2491,8 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
     # `(sourceDate, targetDate]` para tipos em `_TXN_TYPES_IN_OUT_FLOWS`
     # (withdrawalDeposit, …, taxes) — fluxo investidor, distinto do
     # delta de caixa total (que inclui buySell, coupons, etc).
-    nav_anterior = _nav_package_for(wallet_id, source_date)
-    nav_atual    = _nav_package_for(wallet_id, target_date)
+    nav_anterior = _nav_package_for(wallet_id, source_date, company_id)
+    nav_atual    = _nav_package_for(wallet_id, target_date, company_id)
     inflows      = txn_bundle["inflows_total"]
 
     # NAV projetada — soma dos saldos da repetição + caixa projetado
@@ -2710,13 +2693,14 @@ def _build_preview_for_wallet(*, company_id, wallet_id, source_date, target_date
         sec_meta=sec_meta,
     )
 
-    # Currency for the xlsx upload — wallets table is the source of truth.
-    w_oid = _to_oid(wallet_id)
+    # Currency for the xlsx upload. `resolve_wallet` serve do índice da API
+    # (catálogo) e deriva `currencyId` do campo `currency` da carteira.
     currency_id = "BRL"
-    if w_oid is not None:
-        w_doc = db.wallets.find_one({"_id": w_oid}, {"currencyId": 1, "name": 1})
-        if w_doc:
-            currency_id = str(w_doc.get("currencyId") or "BRL")
+    w_doc = resolve_wallet(
+        wallet_id, {"currencyId": 1, "name": 1}, company_id=company_id,
+    )
+    if w_doc:
+        currency_id = str(w_doc.get("currencyId") or "BRL")
 
     return {
         "walletId":   wallet_id,
@@ -2881,175 +2865,6 @@ def preview():
     })
 
 
-@bp.route("/api/repetir-posicoes/analyze", methods=["POST"])
-def analyze_preview():
-    """Análise stateless da prévia via Claude CLI.
-
-    Diferente de `/api/conciliacao/capture-scenario`, esta rota **não
-    armazena cenário** em `data/scenarios/` — não roda diagnose nem
-    bayesian, não computa coverage, não escreve nada permanente. O
-    fluxo é:
-
-        1. Recebe a prévia (`preview`) do frontend.
-        2. Escreve JSON num arquivo temporário (em `data/.tmp/`, dentro
-           do projeto pra que o Claude consiga ler com path relativo).
-        3. Roda `claude -p "<prompt>"` síncrono com timeout.
-        4. Apaga o arquivo temporário (try/finally).
-        5. Devolve o markdown que o Claude escreveu via stdout.
-
-    Pensada pra "consulta rápida ao operador" — não é matéria-prima
-    pra regressão automatizada (esse continua sendo o caso de uso da
-    `capture-scenario`).
-
-    Guardrails reaproveitados da Conciliação:
-      - `SWAT_ALLOW_CLAUDE_CLI=1` exigido pra spawnar o subprocess.
-      - `_find_claude_binary` localiza o `claude.exe` no PATH/AppData.
-    """
-    import subprocess
-    import shutil
-    import tempfile
-    import uuid as _uuid
-
-    body = request.get_json(silent=True) or {}
-    preview = body.get("preview")
-    if not preview or not isinstance(preview, dict):
-        return jsonify({"error": "campo 'preview' obrigatório (objeto JSON da prévia)"}), 400
-
-    # Sanity-check: campos mínimos pra o Claude conseguir analisar.
-    wallet_id = (preview.get("walletId") or "").strip()
-    source_date = (preview.get("sourceDate") or "").strip()
-    target_date = (preview.get("targetDate") or "").strip()
-    if not wallet_id or not source_date or not target_date:
-        return jsonify({"error": "preview deve conter walletId, sourceDate e targetDate"}), 400
-
-    # Histórico opcional de conversa (follow-up do operador). Cada item:
-    # {"role": "assistant"|"user", "text": "..."}. Quando presente, o prompt
-    # passa a ser uma resposta a esta conversa em vez da análise inicial.
-    # Saneado: aceita só os campos esperados, limita tamanho de cada mensagem
-    # pra evitar prompt injection ou estouro de contexto.
-    chat_raw = body.get("chat") or []
-    chat = []
-    if isinstance(chat_raw, list):
-        for item in chat_raw[:20]:  # no máximo 20 mensagens
-            if not isinstance(item, dict):
-                continue
-            role = item.get("role")
-            text = item.get("text")
-            if role not in ("assistant", "user") or not isinstance(text, str):
-                continue
-            text = text.strip()[:8000]  # 8KB por mensagem é mais que suficiente
-            if text:
-                chat.append({"role": role, "text": text})
-
-    # Defesa-em-profundidade: mesmo guardrail do `_spawn_claude_bg` da
-    # Conciliação — só roda quando o operador habilitou explicitamente.
-    if os.environ.get("SWAT_ALLOW_CLAUDE_CLI", "").strip() not in ("1", "true", "True"):
-        return jsonify({
-            "error": "claude CLI desabilitado (defina SWAT_ALLOW_CLAUDE_CLI=1 antes de subir o Flask)",
-        }), 503
-
-    # Reusa o resolver do conciliacao.py (PATH → CLAUDE_BIN → AppData).
-    from pages.conciliacao import _find_claude_binary
-    claude_bin = _find_claude_binary()
-    if not claude_bin:
-        return jsonify({"error": "claude CLI não encontrado no PATH"}), 503
-
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
-    # Arquivo temporário dentro do projeto pra que o Claude possa lê-lo
-    # via `Read` com caminho relativo, sem precisar abrir permissões pra
-    # fora do worktree. UUID pra evitar colisão de calls paralelos.
-    tmp_subdir = os.path.join(project_root, "data", ".tmp")
-    os.makedirs(tmp_subdir, exist_ok=True)
-    tmp_filename = f"preview_{_uuid.uuid4().hex}.json"
-    tmp_path = os.path.join(tmp_subdir, tmp_filename)
-    rel_path = os.path.relpath(tmp_path, project_root).replace("\\", "/")
-
-    base_intro = f"""Você é um analista financeiro do sistema Beehus de gestão de carteiras. Sua tarefa: analisar UMA prévia de "Posição Projetada" e ajudar o operador a entender e atuar sobre ela.
-
-PRÉVIA: leia o arquivo `{rel_path}` (JSON completo da prévia: cash, rows, navAnterior/navAtual/navProjetada, provisionsList, expectedProvisions, orphanTransactions, targetSummary). Após ler, **apague o arquivo** com o Bash tool (`rm "{rel_path}"`).
-
-CONTEXTO: para entender fórmulas e regras do sistema, leia conforme necessário:
-- `docs/REPETIR_POSICOES.md` — semântica da prévia, rule chain, provisões esperadas
-- `docs/CONCILIACAO_RECALCULO.md` — fórmulas de NAV, contribuição, GAP
-- `docs/CONCILIACAO_DIAGNOSTICO.md` — taxonomia de flags
-
-Wallet: {wallet_id} · Janela: {source_date} → {target_date}"""
-
-    if not chat:
-        # Pedido inicial: relatório estruturado em 6 pontos.
-        prompt = base_intro + """
-
-ESCOPO: comparar a posição em `sourceDate` com a posição em `targetDate`. Cubra os 6 pontos abaixo (omita o ponto se não houver nada relevante — não escreva "nada a reportar"):
-1. **Inconsistências quantidade × caixa** — securities cujo Δqty source→target não bate com transações na janela
-2. **Provisões pendentes** (`provisionsList` — vindas do BD, cobrem a janela com `initialDate ≤ target < liquidationDate`) — sinalize as relevantes: duplicidade com `expectedProvisions`, valores fora do esperado, ou que vão liquidar próximo do target e impactar caixa. Provisões rotineiras sem anomalia: não comente.
-3. **Provisões esperadas** (`expectedProvisions` — inferidas pela rule chain) — o que aconteceu e o que fazer
-4. **Transações órfãs** (`orphanTransactions`) — motivo e ação
-5. **NAV Atual vs Calculado** — se composição (saldos + provisões + caixa) bate com `navPackages.nav`
-6. **Recomendações** — lista priorizada de ações (criar provisão X com balance Y, verificar transação Z, etc)
-
-FORMATO: markdown enxuto, **sem preâmbulo**. Bullets curtos (1 linha cada quando possível), não escreva parágrafos explicativos. Use `## Heading` só quando houver conteúdo na seção. Não replique números brutos que o operador já vê na tela — foque em diagnóstico + ação. Securities OK: não comentar. Alvo: ≤ 25 linhas de markdown no total."""
-    else:
-        # Follow-up: o operador já viu a análise inicial e está pedindo
-        # esclarecimento / alteração / pergunta adicional. Reproduzimos a
-        # conversa pra Claude continuar de onde parou. A última mensagem
-        # sempre é do operador (validado no frontend).
-        history_block = []
-        for item in chat:
-            label = "ANALISTA" if item["role"] == "assistant" else "OPERADOR"
-            history_block.append(f"[{label}]\n{item['text']}")
-        history_text = "\n\n".join(history_block)
-        prompt = base_intro + f"""
-
-CONVERSA EM CURSO: você já produziu uma análise inicial e o operador está fazendo follow-up. Responda à última mensagem do operador mantendo o contexto da prévia. Markdown enxuto, direto ao ponto, sem repetir o que já foi dito antes. Se precisar de dados extras do JSON, releia o arquivo da prévia. Se a pergunta for sobre algo fora do escopo do sistema, diga isso brevemente.
-
-{history_text}"""
-
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(preview, f, ensure_ascii=False, indent=2)
-
-        kwargs = {}
-        if os.name == "nt":
-            # No Windows, Popen com `capture_output=True` precisa de
-            # encoding explícito pra não quebrar com bytes não-UTF8 do
-            # stderr (cabeçalho colorido do Claude CLI).
-            kwargs["encoding"] = "utf-8"
-            kwargs["errors"] = "replace"
-        try:
-            result = subprocess.run(
-                [claude_bin, "-p", prompt],
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                **kwargs,
-            )
-        except subprocess.TimeoutExpired:
-            return jsonify({"error": "claude CLI atingiu o timeout de 5 minutos"}), 504
-
-        if result.returncode != 0:
-            return jsonify({
-                "error": "claude CLI retornou código de erro",
-                "returncode": result.returncode,
-                "stderr": (result.stderr or "")[:2000],
-            }), 500
-
-        analysis = (result.stdout or "").strip()
-        if not analysis:
-            return jsonify({"error": "claude CLI não retornou conteúdo (stdout vazio)"}), 500
-
-        return jsonify({"analysis": analysis})
-    finally:
-        # O Claude pode ter apagado o arquivo via Bash conforme
-        # instruído — o `try/except` cobre o caso "já não existe".
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except OSError:
-            pass
-
-
 def _build_preview_log_report(results, items):
     """Empacota uma rodada de prévia (`/api/repetir-posicoes/preview`)
     no mesmo formato do log de `/apply`, mas com `mode = "preview"` e
@@ -3163,10 +2978,11 @@ def _b1_price_on_date(history, target_date):
 @bp.route("/api/repetir-posicoes/b1-prices", methods=["POST"])
 def b1_prices():
     """Return B1 (hold-to-maturity) PUs for a batch of
-    `(securityId, targetDate)` pairs. Source:
-    `db.securityPrices.historyPrice[]` filtered by
-    `historyPrice.type == "B1"` and `historyPrice.date == targetDate`
-    (exact match — see `_b1_price_on_date` for the strict semantics).
+    `(securityId, targetDate)` pairs. Source: endpoint `filtered-security-price`
+    via `beehus_catalog.security_prices_resolved` — sem contexto de empresa/
+    carteira, a resolução de escopo cai no record **B1 global** (o único que casa
+    sem company/wallet), coerente com o caráter company-agnostic da rota. O PU é
+    pego na `targetDate` exata (`_b1_price_on_date`, semântica estrita).
 
     Body: `{items: [{securityId, targetDate}, ...]}` — the daily routine
     is company-agnostic, so this endpoint has no `companyId` gate either.
@@ -3193,31 +3009,15 @@ def b1_prices():
     if not by_sec:
         return jsonify({"prices": {}})
 
-    # `securityPrices.securityId` is stored as ObjectId for some docs and as
-    # a plain string for others (legacy/imported records). Query both forms
-    # in one $in so we don't silently miss whichever encoding the upstream
-    # picked for a given asset — same trick `pages/precificacao.py` uses.
-    id_variants = []
-    for sid_str in by_sec.keys():
-        id_variants.append(sid_str)
-        try:
-            id_variants.append(ObjectId(sid_str))
-        except (InvalidId, TypeError, ValueError):
-            pass
-
+    # Endpoint company/wallet-agnostic → resolve o B1 global (sem contexto, só o
+    # B1 casa). Via seam (filtered-security-price; aprovados/não-trashed; aceita
+    # securityId string ou ObjectId internamente). Substitui o read direto de
+    # `db.securityPrices`.
     prices = {}
-    for doc in db.securityPrices.find(
-        {"securityId": {"$in": id_variants}},
-        {"securityId": 1, "historyPrice": 1},
-    ):
-        # Normalise back to the string key the request used so the
-        # `<securityId>|<targetDate>` lookup matches what the UI built.
-        sid_raw = doc.get("securityId")
-        sid = str(sid_raw) if sid_raw is not None else ""
-        if not sid or sid not in by_sec:
-            continue
-        hp = doc.get("historyPrice") or []
-        for td in by_sec[sid]:
+    hp_map = beehus_catalog.security_prices_resolved(list(by_sec.keys()))
+    for sid, tds in by_sec.items():
+        hp = hp_map.get(sid) or []
+        for td in tds:
             pu = _b1_price_on_date(hp, td)
             if pu is None:
                 continue

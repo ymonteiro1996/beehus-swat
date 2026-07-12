@@ -5,6 +5,49 @@ Reusable from any blueprint — does not depend on Flask.
 from .client import request
 
 
+def list_provisions(
+    *,
+    company_id: str,
+    initial_date: str,
+    final_date: str,
+    wallet_id: str | None = None,
+    timeout: int = 60,
+) -> list:
+    """GET /beehus/provisions — READ das provisões por empresa + faixa de datas.
+
+    Devolve a lista de provisões (`_id`, `walletId`, `companyId`, `securityId`,
+    `balance`, `initialDate`, `liquidationDate`, `provisionType`,
+    `provisionSource`, `description`, `currencyId`, `trashed`, …). NÃO há campo
+    `amount` (provisões usam `balance`).
+
+    ⚠️ SEMÂNTICA DA JANELA (verificada em produção, jun/2026): o upstream filtra
+    por **`initialDate` DENTRO de `[initial_date, final_date]`** — ou seja,
+    provisões **iniciadas** no intervalo —, NÃO por overlap/atividade. Prova:
+    uma provisão ativa em `2026-03-02` mas iniciada em `2025-12-01` NÃO retorna
+    para a query `[2026-03-02, 2026-03-02]`. Portanto, para obter "provisões
+    ativas em D" é preciso buscar de uma data-piso bem atrás (ex.: `2000-01-01`)
+    e filtrar a atividade no cliente — é o que `beehus_catalog.provisions_active`
+    / `provisions_overlapping` fazem. (Documentação anterior afirmava "ativas no
+    intervalo" — estava incorreta.) Alternativa quando há posição processada na
+    data: o envelope de `processed-position` já traz, em `provisions`, exatamente
+    as provisões ativas naquela data — ver `beehus_catalog.carteira_position_bundle`.
+
+    `wallet_id` (singular `walletId`) **filtra no servidor** por carteira
+    (confirmado em produção: devolve exatamente as provisões da carteira). NÃO
+    confundir com `walletIds` (plural), que o endpoint **não aceita** (400).
+    Retorna `[]` se a resposta não for uma lista.
+    """
+    params = {
+        "companyId":   company_id,
+        "initialDate": initial_date,
+        "finalDate":   final_date,
+    }
+    if wallet_id:
+        params["walletId"] = wallet_id
+    out = request("GET", "/beehus/provisions", params=params, timeout=timeout)
+    return out if isinstance(out, list) else []
+
+
 def create_provision(
     *,
     company_id: str,

@@ -48,6 +48,8 @@ import re
 import uuid
 from datetime import datetime
 
+import beehus_catalog
+
 from flask import Blueprint, jsonify, render_template, request, send_file
 from openpyxl import Workbook
 
@@ -714,19 +716,19 @@ def list_items():
     wallet_names = {}
     wallet_currencies = {}
     wallets_by_company = {}
-    for w in db.wallets.find(
-        {"companyId": {"$in": company_ids}},
-        {"name": 1, "companyId": 1, "currency": 1, "currencyId": 1},
-    ):
-        wid = str(w["_id"])
-        wname = w.get("name", wid)
-        wcid = str(w.get("companyId", ""))
-        wallet_names[wid] = wname
-        # `currency` is the field name actually stored on wallet documents
-        # (e.g. "USD", "BRL"). `currencyId` is read as a defensive fallback
-        # only — see the note on `_wallet_currency` above.
-        wallet_currencies[wid] = str(w.get("currency") or w.get("currencyId") or "")
-        wallets_by_company.setdefault(wcid, {})[wid] = wname
+    # Sourced from the cached carteiras index (partner_wallets) instead of an
+    # inline Mongo read. The index shape exposes the authoritative `currency`
+    # string (e.g. "USD", "BRL"); the old `currencyId` was only a defensive
+    # fallback — see the note on `_wallet_currency` above — and is not part of
+    # the API shape, so dropping it preserves the value actually consumed here.
+    for cid in company_ids:
+        for w in beehus_catalog.wallets_in_company(cid):
+            wid = beehus_catalog.id_str(w.get("_id"))
+            wname = w.get("name", wid)
+            wcid = beehus_catalog.id_str(w.get("companyId")) or ""
+            wallet_names[wid] = wname
+            wallet_currencies[wid] = str(w.get("currency") or "")
+            wallets_by_company.setdefault(wcid, {})[wid] = wname
 
     transactions, provisions, deletions, execution_prices = [], [], [], []
     for cid in company_ids:

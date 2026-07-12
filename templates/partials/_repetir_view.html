@@ -75,6 +75,16 @@
       <div class="flex items-center justify-between mb-2">
         <p class="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Listas a incluir</p>
         <div class="flex items-center gap-3 text-[11px]">
+          <!-- Data-fonte: a data DE ONDE as posições serão repetidas. Ao
+               escolher, recarrega o roster e marca quais carteiras das listas
+               têm posição processada nessa data (via pre-processing). -->
+          <label class="flex items-center gap-1 text-gray-600" title="Data de origem das posições a repetir. As carteiras com posição processada nessa data ficam elegíveis; a data alvo sugerida é o próximo dia útil.">
+            Data-fonte
+            <input type="date" id="rp-daily-source-date"
+                   onchange="Repetir.onDailySourceDateChange()"
+                   class="rp-input rp-input-date" />
+          </label>
+          <span class="text-gray-300">·</span>
           <button class="text-blue-600 hover:text-blue-800" onclick="Repetir.toggleAllLists(true)">Selecionar todas</button>
           <span class="text-gray-300">·</span>
           <button class="text-gray-500 hover:text-gray-700" onclick="Repetir.toggleAllLists(false)">Limpar</button>
@@ -95,7 +105,7 @@
           <tr>
             <th class="rp-tbl-left">Empresa</th>
             <th class="rp-tbl-left">Carteira</th>
-            <th>Última posição</th>
+            <th>Data-fonte</th>
             <th>Data atual</th>
             <th style="width:120px">Ação</th>
           </tr>
@@ -106,60 +116,47 @@
       </table>
     </div>
 
-    <!-- ── Conciliação NAV — atalho para rodar prévia ─────────────────
-         Réplica enxuta do step-1 do /conciliacao. O operador pode
-         filtrar por empresa + data final + limiar e ver, em uma grade
-         de 10 datas, quantas carteiras têm divergência |retNAV − retContrib|.
-         Clicando numa data, carrega as carteiras com divergência;
-         clicando numa carteira, dispara `runPreviewFor` com:
-            target_date = data selecionada
-            source_date = formerDate da carteira (última navPackage anterior)
-         Reusa os endpoints existentes /api/conciliacao/dates e /rows. -->
+    <!-- ── Carteiras da empresa — atalho para rodar prévia ────────────
+         Lista as carteiras da empresa que têm resultado de NAV na data
+         selecionada (endpoint /results → walletsWithNavDetailed, via
+         /api/repetir-posicoes/results-wallets). SEM conciliação/divergência:
+         mostra TODAS as carteiras do /results. Cada carteira tem posição
+         processada na data, então clicar dispara `runPreviewFor` com:
+            source_date = data selecionada
+            target_date = próximo dia útil -->
     <section id="rp-conciliacao-section" class="bg-white rounded-xl shadow p-4 mt-4">
-      <h2 class="text-sm font-semibold text-gray-800 mb-3">Carteiras com divergência (Conciliação NAV)</h2>
+      <h2 class="text-sm font-semibold text-gray-800 mb-3">Carteiras da empresa</h2>
 
       <div class="flex items-end gap-4 flex-wrap pb-2">
         <div>
           <label class="block text-[10px] text-gray-500 mb-1">Empresa</label>
           <select id="rp-cl-company"
-                  onchange="Repetir.conciliacaoOnCompanyChange()"
+                  onchange="Repetir.resultsOnCompanyChange()"
                   class="border rounded px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-[220px]">
             <option value="">Selecione uma empresa...</option>
           </select>
         </div>
         <div>
-          <label class="block text-[10px] text-gray-500 mb-1">Data final</label>
-          <input id="rp-cl-end-date" type="date"
-                 onchange="Repetir.conciliacaoLoadDates()"
+          <label class="block text-[10px] text-gray-500 mb-1">Data</label>
+          <input id="rp-cl-date" type="date"
+                 onchange="Repetir.resultsLoadWallets()"
                  class="border rounded px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400" />
-        </div>
-        <div>
-          <label class="block text-[10px] text-gray-500 mb-1" title="Carteiras com |returnNavPerShare − returnContribution| acima deste valor são listadas.">
-            Limiar |Δ| (%)
-          </label>
-          <input id="rp-cl-threshold" type="number" step="0.001" min="0" max="100" value="0.01"
-                 onchange="Repetir.conciliacaoLoadDates()"
-                 class="border rounded px-3 py-2 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 w-24" />
         </div>
         <span id="rp-cl-status" class="text-[10px] text-gray-400 self-center"></span>
       </div>
 
-      <!-- Date cards grid -->
-      <div id="rp-cl-dates" class="grid grid-cols-10 gap-2 mt-2 hidden"></div>
-
       <!-- Wallets table -->
       <div id="rp-cl-wallets" class="mt-3 hidden">
-        <p class="text-[10px] text-gray-500 mb-1">Carteiras com divergência <span id="rp-cl-wallets-count" class="text-gray-400"></span>. Clique para rodar prévia.</p>
+        <p class="text-[10px] text-gray-500 mb-1">Carteiras com posição na data <span id="rp-cl-wallets-count" class="text-gray-400"></span>. Clique para gerar a prévia (projeta para o próximo dia útil).</p>
         <div class="bg-white rounded-xl border overflow-hidden" style="max-height:420px; overflow-y:auto">
           <table class="rp-tbl">
             <thead>
               <tr>
                 <th class="rp-tbl-left">Carteira</th>
                 <th style="text-align:right">NAV</th>
-                <th style="text-align:right">Δ Rent.</th>
-                <th style="text-align:right">Novo Gap %</th>
-                <th class="rp-tbl-left" style="width:140px">Última pos. anterior</th>
-                <th style="width:110px; text-align:center">Ação</th>
+                <th style="text-align:right">Cota</th>
+                <th style="text-align:right">Quantidade</th>
+                <th style="width:120px; text-align:center">Ação</th>
               </tr>
             </thead>
             <tbody id="rp-cl-wallets-tbody"></tbody>

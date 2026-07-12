@@ -583,8 +583,15 @@
       const showContrib = !!document.getElementById("ct-show-contrib")?.checked;
       const perDateCols = showContrib ? 4 : 3;
 
+      // Datas com ERRO no arquivo bruto (unprocessed vazio/ausente enquanto há
+      // posição processada). Regra de produto: informar o erro e NÃO exibir ativos
+      // dessas datas (sem fallback). Ver /api/carteira/data → unprocessedErrorByDate.
+      const errByDate = w.unprocessedErrorByDate || {};
+      const errDates = dates.filter(d => errByDate[d]);
       const dateGroupHeader = dates.map(d =>
-        `<th class="ct-tbl-date-group" colspan="${perDateCols}">${this._esc(d)}</th>`
+        errByDate[d]
+          ? `<th class="ct-tbl-date-group" colspan="${perDateCols}" style="background:#fef2f2;color:#991b1b" title="Erro no arquivo unprocessed desta data — snapshot vazio/ausente">${this._esc(d)} ⚠</th>`
+          : `<th class="ct-tbl-date-group" colspan="${perDateCols}">${this._esc(d)}</th>`
       ).join("");
       const subHeader = dates.map(() =>
         showContrib
@@ -653,6 +660,13 @@
         : `<span class="text-[10px] text-gray-400" style="margin-left:auto">Edição disponível apenas no modo "única" data.</span>`;
 
       const colCount = 2 + perDateCols * dates.length;
+      const errBanner = errDates.length
+        ? `<div style="margin:10px 12px;padding:8px 12px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;font-size:12px">
+             ⚠ <strong>Erro no arquivo de posição bruta (unprocessed)</strong> em ${this._esc(errDates.join(", "))}:
+             o snapshot está vazio ou ausente, mas há posição <em>processada</em> nessa(s) data(s).
+             Nenhum ativo é exibido para essa(s) data(s) — reenvie o arquivo unprocessed correto.
+           </div>`
+        : "";
       return `
         <div class="bg-white rounded-xl shadow overflow-hidden">
           <div class="ct-wallet-header">
@@ -660,6 +674,7 @@
             <span class="ct-id">${this._esc(w.walletId)}</span>
             ${editBtn}
           </div>
+          ${errBanner}
           <div style="overflow-x:scroll">
             <table class="ct-tbl">
               <thead>
@@ -671,7 +686,7 @@
                 <tr>${subHeader}</tr>
               </thead>
               <tbody>
-                ${secRows || `<tr><td class="ct-tbl-sec" colspan="${colCount}" style="text-align:center;color:#9ca3af;padding:12px 0">Nenhuma security em processedPosition na faixa selecionada.</td></tr>`}
+                ${secRows || `<tr><td class="ct-tbl-sec" colspan="${colCount}" style="text-align:center;color:#9ca3af;padding:12px 0">${errDates.length ? "Sem ativos exibidos — arquivo unprocessed com erro (ver aviso acima)." : "Nenhuma security em processedPosition na faixa selecionada."}</td></tr>`}
                 ${footerHtml}
               </tbody>
             </table>
