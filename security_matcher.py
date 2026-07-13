@@ -85,6 +85,29 @@ def _parse_date_ex(text, prefer_mdy=False):
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}", True
 
+    # DD-MM-YYYY (dashes, day-first — common in international bond descriptions)
+    m = re.search(r"\b(\d{2})-(\d{2})-(\d{4})\b", text)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        if a > 12 and 1 <= b <= 12:          # unambiguous: a is day
+            return f"{y}-{b:02d}-{a:02d}", True
+        elif b > 12 and 1 <= a <= 12:        # unambiguous: b is day (MM-DD-YYYY)
+            return f"{y}-{a:02d}-{b:02d}", True
+        elif 1 <= a <= 31 and 1 <= b <= 12:  # ambiguous — default to DD-MM-YYYY (BR)
+            return f"{y}-{b:02d}-{a:02d}", True
+
+    # DD-MM-YY (dashes, 2-digit year — e.g. "15-03-35" in international bond names)
+    m = re.search(r"\b(\d{2})-(\d{2})-(\d{2})\b", text)
+    if m:
+        a, b, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        y = 2000 + y2 if y2 < 80 else 1900 + y2
+        if a > 12 and 1 <= b <= 12:
+            return f"{y}-{b:02d}-{a:02d}", True
+        elif b > 12 and 1 <= a <= 12:
+            return f"{y}-{a:02d}-{b:02d}", True
+        elif 1 <= a <= 31 and 1 <= b <= 12:  # ambiguous — default DD-MM (BR)
+            return f"{y}-{b:02d}-{a:02d}", True
+
     # DD/MM/YYYY (or MM/DD/YYYY — auto-detect by checking if day > 12)
     m = re.search(r"(\d{2})/(\d{2})/(\d{4})", text)
     if m:
@@ -245,7 +268,7 @@ def _extract_brazilian_fund(uid):
     name = uid
     name = re.sub(r"\(\d{4,6}\)\s*", "", name)      # remove (code)
     name = re.sub(r"\s*-\s*\d{4,6}(?:\s*-.*)?$", "", name)  # remove trailing code
-    name = re.sub(r"\s*-\s*\d{2}\.\d{3}\..*$", "", name)    # remove CNPJ part
+    name = re.sub(r"\s*-?\s*\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", "", name)  # CNPJ formatted
     name = re.sub(r"(?<!\d)\d{14}(?!\d)\s*-?\s*", "", name)  # remove CNPJ cru
     name = name.strip(" -")
     if name:
@@ -286,7 +309,7 @@ def _extract_stock_etf(uid):
 
 
 _BOND_INSTRUMENT_RE = re.compile(
-    r"\b(DEBENTURE|CDCA|FIDC|LFSN|LFS|DEB|CRI|CRA|LCA|LCI|LCD|CDB|CCB|LF|LIG|FND)\b",
+    r"\b(DEBENTURE|CDCA|CPRF|FIDC|LFSN|LFS|DEB|CRI|CRA|LCA|LCI|LCD|CDB|CCB|LF|LIG|FND)\b",
     re.IGNORECASE)
 
 
@@ -304,14 +327,29 @@ def _extract_bond(uid):
         if len(veh) >= 2:
             features["vehicle_ambiguous"] = True
 
-    # CETIP code
+    # CETIP code — two patterns:
+    # 1. Explicit prefix from custodian systems: "CETIP_APFD19"
     m = re.search(r"CETIP_([A-Z0-9]+)", uid)
     if m:
         features["cetip_code"] = m.group(1)
+    # 2. Standalone 6-char code: 4 uppercase letters + 2 alphanumeric (e.g. APFD19,
+    #    ARTP13, BHIAA0). Classic format for Brazilian debenture/CRI/CRA CETIP codes.
+    #    Only runs when the prefix pattern didn't fire.
+    if "cetip_code" not in features:
+        m = re.search(r"\b([A-Z]{4}[A-Z0-9]{2})\b", uid)
+        if m and m.group(1) not in (features.get("instrument"), features.get("isin")):
+            features["cetip_code"] = m.group(1)
+
+    # ISIN checked first so Pattern 1 below won't also capture it as internal_code
+    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
+    if m and m.group(1) != features.get("instrument"):
+        features["isin"] = m.group(1)
 
     # Specific code like LF0020003KK, CDB6246IACD, 24G01629552, etc.
+    # Guard includes isin and cetip_code so they aren't also stored as internal_code.
     m = re.search(r"\b([A-Z]{2,4}\d{4,}[A-Z0-9]*)\b", uid)
-    if m and m.group(1) != features.get("instrument"):
+    if m and m.group(1) not in (features.get("instrument"), features.get("isin"),
+                                 features.get("cetip_code")):
         features["internal_code"] = m.group(1)
 
     # Also try alphanumeric code starting with digits (e.g. 24G01629552)
@@ -319,11 +357,6 @@ def _extract_bond(uid):
         m = re.search(r"\b(\d{2,4}[A-Z]\d{5,})\b", uid)
         if m:
             features["internal_code"] = m.group(1)
-
-    # ISIN (bonds are sometimes identified by their ISIN in the upstream system)
-    m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
-    if m and m.group(1) not in (features.get("instrument"), features.get("internal_code")):
-        features["isin"] = m.group(1)
 
     # Issuer name (multiple heuristics)
     instrument = features.get("instrument", "")
@@ -334,17 +367,24 @@ def _extract_bond(uid):
         m = re.search(pattern, uid, re.IGNORECASE)
         if m:
             issuer = m.group(1).strip(" -")
-            issuer = re.sub(r"\s*\d+[,\.]\d+%.*$", "", issuer)
+            # Strip "INDEXER+RATE%" spread first (e.g. "IPCA+7,45%", "CDI + 0,80%")
+            # Must run before the rate-only strip or "IPCA +" is left behind.
+            issuer = re.sub(
+                r"\s*(IPCA|CDI|SELIC|DU|PRE|IGPM|IGP-?M|DI)\s*\+\s*\d+(?:[,\.]\d+)?%.*$",
+                "", issuer, flags=re.IGNORECASE)
+            # Strip remaining "RATE%..." patterns (integer or decimal)
+            issuer = re.sub(r"\s*\d+(?:[,\.]\d+)?%.*$", "", issuer)
             issuer = re.sub(r"\s*(?:JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)/\d{4}.*$", "", issuer, flags=re.IGNORECASE)
-            # Strip leading indexer keywords + alphanumeric codes
+            # Strip leading indexer keywords
             issuer = re.sub(r"^(PRE|CDI|IPCA|SELIC|DU)\s+", "", issuer, flags=re.IGNORECASE)
-            issuer = re.sub(r"^[A-Z0-9]{8,}\s*-?\s*", "", issuer)  # strip long codes
+            # Strip trailing indexer keywords, including any residual "+" operator
+            issuer = re.sub(r"\s+(IPCA|CDI|SELIC|DU|PRE|IGPM|IGP-?M|DI)\s*\+?\s*$", "", issuer, flags=re.IGNORECASE)
+            # Strip leading alphanumeric CODES (must contain at least one digit — not pure names)
+            issuer = re.sub(r"^(?=.*\d)[A-Z0-9]{8,}\s*-?\s*", "", issuer)
             issuer = issuer.strip(" -")
             if issuer and len(issuer) > 2:
-                words = issuer.split()
-                if len(words) <= 2 and all(len(w) <= 3 for w in words):
-                    pass  # skip, try strategy 2
-                else:
+                # Only skip if what's left is the instrument itself (e.g. "CRI CRI…")
+                if issuer.upper() != instrument.upper():
                     features["issuer"] = issuer
 
     # Strategy 2: explicit "- BANK/ISSUER NAME -" in the middle
@@ -361,14 +401,20 @@ def _extract_bond(uid):
             if instrument and part.upper().startswith(instrument):
                 continue
             if re.search(r"\b(BANCO|S\.?A\.?|INVESTIMENTO|FINANCEIRA)\b", part, re.IGNORECASE):
-                features["issuer"] = part
+                # Apply the same cleanup as strategy 1 to avoid capturing rates/codes
+                cleaned = re.sub(r"\s*\d+(?:[,\.]\d+)?%.*$", "", part)
+                cleaned = re.sub(r"\s*\d{1,2}[-/]\d{2}[-/]\d{2,4}.*$", "", cleaned)
+                cleaned = re.sub(r"\s+(?=.*\d)[A-Z0-9]{6,}\s*$", "", cleaned)
+                cleaned = cleaned.strip()
+                if cleaned:
+                    features["issuer"] = cleaned
                 break
 
     # Maturity date
     _set_maturity(features, uid)
 
     # Rate/yield
-    rates = re.findall(r"(\d+[,\.]\d+)\s*%", uid)
+    rates = re.findall(r"(\d+(?:[,\.]\d+)?)\s*%", uid)
     if rates:
         features["rate"] = rates[-1].replace(",", ".")  # last rate is usually the yield
 
@@ -488,21 +534,27 @@ def _extract_futures(uid):
 
 def _extract_options(uid):
     features = {}
-    # Underlying ticker (common patterns)
-    # Pattern: "TICKER CALL/PUT" or "_TICKER_"
-    m = re.search(r"[_\s-]([A-Z]{2,5})[_\s-]", uid)
-    if m:
-        features["underlying"] = m.group(1)
-
-    # Better: ticker after known pattern
-    m = re.search(r"-\s*([A-Z]{2,5})\s*-", uid)
-    if m:
-        features["underlying"] = m.group(1)
-
-    # Option type
+    # Option type — extract first so underlying patterns can use it as anchor
     m = re.search(r"\b(CALL|PUT)\b", uid, re.IGNORECASE)
     if m:
         features["option_type"] = m.group(1).upper()
+
+    # Underlying ticker — B3 tickers are 3-5 uppercase letters + optional trailing digit
+    # (e.g. BBDC4, PETR4, VALE3). Priority order:
+    # 1. Ticker immediately after CALL/PUT keyword (most common format in these UIDs)
+    m = re.search(r"\b(?:call|put)\s+([A-Z]{3,5}\d?)\b", uid, re.IGNORECASE)
+    if m:
+        features["underlying"] = m.group(1).upper()
+    else:
+        # 2. Ticker between hyphens with optional spaces
+        m = re.search(r"-\s*([A-Z]{3,5}\d?)\s*-", uid)
+        if m:
+            features["underlying"] = m.group(1)
+        else:
+            # 3. Ticker between generic separators (underscore, space, hyphen)
+            m = re.search(r"[_\s-]([A-Z]{3,5}\d?)[_\s-]", uid)
+            if m:
+                features["underlying"] = m.group(1)
 
     # Strike price
     m = re.search(r"@\s*(\d+(?:[.,]\d+)?)", uid)
@@ -519,6 +571,22 @@ def _extract_options(uid):
     date = _parse_date(uid, prefer_mdy=True)
     if date:
         features["expiry"] = date
+
+    # Expiry month + year from Portuguese abbreviated format: "Ago-26", "Jan-2026"
+    # Stored separately for partial mainId matching (full expiry may be unavailable).
+    _PT_MONTHS = {
+        "jan": "01", "fev": "02", "mar": "03", "abr": "04",
+        "mai": "05", "jun": "06", "jul": "07", "ago": "08",
+        "set": "09", "out": "10", "nov": "11", "dez": "12",
+    }
+    m = re.search(r"\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)-(\d{2}|\d{4})\b",
+                  uid, re.IGNORECASE)
+    if m:
+        yr = int(m.group(2))
+        if yr < 100:
+            yr = 2000 + yr
+        features["expiry_month"] = _PT_MONTHS[m.group(1).lower()]
+        features["expiry_year"]  = str(yr)
 
     # ISIN
     m = re.search(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b", uid)
@@ -651,10 +719,36 @@ _EXTRACTORS = {
 }
 
 
+_STRONG_FEATURE_KEYS = (
+    "ticker", "isin", "cnpj", "cetip_code", "internal_code", "external_code",
+    "fund_code", "underlying", "selic_code",
+)
+
+
 def extract_features(uid, security_type):
     """Extract structured features from an unprocessedId given its securityType."""
-    extractor = _EXTRACTORS.get(security_type, _extract_generic)
-    return extractor(uid)
+    extractor = _EXTRACTORS.get(security_type)
+    if extractor:
+        return extractor(uid)
+    # Sem security_type (classificador sem dados de treino ainda — ver
+    # SecurityCache._get_classifier): cair direto no genérico não extrai nada
+    # útil (é só um fallback de "sem tipo nenhum bate"). Em vez disso, tenta
+    # os extractors especializados em ordem até um achar uma pista FORTE
+    # (ticker/ISIN/CNPJ/código) — cada extractor só popula esses campos
+    # quando o padrão próprio dele (CALL/PUT, DEBENTURE/CDB, ticker solto,
+    # etc.) está de fato presente na string, então o primeiro que achar algo
+    # já é sinal confiável. Não mistura extractors diferentes: aceitar só
+    # quando uma chave "forte" aparece evita que um regex de bond "invente"
+    # issuer/maturity numa string de opção (campos macios, não-identificador).
+    for candidate in (_extract_options, _extract_futures, _extract_bond,
+                      _extract_gov_bond, _extract_sovereign_bonds,
+                      _extract_brazilian_repo, _extract_otc,
+                      _extract_brazilian_fund, _extract_fund_intl,
+                      _extract_stock_etf):
+        feats = candidate(uid)
+        if any(feats.get(k) for k in _STRONG_FEATURE_KEYS):
+            return feats
+    return _extract_generic(uid)
 
 
 # ── Query builders per securityType ────────────────────────────────────────────
@@ -987,7 +1081,7 @@ _TYPE_AGREE_BONUS = 12
 # when the candidate's vehicle can't be determined.
 _VEHICLE_CANON = {            # alias → canonical vehicle token
     "DEBENTURE": "DEB", "DEBENTURES": "DEB", "DEB": "DEB",
-    "CRA": "CRA", "CRI": "CRI", "CDCA": "CDCA",
+    "CRA": "CRA", "CRI": "CRI", "CDCA": "CDCA", "CPRF": "CPRF",
     "LCA": "LCA", "LCI": "LCI", "LCD": "LCD", "LIG": "LIG",
     "CDB": "CDB", "CCB": "CCB",
     "LF": "LF", "LFS": "LFS", "LFSN": "LFS",   # LFS/LFSN = subordinada (≠ LF comum)
@@ -998,9 +1092,9 @@ _VEHICLE_SET = frozenset(_VEHICLE_CANON.values())
 # Longest-first so LFSN/LFS win over LF and CDCA over CDB/CRA (the \b also guards,
 # but keep the order explicit).
 _VEHICLE_WORD_RE = re.compile(
-    r"\b(DEBENTURES|DEBENTURE|DEB|CDCA|FIDC|LFSN|LFS|LF|LCA|LCI|LCD|LIG|CRA|CRI|CDB|CCB)\b")
+    r"\b(DEBENTURES|DEBENTURE|DEB|CDCA|CPRF|FIDC|LFSN|LFS|LF|LCA|LCI|LCD|LIG|CRA|CRI|CDB|CCB)\b")
 # Prefix order for the compacted mainId (longest-first so LFSN beats LFS beats LF).
-_VEHICLE_PREFIXES = ("DEBENTURE", "CDCA", "FIDC", "LFSN", "LFS", "DEB",
+_VEHICLE_PREFIXES = ("DEBENTURE", "CDCA", "CPRF", "FIDC", "LFSN", "LFS", "DEB",
                      "LCA", "LCI", "LCD", "LIG", "CRA", "CRI",
                      "CDB", "CCB", "LF")
 
@@ -1320,6 +1414,9 @@ def _exact_identifier_match(sec, features):
                 return "mainId/cnpj"
     if features.get("isin") and sec.get("isIn") and sec.get("isIn") == features["isin"]:
         return "isIn"
+    # Some asset types (e.g. otc) store the ISIN in mainId with isIn left empty.
+    if features.get("isin") and sec_main_id and sec_main_id == features["isin"]:
+        return "mainId/isin"
     if features.get("selic_code") and sec.get("selicCode") and sec.get("selicCode") == features["selic_code"]:
         return "selicCode"
     # Full-equality code match: the extracted code IS the entire mainId (not just
@@ -1340,6 +1437,15 @@ def _exact_identifier_match(sec, features):
             code = features.get(feat_key)
             if code and str(code).lower() == main_lower:
                 return label
+    # Complement tokens provided explicitly by the operator: if any token equals
+    # the candidate's mainId (case-insensitive), treat as a decisive match.
+    # Length guard ≥ 6 mirrors the code guard above — avoids short accidental hits.
+    if sec_main_id and len(sec_main_id) >= 6:
+        main_lower = sec_main_id.lower()
+        for _ci in range(1, 4):
+            comp_tok = features.get(f"complement_{_ci}")
+            if comp_tok and str(comp_tok).lower() == main_lower:
+                return f"complement_{_ci}"
     return None
 
 
@@ -2031,8 +2137,17 @@ class SecurityCache:
 
         Returns list of matching security dicts (unscored).
         """
-        pool = self.get_by_type(security_type)
-        if not pool:
+        # Sem security_type (classificador indisponível — ver _get_classifier):
+        # não existe "pool" pra esse caso (não há bucket None em self._by_type),
+        # mas os índices exatos (lookup/lookup_prefix) são GLOBAIS, não
+        # escopados por tipo — então ainda vale rodar as Fases 1/1b (ISIN,
+        # CNPJ, mainId, ticker, código CETIP são identificadores fortes o
+        # suficiente pra não precisar do tipo previsto). Só a Fase 2 (busca
+        # fuzzy por nome) precisa mesmo de um pool tipado; ela é pulada abaixo
+        # quando security_type é vazio. Quando security_type É informado, o
+        # comportamento abaixo é IDÊNTICO ao de antes (guards são aditivos).
+        pool = self.get_by_type(security_type) if security_type else None
+        if security_type and not pool:
             return []
 
         candidates = {}  # _id → sec (dedup)
@@ -2052,6 +2167,7 @@ class SecurityCache:
             ("taxId",     features.get("cnpj")),
             ("mainId",    feat_cnpj_digits),
             ("isIn",      features.get("isin")),
+            ("mainId",    features.get("isin")),
             ("selicCode", features.get("selic_code")),
             ("mainId",    features.get("external_code")),
             ("mainId",    features.get("internal_code")),
@@ -2059,14 +2175,30 @@ class SecurityCache:
             ("mainId",    features.get("fund_code")),
             ("mainId",    features.get("ticker")),
             ("mainId",    "FUT" + features["ticker"] if "ticker" in features else None),
+            ("mainId",    features.get("complement_1")),
+            ("mainId",    features.get("complement_2")),
+            ("mainId",    features.get("complement_3")),
         ]
 
         for field, value in _exact_search:
             if not value:
                 continue
             for sec in self.lookup(field, value):
-                if sec.get("securityType") == security_type:
+                if not security_type or sec.get("securityType") == security_type:
                     candidates[sec["_id"]] = sec
+
+        # Phase 1b-x: cross-type mainId lookup for complement tokens only.
+        # Complement tokens are explicitly provided by the operator, so they are
+        # treated as stronger evidence than the ML type classification. If a token
+        # matches a mainId in ANY type, include that candidate (no securityType
+        # filter). _score_candidate will rank it via _EXACT_SCORE if it also
+        # matches the complement_N feature there.
+        for _ci in range(1, 4):
+            _comp_tok = features.get(f"complement_{_ci}")
+            if not _comp_tok:
+                continue
+            for sec in self.lookup("mainId", _comp_tok):
+                candidates[sec["_id"]] = sec
 
         # Phase 1b: prefix lookups for structured patterns (options, futures)
         _prefix_search = []
@@ -2078,16 +2210,22 @@ class SecurityCache:
         if "underlying" in features:
             _prefix_search.append(("ticker", features["underlying"]))
             _prefix_search.append(("mainId", features["underlying"]))
+        # cetip_code as mainId prefix: catches mainIds like "CHSF13incentivada" when
+        # the extracted code is "CHSF13" (catalog appends suffixes like "incentivada").
+        if features.get("cetip_code"):
+            _prefix_search.append(("mainId", features["cetip_code"]))
 
         for field, prefix in _prefix_search:
             if not prefix:
                 continue
             for sec in self.lookup_prefix(field, prefix):
-                if sec.get("securityType") == security_type:
+                if not security_type or sec.get("securityType") == security_type:
                     candidates[sec["_id"]] = sec
 
-        # Phase 2: scan type pool for name/keyword matches
-        if len(candidates) < limit:
+        # Phase 2: scan type pool for name/keyword matches — precisa de um pool
+        # tipado (`pool` é None quando security_type é vazio), então é pulada
+        # nesse caso; Fases 1/1b acima já cobrem os identificadores exatos.
+        if security_type and len(candidates) < limit:
             # Collect all searchable terms
             search_terms = []
             for key in ["name", "issuer"]:
@@ -2297,8 +2435,20 @@ class SecurityMatcher:
     def _get_classifier(self):
         if self._classifier is None:
             from security_type_classifier import SecurityTypeClassifier
-            self._classifier = SecurityTypeClassifier()
-            self._classifier.train()
+            c = SecurityTypeClassifier()
+            try:
+                c.train()
+            except Exception:
+                # Sem dados de treino ainda (ambiente novo, zero mapeamentos
+                # históricos) — não envenena self._classifier com uma instância
+                # quebrada; sem isso, TODA chamada seguinte a match() sem
+                # security_type explícito voltava a tentar essa mesma instância
+                # já marcada "trained=False" e explodia "Classifier not
+                # trained – call .train() first." pro resto da vida do processo.
+                # Mesma filosofia do _get_classifier module-level em
+                # pages/controlpanel.py: só cacheia depois de treinar com sucesso.
+                return None
+            self._classifier = c
         return self._classifier
 
     def ensure_cache(self):
@@ -2309,7 +2459,8 @@ class SecurityMatcher:
         """Force-reload cache from DB."""
         self._cache.load_from_db(self.db)
 
-    def match(self, unprocessed_id, security_type=None, type_confidence=None, limit=10):
+    def match(self, unprocessed_id, security_type=None, type_confidence=None, limit=10,
+              inject_features=None):
         """
         Match an unprocessedId against securities via indexed cache.
 
@@ -2322,12 +2473,17 @@ class SecurityMatcher:
         # Step 1: classify type if not provided
         if not security_type:
             clf = self._get_classifier()
-            prediction = clf.predict(unprocessed_id)
-            security_type = prediction["type"]
-            type_confidence = prediction["confidence"]
+            if clf is not None:
+                prediction = clf.predict(unprocessed_id)
+                security_type = prediction["type"]
+                type_confidence = prediction["confidence"]
+            # clf is None: sem base de treino ainda — segue sem tipo previsto
+            # em vez de estourar. O operador escolhe manualmente ("— selecionar").
 
         # Step 2: extract features
         features = extract_features(unprocessed_id, security_type)
+        if inject_features:
+            features.update(inject_features)
 
         # Step 3: search cache (index lookups + regex fallback)
         raw_candidates = self._cache.search(security_type, features, limit=limit * 3)

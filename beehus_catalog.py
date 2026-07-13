@@ -36,7 +36,7 @@ from beehus_api import (list_securities, get_security_mappings,
                         get_preprocessing_status, list_transactions,
                         get_nav_contribution, get_nav_results,
                         partner_wallets, list_groupings, filtered_security_price,
-                        security_events, list_execution_prices)
+                        security_events, list_execution_prices, get_security)
 from beehus_api.exceptions import BeehusAPIError, BeehusAuthError
 
 _log = logging.getLogger(__name__)
@@ -2030,7 +2030,8 @@ def issues_detail(company_id, date, issue_type):
 # os reads Mongo pegavam um record qualquer (sort por data), ignorando carteira.
 
 _PRICING_RANK = {"C3": 5, "C2": 4, "C1": 3, "B2": 2, "B1": 1}
-_MAX_PRICE_IDS_PER_REQUEST = 150  # CSV de securityIds (24 chars) — evita 414
+_MAX_PRICE_IDS_PER_REQUEST = 150  # securityIds como PARÂMETRO REPETIDO (não CSV — o
+# backend devolve vazio p/ CSV multi-id); ~37 chars/id na URL, 150 ≈ 5,5KB — evita 414
 
 
 def _normalize_price_record(r):
@@ -2082,13 +2083,20 @@ def security_price_records(security_ids):
             seen.append(s)
     if not seen:
         return []
+    chunks = [seen[i:i + _MAX_PRICE_IDS_PER_REQUEST]
+              for i in range(0, len(seen), _MAX_PRICE_IDS_PER_REQUEST)]
     recs = []
-    for i in range(0, len(seen), _MAX_PRICE_IDS_PER_REQUEST):
-        chunk = seen[i:i + _MAX_PRICE_IDS_PER_REQUEST]
-        try:
-            out = filtered_security_price(security_ids=chunk)
-        except (BeehusAPIError, BeehusAuthError, Exception):  # noqa: BLE001
-            return []  # falha → sem Mongo, sem mapa parcial
+    try:
+        # Chunks em PARALELO (união grande de sids no lote da Conciliação mov.):
+        # `ex.map` preserva a ordem de concatenação; QUALQUER falha → [] (nunca
+        # mapa parcial), mesma semântica do loop sequencial.
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(5, len(chunks))) as ex:
+            outs = list(ex.map(
+                lambda c: filtered_security_price(security_ids=c), chunks))
+    except (BeehusAPIError, BeehusAuthError, Exception):  # noqa: BLE001
+        return []  # falha → sem Mongo, sem mapa parcial
+    for out in outs:
         for r in (out or []):
             if not isinstance(r, dict):
                 continue
@@ -2343,6 +2351,141 @@ def wallet_doc_in_company(wallet_id, company_id):
         if doc:
             return doc
     return wallet_doc(wid)   # fallback: índice global
+
+
+# ── explosion chain (dependências de processamento) ──────────────────────────
+# Ao processar uma carteira que tem um ATIVO DE EXPLOSÃO, a(s) carteira(s) que
+# esse ativo aponta precisam ser enviadas JUNTO no `process` — senão o
+# processamento não conclui. A relação pode ser ENCADEADA (A→B→C→…): resolvemos
+# a cadeia inteira, achatada, via BFS. Ver docs/EXPLOSION_CHAIN.md.
+#
+# Fontes (ambas já cacheadas 5 min neste seam, então a cadeia sai barata):
+#   • `company_wallets_index` → `securitiesForExplosion` de cada carteira.
+#   • `security_doc`/`get_security` → `correspondingWallet` do ativo de explosão.
+
+def wallet_explosion_map(company_id):
+    """`{walletId_str: [securityId_str, ...]}` — só as carteiras da empresa que
+    têm `securitiesForExplosion` não-vazio (ativo de explosão). Deriva do índice
+    de carteiras da empresa (`company_wallets_index`, partner_wallets já cacheado
+    5 min) — sem chamada extra ao upstream. `{}` quando nenhuma tem explosão."""
+    out = {}
+    for wid, doc in company_wallets_index(company_id).items():
+        ids = [_idstr(s) for s in (doc.get("securitiesForExplosion") or []) if s]
+        ids = [s for s in ids if s]
+        if ids:
+            out[wid] = ids
+    return out
+
+
+def _extract_corresponding_wallet(doc, company_id=None):
+    """De um doc de ativo, extrai `{"id","name"}` da `correspondingWallet` (a
+    carteira que sofre a explosão), ou None. Aceita tanto `correspondingWallet`
+    populado (`{_id, name}`) quanto id cru (resolve o nome pelo índice da
+    empresa, quando `company_id` é dado)."""
+    cw = (doc or {}).get("correspondingWallet")
+    if isinstance(cw, dict):
+        wid = _idstr(cw.get("_id"))
+        if wid:
+            return {"id": wid, "name": cw.get("name") or ""}
+    elif cw:
+        wid = _idstr(cw)
+        if wid:
+            name = ""
+            if company_id:
+                w = company_wallets_index(company_id).get(wid)
+                name = (w or {}).get("name") or ""
+            return {"id": wid, "name": name}
+    return None
+
+
+def _load_corresponding_wallet(security_id, company_id=None):
+    """Resolve `correspondingWallet` de um ativo de explosão, tentando primeiro o
+    catálogo já cacheado (`security_doc`) e só caindo no GET pontual
+    `/beehus/securities/{id}` se o catálogo não trouxer o campo. `{"id","name"}`
+    ou None."""
+    got = _extract_corresponding_wallet(security_doc(security_id), company_id)
+    if got:
+        return got
+    try:
+        return _extract_corresponding_wallet(
+            get_security(security_id=security_id), company_id)
+    except (BeehusAPIError, BeehusAuthError, Exception):  # noqa: BLE001
+        _log.warning("get_security(%s) falhou ao resolver correspondingWallet.",
+                     security_id)
+        return None
+
+
+def security_corresponding_wallet(security_id, company_id=None):
+    """`{"id","name"}` da carteira que o ativo de explosão aponta, ou None.
+    Cacheado por ativo (`corresponding_wallet::{id}`, TTL/SWR) — `securities`
+    muda pouco, então uma cadeia repetida não refaz os lookups."""
+    sid = _idstr(security_id)
+    if not sid:
+        return None
+    return _cached_ttl(f"corresponding_wallet::{sid}",
+                       lambda: _load_corresponding_wallet(sid, company_id))
+
+
+def explosion_chain(company_id, wallet_id):
+    """Todas as carteiras arrastadas por `wallet_id` via ativos de explosão, em
+    TODOS os níveis, achatadas (BFS). Cada item:
+    `{"securityId", "walletId", "name", "level", "viaWalletId"}`. `[]` quando a
+    carteira não tem explosão.
+
+    Robusto às bordas validadas em produção: auto-referência (ativo aponta p/ a
+    própria carteira), ciclo entre carteiras (A→B→A), carteira-folha (a cadeia
+    para) e múltiplos ativos apontando p/ a mesma correspondente (dedup). O
+    `seen` inclui a raiz, então nenhum ciclo/auto-ref entra na lista."""
+    root = _idstr(wallet_id)
+    if not company_id or not root:
+        return []
+    secmap = wallet_explosion_map(company_id)
+    if not secmap:
+        return []
+    seen = {root}
+    out = []
+    queue = [(root, 1)]
+    while queue:
+        current, level = queue.pop(0)
+        for sid in secmap.get(current, []):
+            cw = security_corresponding_wallet(sid, company_id)
+            if not cw:
+                continue                      # ativo sem correspondingWallet
+            wid = cw["id"]
+            if wid in seen:
+                continue                      # ciclo / auto-ref / duplicata
+            seen.add(wid)
+            out.append({
+                "securityId":  sid,
+                "walletId":    wid,
+                "name":        cw["name"],
+                "level":       level,
+                "viaWalletId": current,
+            })
+            queue.append((wid, level + 1))    # reexpande os níveis abaixo
+    return out
+
+
+def expand_wallets_with_explosion(company_id, wallet_ids):
+    """Expande uma lista de carteiras a processar em `[raízes...] + cadeias de
+    explosão`, DEDUPLICADA e preservando a ordem (raízes primeiro, arrastadas
+    depois). `wallet_ids` vazio = "todas as carteiras da empresa" no contrato do
+    /process → devolve como veio (nada a expandir). Não muta a entrada."""
+    roots = [_idstr(w) for w in (wallet_ids or []) if w]
+    roots = [w for w in roots if w]
+    if not roots:
+        return list(wallet_ids or [])
+    seen, out = set(), []
+    for w in roots:
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    for w in roots:
+        for p in explosion_chain(company_id, w):
+            if p["walletId"] not in seen:
+                seen.add(p["walletId"])
+                out.append(p["walletId"])
+    return out
 
 
 def provisions_for_processed_date(wallet_id, date, company_id=None):
