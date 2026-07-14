@@ -77,6 +77,30 @@ def create_security(
     return request("POST", "/beehus/securities", json=payload)
 
 
+def check_similar_securities(payload: dict, *, timeout: int = 30) -> list:
+    """POST /beehus/securities/check-similar-securities — duplicate check the
+    controlpanel "Cadastrar ativos" modal fires right before creating a
+    security. Takes the SAME payload that will be sent to `create_security_raw`.
+    Returns the list of similar/matching securities found (empty when none).
+    """
+    out = request("POST", "/beehus/securities/check-similar-securities",
+                  json=payload, timeout=timeout)
+    return out if isinstance(out, list) else []
+
+
+def create_security_raw(payload: dict, *, timeout: int = 30) -> dict:
+    """POST /beehus/securities with a caller-built payload as-is.
+
+    Unlike `create_security()` (fixed signature, generic fields only), this
+    takes any securityType's full payload. Confirmed live: the API only
+    requires `beehusName`, `securityType`, and ONE identifier field per type
+    (`ticker`/`isIn`/`taxId` — copied server-side into `mainId`); every other
+    field (issuer, maturityDate, indexer, cvmKlass, userIds, ...) is optional
+    and comes back `null`/`[]` when omitted.
+    """
+    return request("POST", "/beehus/securities", json=payload, timeout=timeout)
+
+
 _PRICING_TYPES = ("B1", "B2", "C1", "C2", "C3")
 
 

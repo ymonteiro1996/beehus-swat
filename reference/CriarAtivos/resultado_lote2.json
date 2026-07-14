@@ -1,0 +1,56 @@
+{
+  "created": [
+    {
+      "beehusName": "DEB Comgás 15/Mai/2028",
+      "_id": "6a54ed1c466ac6eec9bde4a4",
+      "mainId": "GASP17"
+    },
+    {
+      "beehusName": "Goldman Sachs 5,016%",
+      "_id": "6a54ed21466ac6eec9bde4ea",
+      "mainId": "US38141GB789"
+    },
+    {
+      "beehusName": "Goldman Sachs Group INC 5.449%",
+      "_id": "6a54ed2c466ac6eec9be10a4",
+      "mainId": "GOLDMANSACHS_5.449_23102035"
+    },
+    {
+      "beehusName": "Jpmorgan 5,350%",
+      "_id": "6a54ed31466ac6eec9be1111",
+      "mainId": "US46647PDR47"
+    },
+    {
+      "beehusName": "Jpmorgan Chase Financial 12%",
+      "_id": "6a54ed38466ac6eec9be11ad",
+      "mainId": "US2908060465"
+    },
+    {
+      "beehusName": "LCA Banco ABC 02/Mar/2027",
+      "_id": "6a54ed3d466ac6eec9be4ff7",
+      "mainId": "LCABANCOABCCDI02032027"
+    },
+    {
+      "beehusName": "LCA Banco BV Pré 22/Mai/2026",
+      "_id": "6a54ed42466ac6eec9be6453",
+      "mainId": "LCABANCOBVPRE22052026"
+    },
+    {
+      "beehusName": "LCA Banco BV Pré 24/Abr/2028",
+      "_id": "6a54ed47466ac6eec9be6462",
+      "mainId": "LCABANCOBVPRE24042028"
+    },
+    {
+      "beehusName": "LCA Banco BV 06/Ago/2030",
+      "_id": "6a54ed53466ac6eec9becfd1",
+      "mainId": "LCABANCOBVCDI06082030"
+    },
+    {
+      "beehusName": "LCA Banco BV 11/Jun/2027",
+      "_id": "6a54ed58466ac6eec9becfff",
+      "mainId": "LCABANCOBVSACDI11062027"
+    }
+  ],
+  "skipped": [],
+  "failed": []
+}

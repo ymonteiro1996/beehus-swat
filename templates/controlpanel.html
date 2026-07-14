@@ -4070,6 +4070,12 @@ try {
       lines.push(label + ': ' + (val || '—'));
     });
 
+    // Generic codes — auto-extracted from the uid (shown for all types when present)
+    [1, 2, 3].forEach(function(i) {
+      const v = f['generic_code_' + i];
+      if (v) lines.push('Cód. genérico ' + i + ': ' + v);
+    });
+
     // Complement tokens (shown for all types when present)
     [1, 2, 3].forEach(function(i) {
       const v = f['complement_' + i];

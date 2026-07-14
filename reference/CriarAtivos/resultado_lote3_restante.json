@@ -1,0 +1,686 @@
+{
+  "created": [
+    {
+      "beehusName": "LCA Banco BV 16/Mar/2028",
+      "_id": "6a54edd4466ac6eec9c0ec1b",
+      "mainId": "LCABANCOBVSACDI16032028"
+    },
+    {
+      "beehusName": "LCA Siscoob 31/Mar/2033",
+      "_id": "6a54edd9466ac6eec9c0ec3c",
+      "mainId": "LCASICOOBCDI31032033"
+    },
+    {
+      "beehusName": "LCA Banco John Deere 23/Jun/2027",
+      "_id": "6a54edde466ac6eec9c0ec48",
+      "mainId": "LCAJOHNDEERECDI23062027"
+    },
+    {
+      "beehusName": "LCA BNDES 17/Mai/2027",
+      "_id": "6a54ede2466ac6eec9c0ec54",
+      "mainId": "LCABNDESCDI17052027"
+    },
+    {
+      "beehusName": "LCA BNDES 30/Jun/2028",
+      "_id": "6a54ede7466ac6eec9c0ec60",
+      "mainId": "LCABNDESCDI30062028"
+    },
+    {
+      "beehusName": "LCA BNDES 15/Mai/2026",
+      "_id": "6a54edeb466ac6eec9c0ec6c",
+      "mainId": "LCABNDESCDI15052026"
+    },
+    {
+      "beehusName": "LCA Banco Safra 10/Fev/2027",
+      "_id": "6a54edf0466ac6eec9c11837",
+      "mainId": "LCASAFRACDI10022027"
+    },
+    {
+      "beehusName": "LCA Banco Safra 10/Dez/2026",
+      "_id": "6a54edf5466ac6eec9c1184d",
+      "mainId": "LCASAFRACDI10122026"
+    },
+    {
+      "beehusName": "LCA Banco Safra 24/Mai/2027",
+      "_id": "6a54edf9466ac6eec9c11859",
+      "mainId": "LCASAFRACDI24052027"
+    },
+    {
+      "beehusName": "LCA Banco Safra 26/Mai/2027",
+      "_id": "6a54edfe466ac6eec9c11865",
+      "mainId": "LCASAFRACDI26052027"
+    },
+    {
+      "beehusName": "LCA Banco Safra 28/Abr/2026",
+      "_id": "6a54ee02466ac6eec9c11871",
+      "mainId": "LCASAFRACDI28042026"
+    },
+    {
+      "beehusName": "LCA Banco Safra 31/Jul/2026",
+      "_id": "6a54ee07466ac6eec9c11881",
+      "mainId": "LCASAFRACDI31072026"
+    },
+    {
+      "beehusName": "LCA Banco Safra 01/Mar/2028",
+      "_id": "6a54ee0d466ac6eec9c11894",
+      "mainId": "LCASAFRACDI01032028"
+    },
+    {
+      "beehusName": "LCA Sicoob 11/Nov/2032",
+      "_id": "6a54ee17466ac6eec9c118b7",
+      "mainId": "LCASICOOBCDI11112032"
+    },
+    {
+      "beehusName": "LCA Sicredi Pré 31/Out/2027",
+      "_id": "6a54ee1b466ac6eec9c118c3",
+      "mainId": "LCASICREDIPRE31102027"
+    },
+    {
+      "beehusName": "LCA Sicredi 08/Mar/2030",
+      "_id": "6a54ee20466ac6eec9c118e7",
+      "mainId": "LCASICREDICDI08032030"
+    },
+    {
+      "beehusName": "LCD BNDES 15/Mar/2029",
+      "_id": "6a54ee24466ac6eec9c118f3",
+      "mainId": "LCDBNDESCDI15032029"
+    },
+    {
+      "beehusName": "LCI CEF 09/Fev/2028",
+      "_id": "6a54ee29466ac6eec9c11905",
+      "mainId": "LCICEFCDI09022028"
+    },
+    {
+      "beehusName": "LCI CEF 03/Jan/2028",
+      "_id": "6a54ee2d466ac6eec9c11917",
+      "mainId": "LCICEFCDI03012028"
+    },
+    {
+      "beehusName": "LCI CEF 13/Abr/2026",
+      "_id": "6a54ee32466ac6eec9c144f5",
+      "mainId": "LCICEFBMCDI13042026"
+    },
+    {
+      "beehusName": "LCI Itaú 21/Mar/2028",
+      "_id": "6a54ee37466ac6eec9c14501",
+      "mainId": "LCIITAUCDI21032028"
+    },
+    {
+      "beehusName": "LCI Itaú 18/Fev/2028",
+      "_id": "6a54ee3b466ac6eec9c1450d",
+      "mainId": "LCIITAUCDI18022028"
+    },
+    {
+      "beehusName": "LIG Itaú 20/Jan/2027",
+      "_id": "6a54ee40466ac6eec9c170de",
+      "mainId": "LIGITAUCDI20012027"
+    },
+    {
+      "beehusName": "Lockheed Martin 4,700% 15/Dec/2031",
+      "_id": "6a54ee45466ac6eec9c170f4",
+      "mainId": "US539830CG29"
+    },
+    {
+      "beehusName": "Morgan Stanley SR Nts 23-01-32",
+      "_id": "6a54ee4a466ac6eec9c19cc8",
+      "mainId": "MORGAN_STANLEY_SR_NTS_23012032"
+    },
+    {
+      "beehusName": "UBS Group 5,959% 12/Jan/2034",
+      "_id": "6a54ee4f466ac6eec9c19ce3",
+      "mainId": "USH42097DT18"
+    },
+    {
+      "beehusName": "United Parcel Services Imc 5,250% 14/May/2035",
+      "_id": "6a54ee54466ac6eec9c1ce82",
+      "mainId": "US911312CJ32"
+    },
+    {
+      "beehusName": "Unitedhealth Group 4,200%",
+      "_id": "6a54ee59466ac6eec9c1cfdd",
+      "mainId": "US91324PEJ75"
+    },
+    {
+      "beehusName": "DEB Vert  21/Fev/2028",
+      "_id": "6a54ee5e466ac6eec9c1d136",
+      "mainId": "VERTM6"
+    },
+    {
+      "beehusName": "Whirlpool Corp SR NT 6,5% 15/Jun/2033",
+      "_id": "6a54ee62466ac6eec9c1d142",
+      "mainId": "WHR6096805"
+    },
+    {
+      "beehusName": "Crescera Growth Capital V PVT FIP",
+      "_id": "6a54ee66466ac6eec9c1d154",
+      "mainId": "35.864.264/0001-78"
+    },
+    {
+      "beehusName": "Icatu Vanguarda Absoluto Plus IQ FIRF CP Prev",
+      "_id": "6a54ee68466ac6eec9c1fd31",
+      "mainId": "45.444.101/0001-90"
+    },
+    {
+      "beehusName": "Itaú Deb Incentivadas IMA B Infra",
+      "_id": "6a54ee6a466ac6eec9c1fd48",
+      "mainId": "41.994.687/0001-05"
+    },
+    {
+      "beehusName": "JiveMauá Bossanova Crédito Securitizado II FIDC Subclasse Senior",
+      "_id": "6a54ee6c466ac6eec9c1fd54",
+      "mainId": "63.912.733/0001-12_SR"
+    },
+    {
+      "beehusName": "JiveMauá Bossanova Crédito Securitizado II FIDC Subclasse Subordinada",
+      "_id": "6a54ee6e466ac6eec9c1fd5f",
+      "mainId": "63.912.733/0001-12_SUB"
+    },
+    {
+      "beehusName": "Palmeiras FIF RF Infraestrutura",
+      "_id": "6a54ee70466ac6eec9c1fd6e",
+      "mainId": "65.466.578/0001-83"
+    },
+    {
+      "beehusName": "Permuta Residencial II FII",
+      "_id": "6a54ee72466ac6eec9c1fd7a",
+      "mainId": "65.680.221/0001-01"
+    },
+    {
+      "beehusName": "Seed 3 FIP Capital Semente",
+      "_id": "6a54ee74466ac6eec9c1fd88",
+      "mainId": "53.095.875/0001-80"
+    },
+    {
+      "beehusName": "TFO Ações FIC FIA",
+      "_id": "6a54ee76466ac6eec9c1fd9b",
+      "mainId": "09.075.575/0001-48"
+    },
+    {
+      "beehusName": "TFO DI DEB Incentivado Infra RF",
+      "_id": "6a54ee79466ac6eec9c1fe18",
+      "mainId": "54.641.722/0001-54"
+    },
+    {
+      "beehusName": "TFO IPCA DEB Incentivado Infra RF",
+      "_id": "6a54ee7a466ac6eec9c1fe25",
+      "mainId": "51.598.758/0001-04"
+    },
+    {
+      "beehusName": "TFO MM1 CIC FIM",
+      "_id": "6a54ee7c466ac6eec9c22a0d",
+      "mainId": "53.414.560/0001-59"
+    },
+    {
+      "beehusName": "VGBL TFO Qualificado",
+      "_id": "6a54ee7f466ac6eec9c22a2d",
+      "mainId": "51.248.472/0001-07"
+    },
+    {
+      "beehusName": "Vinci Mav IV FIAGRO FIDC RL",
+      "_id": "6a54ee81466ac6eec9c22a4c",
+      "mainId": "65.344.522/0001-56"
+    },
+    {
+      "beehusName": "NTN-B1 Dez/2084",
+      "_id": "6a54ee82466ac6eec9c22a57",
+      "mainId": "NTNB1_122084"
+    },
+    {
+      "beehusName": "Amundi Funds US Pioneer Fund R",
+      "_id": "6a54ee83466ac6eec9c22a62",
+      "mainId": "LU2450198747"
+    },
+    {
+      "beehusName": "AXA World Dynamic High Yield Bonds",
+      "_id": "6a54ee85466ac6eec9c22a6d",
+      "mainId": "AXA_WORLD_DYNAMIC_HIGH_YIELD_BONDS"
+    },
+    {
+      "beehusName": "BSF Emerging Markets Short Duration Bond Fund A2 USD",
+      "_id": "6a54ee86466ac6eec9c22a78",
+      "mainId": "LU1706559744"
+    },
+    {
+      "beehusName": "Capital Group Investment Company ZLh",
+      "_id": "6a54ee88466ac6eec9c22a83",
+      "mainId": "LU3220613239"
+    },
+    {
+      "beehusName": "DNCA Invest Alpha Bonds Class A",
+      "_id": "6a54ee89466ac6eec9c22a8e",
+      "mainId": "LU1694789451"
+    },
+    {
+      "beehusName": "Evli Short Corporate Bond IB",
+      "_id": "6a54ee8a466ac6eec9c22a99",
+      "mainId": "FI4000233242"
+    },
+    {
+      "beehusName": "Groupama Entreprises IC Acc",
+      "_id": "6a54ee8c466ac6eec9c22aa4",
+      "mainId": "FR0010213355"
+    },
+    {
+      "beehusName": "Invesco Funds Sicav e Z",
+      "_id": "6a54ee8d466ac6eec9c22abd",
+      "mainId": "INVESCO_FUNDS_SICAV_E_Z"
+    },
+    {
+      "beehusName": "iShares Physical Palladium ETC",
+      "_id": "6a54ee8f466ac6eec9c22ac8",
+      "mainId": "IE00B4556L06"
+    },
+    {
+      "beehusName": "JPM Inv. Funds - Global High Yield Bond A (acc) USD",
+      "_id": "6a54ee91466ac6eec9c2312c",
+      "mainId": "LU0344579056"
+    },
+    {
+      "beehusName": "JP Morgan Lux Fund",
+      "_id": "6a54ee93466ac6eec9c23286",
+      "mainId": "JP_MORGAN_LUX_FUND"
+    },
+    {
+      "beehusName": "JPM Euro Government Short Duration Bond I2 Acc",
+      "_id": "6a54ee94466ac6eec9c23291",
+      "mainId": "LU1938385884"
+    },
+    {
+      "beehusName": "JPM US Value I",
+      "_id": "6a54ee96466ac6eec9c232aa",
+      "mainId": "LU0248060658"
+    },
+    {
+      "beehusName": "Morgan Stanley Emerging Markets Corporate Debt",
+      "_id": "6a54ee98466ac6eec9c232b5",
+      "mainId": "LU0603408039"
+    },
+    {
+      "beehusName": "Morgan Stanley Invst Global Fixed Income",
+      "_id": "6a54ee99466ac6eec9c232c0",
+      "mainId": "NQXR304007"
+    },
+    {
+      "beehusName": "MSIF Global Fixed Income Opp A Acc USD",
+      "_id": "6a54ee9b466ac6eec9c232cb",
+      "mainId": "LU0694238766"
+    },
+    {
+      "beehusName": "Muzinich EM Short Duration Cl H",
+      "_id": "6a54ee9c466ac6eec9c232d6",
+      "mainId": "IE00B4PTJ249"
+    },
+    {
+      "beehusName": "Neuberger Short Duration EM Debt A Acc USD",
+      "_id": "6a54ee9d466ac6eec9c232e1",
+      "mainId": "IE00BDZRXR46"
+    },
+    {
+      "beehusName": "Robeco QI Emerging Conservative Equities I",
+      "_id": "6a54ee9f466ac6eec9c232ec",
+      "mainId": "LU0582530498"
+    },
+    {
+      "beehusName": "Robeco QI EUR Conservative Equities I",
+      "_id": "6a54eea1466ac6eec9c25ed5",
+      "mainId": "LU0312333569"
+    },
+    {
+      "beehusName": "Schroder ISF Global Energy C",
+      "_id": "6a54eea3466ac6eec9c25ef3",
+      "mainId": "LU0374901725"
+    },
+    {
+      "beehusName": "UBS Bank Usa Core Savings",
+      "_id": "6a54eea4466ac6eec9c25efe",
+      "mainId": "UBSBANKUSACORESAVINGS"
+    },
+    {
+      "beehusName": "Wellington Credit Total Return Fund Class D USD Acc",
+      "_id": "6a54eea6466ac6eec9c25f09",
+      "mainId": "LU2750480548"
+    },
+    {
+      "beehusName": "Wellington Enduring Infrastructure Assets Fund",
+      "_id": "6a54eea7466ac6eec9c25f14",
+      "mainId": "IE00BH3VJH87"
+    },
+    {
+      "beehusName": "XP Global Strategies SPC Fund Class E",
+      "_id": "6a54eea8466ac6eec9c25f1f",
+      "mainId": "KYG9830H2358_E"
+    },
+    {
+      "beehusName": "XP Partners Group PE II Feeder Sp Class A",
+      "_id": "6a54eeaa466ac6eec9c25f2a",
+      "mainId": "XP_PARTNERS_GROUP_PE_II_FEEDER_SP_A"
+    },
+    {
+      "beehusName": "Call AXIA6 @ 51,50 Jun/2026",
+      "_id": "6a54eeab466ac6eec9c25f35",
+      "mainId": "AXIA6_CALL_5150_JUN_2026"
+    },
+    {
+      "beehusName": "Call BBSE3 @ 41,86 Nov/2026",
+      "_id": "6a54eead466ac6eec9c25f46",
+      "mainId": "BBSE3_CALL_4186_NOV_2026"
+    },
+    {
+      "beehusName": "Call CURY3 @ 38,00 Mai/2026",
+      "_id": "6a54eeb5466ac6eec9c298a8",
+      "mainId": "CURY3_CALL_3800_MAI_2026"
+    },
+    {
+      "beehusName": "Call PETR4 @ 24,15 Dez/2026",
+      "_id": "6a54eeb6466ac6eec9c298c1",
+      "mainId": "PETR4_CALL_2415_DEZ_2026"
+    },
+    {
+      "beehusName": "Call PETR4 @ 24,75 Dez/2026",
+      "_id": "6a54eeb8466ac6eec9c298cc",
+      "mainId": "PETR4_CALL_2475_DEZ_2026"
+    },
+    {
+      "beehusName": "Call PETR4 @ 27,82 Nov/2026",
+      "_id": "6a54eeb9466ac6eec9c298d7",
+      "mainId": "PETR4_CALL_2782_NOV_2026"
+    },
+    {
+      "beehusName": "Call PETR4 @ 5,69 Nov/2026",
+      "_id": "6a54eebb466ac6eec9c298e2",
+      "mainId": "PETR4_CALL_569_NOV_2026"
+    },
+    {
+      "beehusName": "Call PETR4 @ 57,62 Nov/2026",
+      "_id": "6a54eebc466ac6eec9c2a662",
+      "mainId": "PETR4_CALL_5762_NOV_2026"
+    },
+    {
+      "beehusName": "Call VALE3 @ 102,91 Nov/2026",
+      "_id": "6a54eebe466ac6eec9c2a67c",
+      "mainId": "VALE3_CALL_10291_NOV_2026"
+    },
+    {
+      "beehusName": "Call VALE3 @ 38,48 Set/2026",
+      "_id": "6a54eebf466ac6eec9c2a68a",
+      "mainId": "VALE3_CALL_3848_SET_2026"
+    },
+    {
+      "beehusName": "Put BBSE3 @ 38,14 Nov/2026",
+      "_id": "6a54eec2466ac6eec9c2ace9",
+      "mainId": "BBSE3_PUT_3814_NOV_2026"
+    },
+    {
+      "beehusName": "Put CURY3 @ 36,55 Mai/2026",
+      "_id": "6a54eec4466ac6eec9c2ae39",
+      "mainId": "CURY3_PUT_3655_MAI_2026"
+    },
+    {
+      "beehusName": "Put PETR4 @ 39,74 Nov/2026",
+      "_id": "6a54eec6466ac6eec9c2ae44",
+      "mainId": "PETR4_PUT_3974_NOV_2026"
+    },
+    {
+      "beehusName": "Put PETR4 @ 49,67 Nov/2026",
+      "_id": "6a54eec7466ac6eec9c2ae4f",
+      "mainId": "PETR4_PUT_4967_NOV_2026"
+    },
+    {
+      "beehusName": "Put VALE3 @ 91,07 Nov/2026",
+      "_id": "6a54eec9466ac6eec9c2ae5a",
+      "mainId": "VALE3_PUT_9107_NOV_2026"
+    },
+    {
+      "beehusName": "COE XP Ouro 14/Fev/2031",
+      "_id": "6a54eeca466ac6eec9c2ae65",
+      "mainId": "COEXPOURO14022031"
+    },
+    {
+      "beehusName": "Compromissada KAN671 07/Out/26",
+      "_id": "6a54eecc466ac6eec9c2ae70",
+      "mainId": "COMP_KAN671_07102026"
+    },
+    {
+      "beehusName": "Compromissada KC1091 20/Ago/26",
+      "_id": "6a54eece466ac6eec9c2ae7b",
+      "mainId": "COMP_KC1091_20082026"
+    },
+    {
+      "beehusName": "Compromissada KCD311 02/Mar/26",
+      "_id": "6a54eed0466ac6eec9c2ae8e",
+      "mainId": "COMP_KCD311_02032026"
+    },
+    {
+      "beehusName": "Compromissada KCD441 29/Set/26",
+      "_id": "6a54eed8466ac6eec9c2ae9c",
+      "mainId": "COMP_KCD441_29092026"
+    },
+    {
+      "beehusName": "Compromissada KCD481 21/Set/26",
+      "_id": "6a54eed9466ac6eec9c2aea7",
+      "mainId": "COMP_KCD481_21092026"
+    },
+    {
+      "beehusName": "Compromissada KCD891 25/Ago/26",
+      "_id": "6a54eedb466ac6eec9c2aeb2",
+      "mainId": "COMP_KCD891_25082026"
+    },
+    {
+      "beehusName": "Compromissada KNT131 04/Set/26",
+      "_id": "6a54eedd466ac6eec9c2aebd",
+      "mainId": "COMP_KNT131_04092026"
+    },
+    {
+      "beehusName": "Compromissada KNT301 06/Out/26",
+      "_id": "6a54eedf466ac6eec9c2aec8",
+      "mainId": "COMP_KNT301_06102026"
+    },
+    {
+      "beehusName": "Compromissada KNT601 02/Out/26",
+      "_id": "6a54eee0466ac6eec9c2aedd",
+      "mainId": "COMP_KNT601_02102026"
+    },
+    {
+      "beehusName": "Compromissada KNT631 19/Ago/31",
+      "_id": "6a54eee2466ac6eec9c2aee8",
+      "mainId": "COMP_KNT631_19082031"
+    },
+    {
+      "beehusName": "Compromissada KNT891 06/Abr/26",
+      "_id": "6a54eee4466ac6eec9c2aef3",
+      "mainId": "COMP_KNT891_06042026"
+    },
+    {
+      "beehusName": "Compromissada KNTA321 06/Out/26",
+      "_id": "6a54eee6466ac6eec9c2aefe",
+      "mainId": "COMP_KNTA321_06102026"
+    },
+    {
+      "beehusName": "Compromissada KNTA341 02/Out/26",
+      "_id": "6a54eee8466ac6eec9c2af09",
+      "mainId": "COMP_KNTA341_02102026"
+    },
+    {
+      "beehusName": "Compromissada KNTA721 29/Set/26",
+      "_id": "6a54eeea466ac6eec9c2af1a",
+      "mainId": "COMP_KNTA721_29092026"
+    },
+    {
+      "beehusName": "Compromissada OPA311 09/Out/2026",
+      "_id": "6a54eeec466ac6eec9c2af70",
+      "mainId": "COMP_OPA311_09102026"
+    },
+    {
+      "beehusName": "Compromissada OPA341 01/Out/2026",
+      "_id": "6a54eeed466ac6eec9c2af7f",
+      "mainId": "COMP_OPA341_01102026"
+    },
+    {
+      "beehusName": "Compromissada ORIG12 04/Mai/2026",
+      "_id": "6a54eeef466ac6eec9c2afd1",
+      "mainId": "COMP_ORIG12_04052026"
+    },
+    {
+      "beehusName": "Compromissada PGMN26 05/Nov/2028",
+      "_id": "6a54eef1466ac6eec9c2afdc",
+      "mainId": "COMP_PGMN26_05112028"
+    },
+    {
+      "beehusName": "Compromissada RB2439 02/Out/2026",
+      "_id": "6a54eef3466ac6eec9c2b50c",
+      "mainId": "COMP_RB2439_02102026"
+    },
+    {
+      "beehusName": "Compromissada RB2539 30/Set/2026",
+      "_id": "6a54eef6466ac6eec9c2b658",
+      "mainId": "COMP_RB2539_30092026"
+    },
+    {
+      "beehusName": "Compromissada VSCFD0 14/Out/2026",
+      "_id": "6a54eef8466ac6eec9c2b7a8",
+      "mainId": "COMP_VSCFD0_14102026"
+    },
+    {
+      "beehusName": "Compromissada VSCFR0 14/Mar/2031",
+      "_id": "6a54eefa466ac6eec9c2b7b3",
+      "mainId": "COMP_VSCFR0_14032031"
+    },
+    {
+      "beehusName": "US Treasury N/B 0,000% 08/Jun/2026",
+      "_id": "6a54eefb466ac6eec9c2b7be",
+      "mainId": "US_TREASURY_08062026"
+    },
+    {
+      "beehusName": "US Treasury N/B 4,000% 31/Jul/2032",
+      "_id": "6a54eefd466ac6eec9c2b7ca",
+      "mainId": "US91282CNR87"
+    },
+    {
+      "beehusName": "US Treasury N/B 31/Mar/2033",
+      "_id": "6a54eefe466ac6eec9c2b818",
+      "mainId": "US91282CQF13"
+    },
+    {
+      "beehusName": "AZUL12 - Azul",
+      "_id": "6a54ef03466ac6eec9c2b86f",
+      "mainId": "AZUL12"
+    },
+    {
+      "beehusName": "AZUL14 - Azul",
+      "_id": "6a54ef05466ac6eec9c2b88c",
+      "mainId": "AZUL14"
+    },
+    {
+      "beehusName": "AZUL16 - Azul",
+      "_id": "6a54ef06466ac6eec9c2b897",
+      "mainId": "AZUL16"
+    },
+    {
+      "beehusName": "Blackrock Strategic Fds",
+      "_id": "6a54ef09466ac6eec9c2f5da",
+      "mainId": "BLACKROCKSTRATEGICFDS"
+    },
+    {
+      "beehusName": "Bridge One Trade Retail Tech FIP",
+      "_id": "6a54ef0c466ac6eec9c2f7bb",
+      "mainId": "56.302.030/0001-07"
+    },
+    {
+      "beehusName": "ESUD11 - BB Votorantim Energia Sustentável II FIP",
+      "_id": "6a54ef0e466ac6eec9c2f86d",
+      "mainId": "ESUD11"
+    },
+    {
+      "beehusName": "ESUT11 - BB Votorantim Energia Sustentável III FIP",
+      "_id": "6a54ef10466ac6eec9c2f879",
+      "mainId": "ESUT11"
+    },
+    {
+      "beehusName": "ESUU11 - Votorantim Energia Sustentável I FIP",
+      "_id": "6a54ef12466ac6eec9c2f8ae",
+      "mainId": "ESUU11"
+    },
+    {
+      "beehusName": "EVTC31 - BDR Evertec Inc",
+      "_id": "6a54ef14466ac6eec9c330cd",
+      "mainId": "EVTC31"
+    },
+    {
+      "beehusName": "Rio Bravo Renda Corporativa FII - RCRB11",
+      "_id": "6a54ef17466ac6eec9c330e2",
+      "mainId": "RCRB11"
+    },
+    {
+      "beehusName": "SANB4 - Santander PN",
+      "_id": "6a54ef19466ac6eec9c330ee",
+      "mainId": "SANB4"
+    },
+    {
+      "beehusName": "Global X Defense Tech ETF - SHLD",
+      "_id": "6a54ef1b466ac6eec9c33123",
+      "mainId": "US:SHLD"
+    }
+  ],
+  "skipped": [
+    {
+      "beehusName": "Aqua Capital PE Agro FIP Multiestratégia 7 Classe B",
+      "similar": [
+        "Aqua Capital PE Agro FIP Multiestratégia 7 Classe B"
+      ]
+    },
+    {
+      "beehusName": "SPDR Gold MiniShares (GLDM)",
+      "similar": [
+        "SPDR Gold MiniShares - GLDM"
+      ]
+    },
+    {
+      "beehusName": "iShares MSCI Emerging Markets ETF - EEM",
+      "similar": [
+        "iShares MSCI Emerging Markets - EEM"
+      ]
+    }
+  ],
+  "failed": [
+    {
+      "beehusName": "Brasilprev Rt Classico IV",
+      "stage": "check-similar",
+      "error": "POST /beehus/securities/check-similar-securities failed: 400"
+    },
+    {
+      "beehusName": "First Trust Megatrend FIA",
+      "stage": "check-similar",
+      "error": "POST /beehus/securities/check-similar-securities failed: 400"
+    },
+    {
+      "beehusName": "Kinea Special Opportunities MM CP Subclasse A",
+      "stage": "check-similar",
+      "error": "POST /beehus/securities/check-similar-securities failed: 400"
+    },
+    {
+      "beehusName": "TFO Prev MMI Icatu FIM",
+      "stage": "check-similar",
+      "error": "POST /beehus/securities/check-similar-securities failed: 400"
+    },
+    {
+      "beehusName": "Speciale Kinea Debêntures Incentivadas",
+      "stage": "check-similar",
+      "error": "POST /beehus/securities/check-similar-securities failed: 400"
+    },
+    {
+      "beehusName": "Eagle Capital Select Equity ETF - EAGL",
+      "stage": "create",
+      "error": "POST /beehus/securities failed: 400"
+    },
+    {
+      "beehusName": "Vaneck Defense UCITS",
+      "stage": "create",
+      "error": "POST /beehus/securities failed: 400"
+    },
+    {
+      "beehusName": "Invesco KBW Bank ETF - KBWB",
+      "stage": "create",
+      "error": "POST /beehus/securities failed: 400"
+    }
+  ]
+}

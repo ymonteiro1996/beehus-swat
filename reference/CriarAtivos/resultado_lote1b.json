@@ -1,0 +1,64 @@
+{
+  "created": [
+    {
+      "beehusName": "DEB Kanastra Securitizadora 26/Fev/2026",
+      "_id": "6a54eca7466ac6eec9bba136",
+      "mainId": "DEBKANASTRACDI26022026"
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 27/Fev/2026",
+      "_id": "6a54ecac466ac6eec9bba15e",
+      "mainId": "DEBKANASTRACDI27022026"
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 20/Set/2027",
+      "_id": "6a54ecb1466ac6eec9bba18f",
+      "mainId": "DEBKANASTRACDI20092027"
+    }
+  ],
+  "skipped": [
+    {
+      "beehusName": "CRI Vert  Securitizadora 20/Jul/2046",
+      "similar": [
+        "CRI Vert  Securitizadora 20/Jul/2046"
+      ]
+    },
+    {
+      "beehusName": "CRI Vert  Securitizadora 30/Set/2026",
+      "similar": [
+        "CRI Vert  Securitizadora 30/Set/2026"
+      ]
+    },
+    {
+      "beehusName": "CRI Votorantim 13/Jun/2028",
+      "similar": [
+        "CRI Votorantim 13/Jun/2028"
+      ]
+    },
+    {
+      "beehusName": "DEB Cosan 05/Mai/2032",
+      "similar": [
+        "DEB Cosan 05/Mai/2032"
+      ]
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 20/Fev/2026",
+      "similar": [
+        "DEB Kanastra Securitizadora 20/Fev/2026"
+      ]
+    },
+    {
+      "beehusName": "DEB Opea Securitizadora 25/Mar/2026",
+      "similar": [
+        "DEB Opea Securitizadora 25/Mar/2026"
+      ]
+    },
+    {
+      "beehusName": "DEB Opea Securitizadora 27/Fev/2026",
+      "similar": [
+        "DEB Opea Securitizadora 27/Fev/2026"
+      ]
+    }
+  ],
+  "failed": []
+}

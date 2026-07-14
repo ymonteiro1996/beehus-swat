@@ -1,0 +1,61 @@
+{
+  "created": [
+    {
+      "beehusName": "CRI Vert  Securitizadora 30/Set/2026",
+      "_id": "6a54eba4466ac6eec9baf9b2",
+      "mainId": "CRIVERTSECCDI30092026"
+    },
+    {
+      "beehusName": "CRI Votorantim 13/Jun/2028",
+      "_id": "6a54eba9466ac6eec9baf9be",
+      "mainId": "CRIVOTORANTIMCDI13062028"
+    },
+    {
+      "beehusName": "DEB Cosan 05/Mai/2032",
+      "_id": "6a54ebad466ac6eec9baf9ca",
+      "mainId": "CSAN24"
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 20/Fev/2026",
+      "_id": "6a54ebb2466ac6eec9baf9d6",
+      "mainId": "DEBKANASTRACDI20022026"
+    },
+    {
+      "beehusName": "DEB Opea Securitizadora 25/Mar/2026",
+      "_id": "6a54ebc2466ac6eec9baf9ee",
+      "mainId": "DEBOPEASECCDI25032026"
+    },
+    {
+      "beehusName": "DEB Opea Securitizadora 27/Fev/2026",
+      "_id": "6a54ebc8466ac6eec9bafabe",
+      "mainId": "DEBOPEASECCDI27022026"
+    }
+  ],
+  "skipped": [
+    {
+      "beehusName": "CRI Vert  Securitizadora 20/Jul/2046",
+      "similar": [
+        "CRI Vert  Securitizadora 20/Jul/2046"
+      ]
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 26/Fev/2026",
+      "similar": [
+        "DEB Kanastra Securitizadora 20/Fev/2026"
+      ]
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 27/Fev/2026",
+      "similar": [
+        "DEB Kanastra Securitizadora 20/Fev/2026"
+      ]
+    },
+    {
+      "beehusName": "DEB Kanastra Securitizadora 20/Set/2027",
+      "similar": [
+        "DEB Kanastra Securitizadora 20/Fev/2026"
+      ]
+    }
+  ],
+  "failed": []
+}

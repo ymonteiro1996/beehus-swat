@@ -791,10 +791,81 @@ _EXTRACTORS = {
 }
 
 
+def _extract_generic_codes(uid, features):
+    """Extract up to 3 generic alphanumeric codes from `uid` that were not
+    captured by any other feature, for comparison against mainId.
+
+    Two-pass strategy per coarse token (spaces and strong separators split the
+    uid; hyphens are kept inside the token):
+
+      Pass 1 — the full coarse token qualifies if: purely [A-Za-z0-9-],
+               ≥ 6 total chars, AND either (a) ≥ 1 letter AND ≥ 1 digit
+               (mixed alphanumeric), or (b) purely numeric ≥ 6 digits (no
+               hyphens). Hyphens kept so "CRI-23C2706233" matches a mainId.
+
+      Pass 2 — each qualifying coarse token is split on hyphens; sub-tokens
+               qualify if: purely [A-Za-z0-9], ≥ 6 chars, AND either (a)
+               mixed letter+digit, or (b) purely numeric. Emitted immediately
+               after their parent so both forms are available as candidates.
+
+    Any candidate already present as a feature value (identifier-like codes
+    already captured by the per-type extractor) is excluded.
+    """
+    # Exclusion set: existing feature values that look like identifiers.
+    # Add both the value as-is and a hyphen-stripped variant.
+    existing = set()
+    for v in features.values():
+        if v and isinstance(v, str) and len(v) >= 6:
+            v_up = v.upper()
+            if re.fullmatch(r"[A-Za-z0-9\-]+", v_up):
+                existing.add(v_up)
+                existing.add(v_up.replace("-", ""))
+
+    # Coarse split: spaces and strong separators; hyphens stay inside tokens.
+    coarse_tokens = re.split(r"[\s/%.:()\[\];,@#&=+*!?\"'<>|\\]+", uid)
+
+    seen = set()
+    candidates = []
+
+    def _add(tok):
+        key = tok.upper()
+        if key not in seen and key not in existing:
+            seen.add(key)
+            candidates.append(tok)
+
+    for coarse in coarse_tokens:
+        tok = coarse.strip("-")
+        if not tok:
+            continue
+        # Pass 1: alphanumeric+hyphen, ≥6 chars, mixed letter+digit OR purely numeric
+        _p1_mixed   = (re.search(r"[A-Za-z]", tok) and re.search(r"\d", tok))
+        _p1_numeric = (re.fullmatch(r"\d+", tok) and len(tok) >= 6)
+        if (len(tok) >= 6
+                and re.fullmatch(r"[A-Za-z0-9\-]+", tok)
+                and (_p1_mixed or _p1_numeric)):
+            _add(tok)
+            # Pass 2: sub-tokens from splitting on hyphens (mixed OR purely numeric)
+            for sub in tok.split("-"):
+                if (sub and len(sub) >= 6
+                        and re.fullmatch(r"[A-Za-z0-9]+", sub)
+                        and (
+                            (re.search(r"[A-Za-z]", sub) and re.search(r"\d", sub))
+                            or re.fullmatch(r"\d+", sub)
+                        )):
+                    _add(sub)
+
+    result = {}
+    for i, code in enumerate(candidates[:3], 1):
+        result[f"generic_code_{i}"] = code
+    return result
+
+
 def extract_features(uid, security_type):
     """Extract structured features from an unprocessedId given its securityType."""
     extractor = _EXTRACTORS.get(security_type, _extract_generic)
-    return extractor(uid)
+    features = extractor(uid)
+    features.update(_extract_generic_codes(uid, features))
+    return features
 
 
 # ── Query builders per securityType ────────────────────────────────────────────
@@ -1503,6 +1574,10 @@ def _exact_identifier_match(sec, features):
             comp_tok = features.get(f"complement_{_ci}")
             if comp_tok and str(comp_tok).lower() == main_lower:
                 return f"complement_{_ci}"
+        for _ci in range(1, 4):
+            gc_tok = features.get(f"generic_code_{_ci}")
+            if gc_tok and str(gc_tok).lower() == main_lower:
+                return f"generic_code_{_ci}"
     return None
 
 
@@ -1953,6 +2028,9 @@ _EXACT_ID_LABELS = {
     "mainId/code=":        "código interno = mainId (exato)",
     "mainId/external=":    "código externo = mainId (exato)",
     "mainId/fund_code=":   "código do fundo = mainId (exato)",
+    "generic_code_1":      "código genérico 1 = mainId",
+    "generic_code_2":      "código genérico 2 = mainId",
+    "generic_code_3":      "código genérico 3 = mainId",
 }
 
 
@@ -2262,6 +2340,9 @@ class SecurityCache:
             ("mainId",    features.get("complement_1")),
             ("mainId",    features.get("complement_2")),
             ("mainId",    features.get("complement_3")),
+            ("mainId",    features.get("generic_code_1")),
+            ("mainId",    features.get("generic_code_2")),
+            ("mainId",    features.get("generic_code_3")),
         ]
 
         for field, value in _exact_search:
@@ -2271,17 +2352,21 @@ class SecurityCache:
                 if sec.get("securityType") == security_type:
                     candidates[sec["_id"]] = sec
 
-        # Phase 1b-x: cross-type mainId lookup for complement tokens only.
-        # Complement tokens are explicitly provided by the operator, so they are
-        # treated as stronger evidence than the ML type classification. If a token
-        # matches a mainId in ANY type, include that candidate (no securityType
-        # filter). _score_candidate will rank it via _EXACT_SCORE if it also
-        # matches the complement_N feature there.
+        # Phase 1b-x: cross-type mainId lookup for complement and generic-code tokens.
+        # These are strong identifier signals — match against mainId in ANY securityType
+        # without the type filter. _score_candidate ranks them via _EXACT_SCORE when
+        # the token equals the candidate's mainId exactly.
         for _ci in range(1, 4):
             _comp_tok = features.get(f"complement_{_ci}")
             if not _comp_tok:
                 continue
             for sec in self.lookup("mainId", _comp_tok):
+                candidates[sec["_id"]] = sec
+        for _ci in range(1, 4):
+            _gc_tok = features.get(f"generic_code_{_ci}")
+            if not _gc_tok:
+                continue
+            for sec in self.lookup("mainId", _gc_tok):
                 candidates[sec["_id"]] = sec
 
         # Phase 1b: prefix lookups for structured patterns (options, futures)

@@ -1,0 +1,813 @@
+{
+  "created": [
+    {
+      "beehusName": "First Trust Megatrend FIA",
+      "_id": "6a54f1fd466ac6eec9c6dbf9",
+      "mainId": "60.489.595/0001-12"
+    },
+    {
+      "beehusName": "Kinea Special Opportunities MM CP Subclasse A",
+      "_id": "6a54f205466ac6eec9c6dd04",
+      "mainId": "63.950.243/0001-00_SUB_A"
+    },
+    {
+      "beehusName": "TFO Prev MMI Icatu FIM",
+      "_id": "6a54f209466ac6eec9c6dd29",
+      "mainId": "34.791.324/0001-07"
+    },
+    {
+      "beehusName": "Speciale Kinea Debêntures Incentivadas",
+      "_id": "6a54f20c466ac6eec9c6dd3a",
+      "mainId": "58.199.575/0001-65"
+    }
+  ],
+  "skipped": [
+    {
+      "beehusName": "LCA Banco BV 16/Mar/2028",
+      "similar": [
+        "LCA Banco BV 16/Mar/2028"
+      ]
+    },
+    {
+      "beehusName": "LCA Siscoob 31/Mar/2033",
+      "similar": [
+        "LCA Siscoob 31/Mar/2033"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco John Deere 23/Jun/2027",
+      "similar": [
+        "LCA Banco John Deere 23/Jun/2027"
+      ]
+    },
+    {
+      "beehusName": "LCA BNDES 17/Mai/2027",
+      "similar": [
+        "LCA BNDES 17/Mai/2027"
+      ]
+    },
+    {
+      "beehusName": "LCA BNDES 30/Jun/2028",
+      "similar": [
+        "LCA BNDES 30/Jun/2028"
+      ]
+    },
+    {
+      "beehusName": "LCA BNDES 15/Mai/2026",
+      "similar": [
+        "LCA BNDES 15/Mai/2026"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 10/Fev/2027",
+      "similar": [
+        "LCA Banco Safra 10/Fev/2027"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 10/Dez/2026",
+      "similar": [
+        "LCA Banco Safra 10/Dez/2026"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 24/Mai/2027",
+      "similar": [
+        "LCA Banco Safra 24/Mai/2027"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 26/Mai/2027",
+      "similar": [
+        "LCA Banco Safra 26/Mai/2027"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 28/Abr/2026",
+      "similar": [
+        "LCA Banco Safra 28/Abr/2026"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 31/Jul/2026",
+      "similar": [
+        "LCA Banco Safra 31/Jul/2026"
+      ]
+    },
+    {
+      "beehusName": "LCA Banco Safra 01/Mar/2028",
+      "similar": [
+        "LCA Banco Safra 01/Mar/2028"
+      ]
+    },
+    {
+      "beehusName": "LCA Sicoob 11/Nov/2032",
+      "similar": [
+        "LCA Sicoob 11/Nov/2032"
+      ]
+    },
+    {
+      "beehusName": "LCA Sicredi Pré 31/Out/2027",
+      "similar": [
+        "LCA Sicredi Pré 31/Out/2027"
+      ]
+    },
+    {
+      "beehusName": "LCA Sicredi 08/Mar/2030",
+      "similar": [
+        "LCA Sicredi 08/Mar/2030"
+      ]
+    },
+    {
+      "beehusName": "LCD BNDES 15/Mar/2029",
+      "similar": [
+        "LCD BNDES 15/Mar/2029"
+      ]
+    },
+    {
+      "beehusName": "LCI CEF 09/Fev/2028",
+      "similar": [
+        "LCI CEF 09/Fev/2028"
+      ]
+    },
+    {
+      "beehusName": "LCI CEF 03/Jan/2028",
+      "similar": [
+        "LCI CEF 03/Jan/2028"
+      ]
+    },
+    {
+      "beehusName": "LCI CEF 13/Abr/2026",
+      "similar": [
+        "LCI CEF 13/Abr/2026"
+      ]
+    },
+    {
+      "beehusName": "LCI Itaú 21/Mar/2028",
+      "similar": [
+        "LCI Itaú 21/Mar/2028"
+      ]
+    },
+    {
+      "beehusName": "LCI Itaú 18/Fev/2028",
+      "similar": [
+        "LCI Itaú 18/Fev/2028"
+      ]
+    },
+    {
+      "beehusName": "LIG Itaú 20/Jan/2027",
+      "similar": [
+        "LIG Itaú 20/Jan/2027"
+      ]
+    },
+    {
+      "beehusName": "Lockheed Martin 4,700% 15/Dec/2031",
+      "similar": [
+        "Lockheed Martin 4,700% 15/Dec/2031"
+      ]
+    },
+    {
+      "beehusName": "Morgan Stanley SR Nts 23-01-32",
+      "similar": [
+        "Morgan Stanley SR Nts 23-01-32"
+      ]
+    },
+    {
+      "beehusName": "UBS Group 5,959% 12/Jan/2034",
+      "similar": [
+        "UBS Group 5,959% 12/Jan/2034"
+      ]
+    },
+    {
+      "beehusName": "United Parcel Services Imc 5,250% 14/May/2035",
+      "similar": [
+        "United Parcel Services Imc 5,250% 14/May/2035"
+      ]
+    },
+    {
+      "beehusName": "Unitedhealth Group 4,200%",
+      "similar": [
+        "Unitedhealth Group 4,200%"
+      ]
+    },
+    {
+      "beehusName": "DEB Vert  21/Fev/2028",
+      "similar": [
+        "DEB Vert  21/Fev/2028"
+      ]
+    },
+    {
+      "beehusName": "Whirlpool Corp SR NT 6,5% 15/Jun/2033",
+      "similar": [
+        "Whirlpool Corp SR NT 6,5% 15/Jun/2033"
+      ]
+    },
+    {
+      "beehusName": "Aqua Capital PE Agro FIP Multiestratégia 7 Classe B",
+      "similar": [
+        "Aqua Capital PE Agro FIP Multiestratégia 7 Classe B"
+      ]
+    },
+    {
+      "beehusName": "Crescera Growth Capital V PVT FIP",
+      "similar": [
+        "Crescera Growth Capital V PVT FIP"
+      ]
+    },
+    {
+      "beehusName": "Icatu Vanguarda Absoluto Plus IQ FIRF CP Prev",
+      "similar": [
+        "Icatu Vanguarda Absoluto Plus IQ FIRF CP Prev"
+      ]
+    },
+    {
+      "beehusName": "Itaú Deb Incentivadas IMA B Infra",
+      "similar": [
+        "Itaú Deb Incentivadas IMA B Infra"
+      ]
+    },
+    {
+      "beehusName": "JiveMauá Bossanova Crédito Securitizado II FIDC Subclasse Senior",
+      "similar": [
+        "JiveMauá Bossanova Crédito Securitizado II FIDC Subclasse Senior"
+      ]
+    },
+    {
+      "beehusName": "JiveMauá Bossanova Crédito Securitizado II FIDC Subclasse Subordinada",
+      "similar": [
+        "JiveMauá Bossanova Crédito Securitizado II FIDC Subclasse Subordinada"
+      ]
+    },
+    {
+      "beehusName": "Palmeiras FIF RF Infraestrutura",
+      "similar": [
+        "Palmeiras FIF RF Infraestrutura"
+      ]
+    },
+    {
+      "beehusName": "Permuta Residencial II FII",
+      "similar": [
+        "Permuta Residencial II FII"
+      ]
+    },
+    {
+      "beehusName": "Seed 3 FIP Capital Semente",
+      "similar": [
+        "Seed 3 FIP Capital Semente"
+      ]
+    },
+    {
+      "beehusName": "TFO Ações FIC FIA",
+      "similar": [
+        "TFO Ações FIC FIA"
+      ]
+    },
+    {
+      "beehusName": "TFO DI DEB Incentivado Infra RF",
+      "similar": [
+        "TFO DI DEB Incentivado Infra RF"
+      ]
+    },
+    {
+      "beehusName": "TFO IPCA DEB Incentivado Infra RF",
+      "similar": [
+        "TFO IPCA DEB Incentivado Infra RF"
+      ]
+    },
+    {
+      "beehusName": "TFO MM1 CIC FIM",
+      "similar": [
+        "TFO MM1 CIC FIM"
+      ]
+    },
+    {
+      "beehusName": "VGBL TFO Qualificado",
+      "similar": [
+        "VGBL TFO Qualificado"
+      ]
+    },
+    {
+      "beehusName": "Vinci Mav IV FIAGRO FIDC RL",
+      "similar": [
+        "Vinci Mav IV FIAGRO FIDC RL"
+      ]
+    },
+    {
+      "beehusName": "NTN-B1 Dez/2084",
+      "similar": [
+        "NTN-B1 Dez/2084"
+      ]
+    },
+    {
+      "beehusName": "Amundi Funds US Pioneer Fund R",
+      "similar": [
+        "Amundi Funds US Pioneer Fund R"
+      ]
+    },
+    {
+      "beehusName": "AXA World Dynamic High Yield Bonds",
+      "similar": [
+        "AXA World Dynamic High Yield Bonds"
+      ]
+    },
+    {
+      "beehusName": "BSF Emerging Markets Short Duration Bond Fund A2 USD",
+      "similar": [
+        "BSF Emerging Markets Short Duration Bond Fund A2 USD"
+      ]
+    },
+    {
+      "beehusName": "Capital Group Investment Company ZLh",
+      "similar": [
+        "Capital Group Investment Company ZLh"
+      ]
+    },
+    {
+      "beehusName": "DNCA Invest Alpha Bonds Class A",
+      "similar": [
+        "DNCA Invest Alpha Bonds Class A"
+      ]
+    },
+    {
+      "beehusName": "Evli Short Corporate Bond IB",
+      "similar": [
+        "Evli Short Corporate Bond IB"
+      ]
+    },
+    {
+      "beehusName": "Groupama Entreprises IC Acc",
+      "similar": [
+        "Groupama Entreprises IC Acc"
+      ]
+    },
+    {
+      "beehusName": "Invesco Funds Sicav e Z",
+      "similar": [
+        "Invesco Funds Sicav e Z"
+      ]
+    },
+    {
+      "beehusName": "iShares Physical Palladium ETC",
+      "similar": [
+        "iShares Physical Palladium ETC"
+      ]
+    },
+    {
+      "beehusName": "JPM Inv. Funds - Global High Yield Bond A (acc) USD",
+      "similar": [
+        "JPM Inv. Funds - Global High Yield Bond A (acc) USD"
+      ]
+    },
+    {
+      "beehusName": "JP Morgan Lux Fund",
+      "similar": [
+        "JP Morgan Lux Fund"
+      ]
+    },
+    {
+      "beehusName": "JPM Euro Government Short Duration Bond I2 Acc",
+      "similar": [
+        "JPM Euro Government Short Duration Bond I2 Acc"
+      ]
+    },
+    {
+      "beehusName": "JPM US Value I",
+      "similar": [
+        "JPM US Value I"
+      ]
+    },
+    {
+      "beehusName": "Morgan Stanley Emerging Markets Corporate Debt",
+      "similar": [
+        "Morgan Stanley Emerging Markets Corporate Debt"
+      ]
+    },
+    {
+      "beehusName": "Morgan Stanley Invst Global Fixed Income",
+      "similar": [
+        "Morgan Stanley Invst Global Fixed Income"
+      ]
+    },
+    {
+      "beehusName": "MSIF Global Fixed Income Opp A Acc USD",
+      "similar": [
+        "MSIF Global Fixed Income Opp A Acc USD"
+      ]
+    },
+    {
+      "beehusName": "Muzinich EM Short Duration Cl H",
+      "similar": [
+        "Muzinich EM Short Duration Cl H"
+      ]
+    },
+    {
+      "beehusName": "Neuberger Short Duration EM Debt A Acc USD",
+      "similar": [
+        "Neuberger Short Duration EM Debt A Acc USD"
+      ]
+    },
+    {
+      "beehusName": "Robeco QI Emerging Conservative Equities I",
+      "similar": [
+        "Robeco QI Emerging Conservative Equities I"
+      ]
+    },
+    {
+      "beehusName": "Robeco QI EUR Conservative Equities I",
+      "similar": [
+        "Robeco QI EUR Conservative Equities I"
+      ]
+    },
+    {
+      "beehusName": "Schroder ISF Global Energy C",
+      "similar": [
+        "Schroder ISF Global Energy C"
+      ]
+    },
+    {
+      "beehusName": "UBS Bank Usa Core Savings",
+      "similar": [
+        "UBS Bank Usa Core Savings"
+      ]
+    },
+    {
+      "beehusName": "Wellington Credit Total Return Fund Class D USD Acc",
+      "similar": [
+        "Wellington Credit Total Return Fund Class D USD Acc"
+      ]
+    },
+    {
+      "beehusName": "Wellington Enduring Infrastructure Assets Fund",
+      "similar": [
+        "Wellington Enduring Infrastructure Assets Fund"
+      ]
+    },
+    {
+      "beehusName": "XP Global Strategies SPC Fund Class E",
+      "similar": [
+        "XP Global Strategies SPC Fund Class E"
+      ]
+    },
+    {
+      "beehusName": "XP Partners Group PE II Feeder Sp Class A",
+      "similar": [
+        "XP Partners Group PE II Feeder Sp Class A"
+      ]
+    },
+    {
+      "beehusName": "Call AXIA6 @ 51,50 Jun/2026",
+      "similar": [
+        "Call AXIA6 @ 51,50 Jun/2026"
+      ]
+    },
+    {
+      "beehusName": "Call BBSE3 @ 41,86 Nov/2026",
+      "similar": [
+        "Call BBSE3 @ 41,86 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Call CURY3 @ 38,00 Mai/2026",
+      "similar": [
+        "Call CURY3 @ 38,00 Mai/2026"
+      ]
+    },
+    {
+      "beehusName": "Call PETR4 @ 24,15 Dez/2026",
+      "similar": [
+        "Call PETR4 @ 24,15 Dez/2026"
+      ]
+    },
+    {
+      "beehusName": "Call PETR4 @ 24,75 Dez/2026",
+      "similar": [
+        "Call PETR4 @ 24,75 Dez/2026"
+      ]
+    },
+    {
+      "beehusName": "Call PETR4 @ 27,82 Nov/2026",
+      "similar": [
+        "Call PETR4 @ 27,82 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Call PETR4 @ 5,69 Nov/2026",
+      "similar": [
+        "Call PETR4 @ 5,69 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Call PETR4 @ 57,62 Nov/2026",
+      "similar": [
+        "Call PETR4 @ 57,62 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Call VALE3 @ 102,91 Nov/2026",
+      "similar": [
+        "Call VALE3 @ 102,91 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Call VALE3 @ 38,48 Set/2026",
+      "similar": [
+        "Call VALE3 @ 38,48 Set/2026"
+      ]
+    },
+    {
+      "beehusName": "Put BBSE3 @ 38,14 Nov/2026",
+      "similar": [
+        "Put BBSE3 @ 38,14 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Put CURY3 @ 36,55 Mai/2026",
+      "similar": [
+        "Put CURY3 @ 36,55 Mai/2026"
+      ]
+    },
+    {
+      "beehusName": "Put PETR4 @ 39,74 Nov/2026",
+      "similar": [
+        "Put PETR4 @ 39,74 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Put PETR4 @ 49,67 Nov/2026",
+      "similar": [
+        "Put PETR4 @ 49,67 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "Put VALE3 @ 91,07 Nov/2026",
+      "similar": [
+        "Put VALE3 @ 91,07 Nov/2026"
+      ]
+    },
+    {
+      "beehusName": "COE XP Ouro 14/Fev/2031",
+      "similar": [
+        "COE XP Ouro 14/Fev/2031"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KAN671 07/Out/26",
+      "similar": [
+        "Compromissada KAN671 07/Out/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KC1091 20/Ago/26",
+      "similar": [
+        "Compromissada KC1091 20/Ago/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KCD311 02/Mar/26",
+      "similar": [
+        "Compromissada KCD311 02/Mar/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KCD441 29/Set/26",
+      "similar": [
+        "Compromissada KCD441 29/Set/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KCD481 21/Set/26",
+      "similar": [
+        "Compromissada KCD481 21/Set/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KCD891 25/Ago/26",
+      "similar": [
+        "Compromissada KCD891 25/Ago/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNT131 04/Set/26",
+      "similar": [
+        "Compromissada KNT131 04/Set/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNT301 06/Out/26",
+      "similar": [
+        "Compromissada KNT301 06/Out/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNT601 02/Out/26",
+      "similar": [
+        "Compromissada KNT601 02/Out/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNT631 19/Ago/31",
+      "similar": [
+        "Compromissada KNT631 19/Ago/31"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNT891 06/Abr/26",
+      "similar": [
+        "Compromissada KNT891 06/Abr/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNTA321 06/Out/26",
+      "similar": [
+        "Compromissada KNTA321 06/Out/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNTA341 02/Out/26",
+      "similar": [
+        "Compromissada KNTA341 02/Out/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada KNTA721 29/Set/26",
+      "similar": [
+        "Compromissada KNTA721 29/Set/26"
+      ]
+    },
+    {
+      "beehusName": "Compromissada OPA311 09/Out/2026",
+      "similar": [
+        "Compromissada OPA311 09/Out/2026"
+      ]
+    },
+    {
+      "beehusName": "Compromissada OPA341 01/Out/2026",
+      "similar": [
+        "Compromissada OPA341 01/Out/2026"
+      ]
+    },
+    {
+      "beehusName": "Compromissada ORIG12 04/Mai/2026",
+      "similar": [
+        "Compromissada ORIG12 04/Mai/2026"
+      ]
+    },
+    {
+      "beehusName": "Compromissada PGMN26 05/Nov/2028",
+      "similar": [
+        "Compromissada PGMN26 05/Nov/2028"
+      ]
+    },
+    {
+      "beehusName": "Compromissada RB2439 02/Out/2026",
+      "similar": [
+        "Compromissada RB2439 02/Out/2026"
+      ]
+    },
+    {
+      "beehusName": "Compromissada RB2539 30/Set/2026",
+      "similar": [
+        "Compromissada RB2539 30/Set/2026"
+      ]
+    },
+    {
+      "beehusName": "Compromissada VSCFD0 14/Out/2026",
+      "similar": [
+        "Compromissada VSCFD0 14/Out/2026"
+      ]
+    },
+    {
+      "beehusName": "Compromissada VSCFR0 14/Mar/2031",
+      "similar": [
+        "Compromissada VSCFR0 14/Mar/2031"
+      ]
+    },
+    {
+      "beehusName": "US Treasury N/B 0,000% 08/Jun/2026",
+      "similar": [
+        "US Treasury N/B 0,000% 08/Jun/2026"
+      ]
+    },
+    {
+      "beehusName": "US Treasury N/B 4,000% 31/Jul/2032",
+      "similar": [
+        "US Treasury N/B 4,000% 31/Jul/2032"
+      ]
+    },
+    {
+      "beehusName": "US Treasury N/B 31/Mar/2033",
+      "similar": [
+        "US Treasury N/B 31/Mar/2033"
+      ]
+    },
+    {
+      "beehusName": "Eagle Capital Select Equity ETF - EAGL",
+      "similar": [
+        "(mainId já existe na base)"
+      ]
+    },
+    {
+      "beehusName": "SPDR Gold MiniShares (GLDM)",
+      "similar": [
+        "SPDR Gold MiniShares - GLDM"
+      ]
+    },
+    {
+      "beehusName": "Vaneck Defense UCITS",
+      "similar": [
+        "(mainId já existe na base)"
+      ]
+    },
+    {
+      "beehusName": "AZUL12 - Azul",
+      "similar": [
+        "AZUL12 - Azul"
+      ]
+    },
+    {
+      "beehusName": "AZUL14 - Azul",
+      "similar": [
+        "AZUL14 - Azul"
+      ]
+    },
+    {
+      "beehusName": "AZUL16 - Azul",
+      "similar": [
+        "AZUL16 - Azul"
+      ]
+    },
+    {
+      "beehusName": "Blackrock Strategic Fds",
+      "similar": [
+        "Blackrock Strategic Fds"
+      ]
+    },
+    {
+      "beehusName": "Bridge One Trade Retail Tech FIP",
+      "similar": [
+        "Bridge One Trade Retail Tech FIP"
+      ]
+    },
+    {
+      "beehusName": "iShares MSCI Emerging Markets ETF - EEM",
+      "similar": [
+        "iShares MSCI Emerging Markets - EEM"
+      ]
+    },
+    {
+      "beehusName": "ESUD11 - BB Votorantim Energia Sustentável II FIP",
+      "similar": [
+        "ESUD11 - BB Votorantim Energia Sustentável II FIP"
+      ]
+    },
+    {
+      "beehusName": "ESUT11 - BB Votorantim Energia Sustentável III FIP",
+      "similar": [
+        "ESUT11 - BB Votorantim Energia Sustentável III FIP"
+      ]
+    },
+    {
+      "beehusName": "ESUU11 - Votorantim Energia Sustentável I FIP",
+      "similar": [
+        "ESUU11 - Votorantim Energia Sustentável I FIP"
+      ]
+    },
+    {
+      "beehusName": "EVTC31 - BDR Evertec Inc",
+      "similar": [
+        "EVTC31 - BDR Evertec Inc"
+      ]
+    },
+    {
+      "beehusName": "Invesco KBW Bank ETF - KBWB",
+      "similar": [
+        "(mainId já existe na base)"
+      ]
+    },
+    {
+      "beehusName": "Rio Bravo Renda Corporativa FII - RCRB11",
+      "similar": [
+        "Rio Bravo Renda Corporativa FII - RCRB11"
+      ]
+    },
+    {
+      "beehusName": "SANB4 - Santander PN",
+      "similar": [
+        "SANB4 - Santander PN"
+      ]
+    },
+    {
+      "beehusName": "Global X Defense Tech ETF - SHLD",
+      "similar": [
+        "Global X Defense Tech ETF - SHLD"
+      ]
+    }
+  ],
+  "failed": [
+    {
+      "beehusName": "Brasilprev Rt Classico IV",
+      "stage": "create",
+      "error": "POST /beehus/securities failed: 400"
+    }
+  ]
+}
