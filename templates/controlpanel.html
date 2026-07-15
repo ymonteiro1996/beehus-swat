@@ -761,7 +761,7 @@ try {
                contam com ISSUE_TYPES = 6 (2+4) e EXTRA_COLS = 5 (3+2) — se essas listas
                mudarem de tamanho em pages/controlpanel.py, ajustar aqui também. -->
           <tr class="text-[9px]">
-            <th rowspan="3" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 w-[140px] tracking-wide align-bottom normal-case text-gray-500">Empresa</th>
+            <th rowspan="2" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 w-[140px] tracking-wide align-bottom normal-case text-gray-500">Empresa</th>
             <th colspan="2" class="px-1 py-1 text-center font-semibold tracking-wide bg-slate-100 text-slate-500 border-r-2 border-white" title="Carteira precisa existir e ter posição bruta carregada antes de qualquer outra etapa.">Pré-requisito</th>
             <th colspan="4" class="px-1 py-1 text-center font-semibold tracking-wide bg-blue-50 text-blue-500 border-r-2 border-white" title="Ativos precisam estar mapeados, classificados e com preço antes do processamento da posição.">Processamento das Carteiras</th>
             <th colspan="1" class="px-1 py-1 text-center font-semibold tracking-wide bg-purple-50 text-purple-500 border-r-2 border-white" title="Transações não identificadas — checagem em paralelo, não bloqueia o resto da esteira.">Reconciliação</th>
@@ -1162,7 +1162,6 @@ try {
     <div id="reg-tooltip" class="fixed z-[80] px-3 py-2 bg-gray-900 text-white text-[11px] rounded shadow-lg max-w-lg break-words whitespace-pre-wrap font-mono pointer-events-none" style="display:none"></div>
   </div>
 </div>
-
 <!-- Security search sub-modal -->
 <div id="security-search-modal" class="fixed inset-0 bg-black/30 flex items-center justify-center" style="display:none;z-index:70">
   <div class="bg-white rounded-xl shadow-xl w-full max-w-6xl max-h-[85vh] flex flex-col">
@@ -4906,7 +4905,8 @@ try {
         <input type="checkbox" ${cbChecked} onchange="_updateSelectionCount()" class="rounded" />
       </td>
       ${_crossCompanyMode ? _walletCompanyCells(r) : ``}
-      <td class="px-2 py-1.5 text-gray-400 font-mono text-[10px] truncate" title="${_escHtml(r.unprocessedSecurityId)}">${_escHtml(r.unprocessedSecurityId)}</td>
+      <td class="px-2 py-1.5 text-gray-400 font-mono text-[10px] truncate"
+          title="${_escHtml(_uidTooltip(r))}">${_escHtml(r.unprocessedSecurityId)}</td>
       <td class="px-2 py-1.5 clf-type">${r.type ? _typeSelect(r.unprocessedSecurityId, r.type) : '<span class="text-gray-400">—</span>'}</td>
       <td class="px-1 py-1.5 clf-conf text-center">${tcBadge}</td>
       <td class="px-2 py-1.5 truncate cursor-pointer group hover:bg-blue-50"
@@ -5494,20 +5494,25 @@ try {
     document.getElementById("modal").style.display        = "flex";
 
     fetch(`/api/controlpanel/detail-all-full?date=${_currentDate}&type=${type}`)
-      .then(r => r.json()).then(({ issues }) => {
-        _modalIssues = issues;
-        if (!issues.length) {
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(({ issues }) => {
+        _modalIssues = issues || [];
+        if (!_modalIssues.length) {
           document.getElementById("modal-msg").textContent = "Nenhum issue para esta seleção — todas as empresas em dia.";
           return;
         }
-        document.getElementById("modal-description").textContent = issues[0]?.description || "";
+        document.getElementById("modal-description").textContent = _modalIssues[0]?.description || "";
         document.getElementById("modal-thead").parentElement.style.tableLayout = "";
         _mappingLoader(false);
-        if      (type === "security_unmapped")              _renderMapeamento(issues);
-        else if (type === "security_missing_price")          _renderRegistroPreco(issues);
-        else if (type === "security_missing_classification") _renderClassificacao(issues);
-        else                                                 _renderDefault(issues);
+        if      (type === "security_unmapped")              _renderMapeamento(_modalIssues);
+        else if (type === "security_missing_price")          _renderRegistroPreco(_modalIssues);
+        else if (type === "security_missing_classification") _renderClassificacao(_modalIssues);
+        else                                                 _renderDefault(_modalIssues);
         document.getElementById("modal-msg").style.display = "none";
+      })
+      .catch(err => {
+        document.getElementById("modal-msg").textContent = `Erro ao carregar dados: ${err.message}`;
+        document.getElementById("modal-msg").style.display = "block";
       });
   }
 
