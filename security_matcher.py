@@ -791,6 +791,13 @@ _EXTRACTORS = {
 }
 
 
+_STRONG_FEATURE_KEYS = (
+    "ticker", "isin", "cnpj", "cetip_code", "internal_code", "external_code",
+    "fund_code", "underlying", "selic_code",
+)
+
+
+
 def _extract_generic_codes(uid, features):
     """Extract up to 3 generic alphanumeric codes from `uid` that were not
     captured by any other feature, for comparison against mainId.
@@ -2308,8 +2315,17 @@ class SecurityCache:
 
         Returns list of matching security dicts (unscored).
         """
-        pool = self.get_by_type(security_type)
-        if not pool:
+        # Sem security_type (classificador indisponível — ver _get_classifier):
+        # não existe "pool" pra esse caso (não há bucket None em self._by_type),
+        # mas os índices exatos (lookup/lookup_prefix) são GLOBAIS, não
+        # escopados por tipo — então ainda vale rodar as Fases 1/1b (ISIN,
+        # CNPJ, mainId, ticker, código CETIP são identificadores fortes o
+        # suficiente pra não precisar do tipo previsto). Só a Fase 2 (busca
+        # fuzzy por nome) precisa mesmo de um pool tipado; ela é pulada abaixo
+        # quando security_type é vazio. Quando security_type É informado, o
+        # comportamento abaixo é IDÊNTICO ao de antes (guards são aditivos).
+        pool = self.get_by_type(security_type) if security_type else None
+        if security_type and not pool:
             return []
 
         candidates = {}  # _id → sec (dedup)
@@ -2349,7 +2365,7 @@ class SecurityCache:
             if not value:
                 continue
             for sec in self.lookup(field, value):
-                if sec.get("securityType") == security_type:
+                if not security_type or sec.get("securityType") == security_type:
                     candidates[sec["_id"]] = sec
 
         # Phase 1b-x: cross-type mainId lookup for complement and generic-code tokens.
@@ -2393,11 +2409,13 @@ class SecurityCache:
             if not prefix:
                 continue
             for sec in self.lookup_prefix(field, prefix):
-                if sec.get("securityType") == security_type:
+                if not security_type or sec.get("securityType") == security_type:
                     candidates[sec["_id"]] = sec
 
-        # Phase 2: scan type pool for name/keyword matches
-        if len(candidates) < limit:
+        # Phase 2: scan type pool for name/keyword matches — precisa de um pool
+        # tipado (`pool` é None quando security_type é vazio), então é pulada
+        # nesse caso; Fases 1/1b acima já cobrem os identificadores exatos.
+        if security_type and len(candidates) < limit:
             # Collect all searchable terms
             search_terms = []
             for key in ["name", "issuer"]:
@@ -2607,8 +2625,20 @@ class SecurityMatcher:
     def _get_classifier(self):
         if self._classifier is None:
             from security_type_classifier import SecurityTypeClassifier
-            self._classifier = SecurityTypeClassifier()
-            self._classifier.train()
+            c = SecurityTypeClassifier()
+            try:
+                c.train()
+            except Exception:
+                # Sem dados de treino ainda (ambiente novo, zero mapeamentos
+                # históricos) — não envenena self._classifier com uma instância
+                # quebrada; sem isso, TODA chamada seguinte a match() sem
+                # security_type explícito voltava a tentar essa mesma instância
+                # já marcada "trained=False" e explodia "Classifier not
+                # trained – call .train() first." pro resto da vida do processo.
+                # Mesma filosofia do _get_classifier module-level em
+                # pages/controlpanel.py: só cacheia depois de treinar com sucesso.
+                return None
+            self._classifier = c
         return self._classifier
 
     def ensure_cache(self):
@@ -2633,9 +2663,12 @@ class SecurityMatcher:
         # Step 1: classify type if not provided
         if not security_type:
             clf = self._get_classifier()
-            prediction = clf.predict(unprocessed_id)
-            security_type = prediction["type"]
-            type_confidence = prediction["confidence"]
+            if clf is not None:
+                prediction = clf.predict(unprocessed_id)
+                security_type = prediction["type"]
+                type_confidence = prediction["confidence"]
+            # clf is None: sem base de treino ainda — segue sem tipo previsto
+            # em vez de estourar. O operador escolhe manualmente ("— selecionar").
 
         # Step 2: extract features
         features = extract_features(unprocessed_id, security_type)

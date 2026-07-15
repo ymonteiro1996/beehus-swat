@@ -19,7 +19,9 @@
      override `top` because a non-zero `top` on `<thead position:sticky>`
      reorders rendering inside the table on Chromium. */
   .table-wrap { overflow-x: auto; }
-  .date-card.active { border-color: #1d4ed8; background: #eff6ff; }
+  .date-card             { transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease; }
+  .date-card:hover        { background: #f0f7ff; }
+  .date-card.active      { border-color: #1d4ed8; background: #eff6ff; box-shadow: 0 1px 3px 0 rgba(29, 78, 216, 0.25); }
   .date-card.active .card-date  { color: #1d4ed8; }
   .date-card.active .card-total { color: #1d4ed8; }
 
@@ -39,8 +41,8 @@
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 80; display: none; }
   .modal-overlay.show { display: flex; align-items: center; justify-content: center; }
   .modal-card    { background: white; border-radius: 0.75rem; width: min(900px, 90vw); max-height: 85vh; display: flex; flex-direction: column; }
-  .ec-btn       { padding: 0.4rem 0.85rem; font-size: 0.75rem; border-radius: 0.375rem; cursor: pointer; }
-  .ec-btn-primary { background: #2563eb; color: white; }
+  .ec-btn       { padding: 0.4rem 0.85rem; font-size: 0.75rem; border-radius: 0.375rem; cursor: pointer; transition: background-color .12s ease, box-shadow .12s ease; }
+  .ec-btn-primary { background: #2563eb; color: white; box-shadow: 0 1px 2px 0 rgba(37, 99, 235, 0.3); }
   .ec-btn-primary:hover { background: #1d4ed8; }
   .ec-btn-muted { background: #e5e7eb; color: #374151; }
   .ec-btn-muted:hover { background: #d1d5db; }
@@ -88,6 +90,37 @@
        0 1px 2px  0   rgba(0, 0, 0, 0.3),
        0 4px 12px -2px rgba(0, 0, 0, 0.5);
   }
+
+  /* ── Shared "surface" look ────────────────────────────────────────────────
+     Same soft border + layered shadow as .fb-bar, reused on the grid card and
+     the Kanban board so every top-level container in the page reads as one
+     visual system instead of a plain flat `shadow`. */
+  .panel-card {
+    border: 1px solid #e5e7eb;
+    box-shadow:
+       0 1px 2px  0   rgba(0, 0, 0, 0.04),
+       0 4px 12px -2px rgba(0, 0, 0, 0.08);
+  }
+  html.dark .panel-card {
+    border-color: #374151;
+    box-shadow:
+       0 1px 2px  0   rgba(0, 0, 0, 0.3),
+       0 4px 12px -2px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Zebra + hover na grade principal, propagados pra 1ª coluna (sticky,
+     bg-white fixo) — sem isso o hover/zebra "sumia" debaixo dela ao rolar
+     horizontalmente. Specificity (id+type) vence a utility class Tailwind
+     de propósito, então a linha usa só isto, não `hover:bg-gray-50` inline. */
+  #tbody tr:nth-child(even)                  { background-color: #f9fafb; }
+  #tbody tr:hover                            { background-color: #f3f4f6; }
+  #tbody tr:nth-child(even) > td:first-child { background-color: #f9fafb; }
+  #tbody tr:hover > td:first-child           { background-color: #f3f4f6; }
+
+  /* "Andon verde" — empresa 100% liberada (zero pendência em toda a esteira,
+     incluindo TXN). Recompensa visual pra quem está em dia, não só alerta
+     pra quem está travado. Inset em vez de border pra não empurrar layout. */
+  #tbody tr.row-clear > td:first-child { box-shadow: inset 3px 0 0 0 #22c55e; }
 
   /* Row inside the bar — each row is a horizontal flex strip that scrolls
      on its own when content exceeds the viewport. The second row gets a
@@ -696,20 +729,60 @@ try {
   </button>
 </div>
 
+<div class="px-6 pb-2 flex justify-end gap-2">
+  <button id="esteira-btn" onclick="openEsteiraModal()"
+    class="ec-btn ec-btn-muted text-xs flex items-center gap-1.5"
+    title="Mostra em que etapa da esteira cada empresa está travada hoje">
+    <svg class="w-[13px] h-[13px]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+    Quadro da Esteira
+  </button>
+  <button id="process-all-wallets-btn" onclick="processAllWallets()"
+    class="ec-btn ec-btn-primary text-xs flex items-center gap-1.5"
+    title="Processa as carteiras que têm posição bruta pronta e ainda não foram processadas, em todas as empresas visíveis, na data selecionada">
+    <svg class="w-[13px] h-[13px]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+    Processar Todas as Carteiras
+  </button>
+  <button id="process-range-btn" onclick="openProcessRangeModal()"
+    class="ec-btn ec-btn-muted text-xs flex items-center gap-1.5"
+    title="Processa todas as empresas dia por dia num range de datas — útil pra fazer as pendências dos dias ainda não tocados aparecerem">
+    <svg class="w-[13px] h-[13px]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+    Processar Range de Datas
+  </button>
+</div>
+
 <div class="px-6 pt-2 pb-6">
-  <div class="bg-white rounded-xl shadow overflow-hidden">
+  <div class="panel-card bg-white rounded-xl overflow-hidden">
     <div class="table-wrap">
       <table class="w-full text-[11px] border-collapse table-fixed" id="table" style="display:none">
         <thead class="bg-gray-50 text-gray-500 uppercase sticky top-0">
+          <!-- Linha de "estações da esteira" — agrupa as mesmas colunas de sempre em
+               fases (Pré-requisito → Processamento das Carteiras → Reconciliação → Processamento/NAV
+               → Publicação), sem remover nem reordenar nenhuma coluna. Colspans hardcoded
+               contam com ISSUE_TYPES = 6 (2+4) e EXTRA_COLS = 5 (3+2) — se essas listas
+               mudarem de tamanho em pages/controlpanel.py, ajustar aqui também. -->
+          <tr class="text-[9px]">
+            <th rowspan="3" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 w-[140px] tracking-wide align-bottom normal-case text-gray-500">Empresa</th>
+            <th colspan="2" class="px-1 py-1 text-center font-semibold tracking-wide bg-slate-100 text-slate-500 border-r-2 border-white" title="Carteira precisa existir e ter posição bruta carregada antes de qualquer outra etapa.">Pré-requisito</th>
+            <th colspan="4" class="px-1 py-1 text-center font-semibold tracking-wide bg-blue-50 text-blue-500 border-r-2 border-white" title="Ativos precisam estar mapeados, classificados e com preço antes do processamento da posição.">Processamento das Carteiras</th>
+            <th colspan="1" class="px-1 py-1 text-center font-semibold tracking-wide bg-purple-50 text-purple-500 border-r-2 border-white" title="Transações não identificadas — checagem em paralelo, não bloqueia o resto da esteira.">Reconciliação</th>
+            <th colspan="3" class="px-1 py-1 text-center font-semibold tracking-wide bg-teal-50 text-teal-600 border-r-2 border-white" title="Processamento da posição e cálculo de NAV por carteira.">Processamento / NAV</th>
+            <th colspan="2" class="px-1 py-1 text-center font-semibold tracking-wide bg-indigo-50 text-indigo-500" title="Cálculo e publicação do NAV por agrupamento — última etapa antes do fechamento do dia.">Publicação</th>
+          </tr>
           <tr>
-            <th class="px-2 py-2 text-left sticky left-0 bg-gray-50 z-10 w-[140px]">Empresa</th>
+            {% set click_icon = '<svg class="inline-block w-2 h-2 ml-0.5 -mt-0.5 opacity-40" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>' %}
             {% for key, label in types %}
-            <th class="px-1 py-2 text-center w-[68px] text-[9px] leading-tight whitespace-normal align-middle">{{ label }}</th>
+            <th class="px-1 py-2.5 text-center w-[68px] text-[10px] tracking-wide leading-tight whitespace-normal align-middle cursor-pointer hover:bg-gray-200 hover:text-gray-700{% if loop.index == 2 %} border-r-2 border-gray-200{% elif loop.last %} border-r-2 border-gray-200{% endif %}" data-column="{{ key }}" title="Ver todas as empresas pendentes em {{ label }}">{{ label }}{{ click_icon|safe }}</th>
             {% endfor %}
-            <th class="px-1 py-2 text-center w-[68px] text-[9px] leading-tight whitespace-normal align-middle col-extras-first" title="Transações não identificadas (beehusTransactionType nulo) na data selecionada">TXN</th>
+            <th class="px-1 py-2.5 text-center w-[68px] text-[10px] tracking-wide leading-tight whitespace-normal align-middle col-extras-first cursor-pointer hover:bg-gray-200 hover:text-gray-700 border-r-2 border-gray-200" data-column="txn" title="Transações não identificadas (beehusTransactionType nulo) na data selecionada — não bloqueia o resto da esteira, é uma checagem em paralelo. Clique pra ver todas as empresas">TXN{{ click_icon|safe }}</th>
             {% for key, label in (extra_cols|default([])) %}
-            <th class="px-1 py-2 text-center w-[80px] text-[9px] leading-tight whitespace-normal align-middle{% if loop.first %} col-extras-first{% endif %}">{{ label }}</th>
+            <th class="px-1 py-2.5 text-center w-[80px] text-[10px] tracking-wide leading-tight whitespace-normal align-middle cursor-pointer hover:bg-gray-200 hover:text-gray-700{% if loop.first %} col-extras-first{% endif %}{% if key == 'gap' %} border-r-2 border-gray-200{% endif %}" data-column="{{ key }}" title="Ver todas as empresas pendentes em {{ label }}">{{ label }}{{ click_icon|safe }}</th>
             {% endfor %}
+          </tr>
+          <tr id="totals-row" class="bg-gray-100 text-gray-600 font-semibold text-[10px] border-t-2 border-gray-300">
+            <!-- Preenchido via JS (_renderTotalsRow) — soma cada coluna cruzando
+                 todas as empresas visíveis (visão de frota, sem abrir o Quadro
+                 da Esteira). Fica dentro do próprio thead, então rola junto
+                 (sticky) com o cabeçalho. -->
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -765,6 +838,131 @@ try {
      per-grouping (and per-wallet, for the wallet-level columns) status
      breakdown for one (companyId, date) cell. Closing it returns to the
      dashboard exactly where it was. -->
+<!-- Modal cross-empresa: mesma ideia do modal por empresa, só que lista TODAS
+     as empresas pendentes na coluna clicada (cabeçalho da tabela). -->
+<div id="all-companies-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
+     style="display:none;z-index:55"
+     onclick="if(event.target===this) closeAllCompaniesModal()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between px-6 py-4 border-b">
+      <p id="acm-title" class="font-bold text-gray-800 text-base truncate"></p>
+      <div class="flex items-center gap-2 flex-shrink-0 ml-3">
+        <button id="acm-action-btn" style="display:none" onclick="openProcessTxnModal()"
+                class="ec-btn ec-btn-primary text-xs">Processar Transações</button>
+        <button onclick="closeAllCompaniesModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+      </div>
+    </div>
+    <div id="acm-body" class="p-4 overflow-y-auto"></div>
+  </div>
+</div>
+
+<!-- ─── Modal: Quadro da Esteira ─────────────────────────────────────────────
+     Kanban da esteira do dia: uma coluna por etapa do pipeline, cada empresa
+     aparece na PRIMEIRA etapa (da esquerda pra direita) onde ainda está
+     travada — não repete em várias colunas. Dado 100% client-side, a partir
+     do último /api/controlpanel/rows já carregado (_gridRows) — sem rota nova. -->
+<div id="esteira-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
+     style="display:none;z-index:45"
+     onclick="if(event.target===this) closeEsteiraModal()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-[95vw] h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between px-6 py-4 border-b flex-shrink-0">
+      <div>
+        <p class="font-bold text-gray-800 text-base">Quadro da Esteira</p>
+        <p class="text-[11px] text-gray-400">Empresa aparece em toda etapa onde ainda tem pendência · <span id="esteira-date"></span></p>
+      </div>
+      <button onclick="closeEsteiraModal()" class="text-gray-400 hover:text-gray-600 text-xl flex-shrink-0 ml-3">&times;</button>
+    </div>
+    <div id="esteira-body" class="p-4 overflow-hidden flex-1"></div>
+  </div>
+</div>
+
+<!-- ─── Modal: Processar Transações (POST /data-science/heuristics) ────────── -->
+<div id="process-txn-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
+     style="display:none;z-index:60"
+     onclick="if(event.target===this) closeProcessTxnModal()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3 border-b flex-shrink-0">
+      <h3 class="font-semibold text-sm text-gray-700">Processar Transações</h3>
+      <button onclick="closeProcessTxnModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+    </div>
+    <div class="px-5 py-4 overflow-y-auto">
+      <p class="text-xs text-gray-500 mb-3">
+        Roda a heurística de identificação de transações (POST /data-science/heuristics)
+        para a entidade e data escolhidas.
+      </p>
+      <label class="block text-[11px] text-gray-500 mb-1">Entidade</label>
+      <select id="ptx-entity" class="ec-input w-full mb-3">
+        <option value="">Carregando…</option>
+      </select>
+      <label class="block text-[11px] text-gray-500 mb-1">Data</label>
+      <input id="ptx-date" type="date" class="ec-input w-full mb-4" />
+      <div id="ptx-msg" class="text-xs mb-2"></div>
+      <div class="flex justify-end gap-2">
+        <button onclick="closeProcessTxnModal()" class="ec-btn ec-btn-muted text-xs">Fechar</button>
+        <button id="ptx-run-btn" onclick="_runProcessTxn()" class="ec-btn ec-btn-primary text-xs">Processar</button>
+      </div>
+
+      <div class="border-t mt-4 pt-4">
+        <p class="text-xs text-gray-500 mb-3">
+          Ou processa TODAS as empresas visíveis, uma de cada vez (não em paralelo), na mesma data acima.
+        </p>
+        <div class="flex justify-end gap-2 mb-3">
+          <button id="ptx-cancel-all-btn" onclick="_cancelProcessTxnAll()" style="display:none"
+                  class="ec-btn ec-btn-muted text-xs">Cancelar</button>
+          <button id="ptx-run-all-btn" onclick="_runProcessTxnAll()" class="ec-btn ec-btn-primary text-xs">
+            Processar Todas as Empresas
+          </button>
+        </div>
+        <div id="ptx-all-progress" class="text-xs"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Processar Range de Datas ─────────────────────────────────────
+     As pendências (Mapeamento/Classificação/Registro de Preço/etc.) só saem
+     do pre-processing depois que a posição do dia é processada — dias ainda
+     não tocados ficam "invisíveis" pro resto da esteira até alguém processar.
+     Este modal processa TODAS as empresas visíveis, dia por dia (sequencial,
+     não em paralelo — mesma lógica de "só processa quem tem o que
+     processar" do botão de data única), num range, pra desenterrar o
+     backlog de vários dias de uma vez. -->
+<div id="process-range-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
+     style="display:none;z-index:60"
+     onclick="if(event.target===this) closeProcessRangeModal()">
+  <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3 border-b flex-shrink-0">
+      <h3 class="font-semibold text-sm text-gray-700">Processar Range de Datas</h3>
+      <button onclick="closeProcessRangeModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+    </div>
+    <div class="px-5 py-4 overflow-y-auto">
+      <p class="text-xs text-gray-500 mb-3">
+        Processa todas as empresas visíveis, dia por dia (dias úteis, sequencial — nunca em paralelo),
+        do dia mais antigo pro mais recente. Cada dia só dispara pra empresas com carteira pendente
+        naquele dia (mesmo critério do "Processar Todas as Carteiras").
+      </p>
+      <div class="flex gap-3 mb-4">
+        <div class="flex-1">
+          <label class="block text-[11px] text-gray-500 mb-1">De</label>
+          <input id="prange-start" type="date" class="ec-input w-full" />
+        </div>
+        <div class="flex-1">
+          <label class="block text-[11px] text-gray-500 mb-1">Até</label>
+          <input id="prange-end" type="date" class="ec-input w-full" />
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mb-3">
+        <button id="prange-cancel-btn" onclick="_cancelProcessRange()" style="display:none"
+                class="ec-btn ec-btn-muted text-xs">Cancelar</button>
+        <button id="prange-run-btn" onclick="_runProcessRange()" class="ec-btn ec-btn-primary text-xs">
+          Processar
+        </button>
+      </div>
+      <div id="prange-progress" class="text-xs"></div>
+    </div>
+  </div>
+</div>
+
 <div id="cell-detail-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
      style="display:none;z-index:55"
      onclick="if(event.target===this) closeCellDetail()">
@@ -871,7 +1069,6 @@ try {
     </div>
     <!-- body -->
     <div class="px-5 py-4 flex flex-col gap-4 overflow-y-auto">
-      <div id="complement-upload-section" class="flex flex-col gap-4">
       <!-- format description -->
       <div class="text-xs text-gray-600 bg-gray-50 rounded-lg p-3 space-y-1">
         <p class="font-semibold text-gray-700">Formato do arquivo</p>
@@ -895,21 +1092,6 @@ try {
         <span id="complement-filename" class="text-xs font-semibold text-slate-700 hidden"></span>
         <input id="complement-file-input" type="file" accept=".xlsx,.csv,.json,.txt" class="hidden">
       </label>
-      </div><!-- /complement-upload-section -->
-      <!-- preview section (shown after parse) -->
-      <div id="complement-preview-section" class="hidden flex flex-col gap-2">
-        <p id="complement-preview-count" class="text-xs text-gray-500"></p>
-        <div class="overflow-x-auto border border-gray-200 rounded">
-          <table class="w-full text-xs border-collapse">
-            <thead><tr class="bg-gray-50">
-              <th class="text-left px-2 py-1.5 font-semibold text-gray-600 border-b border-gray-200">unprocessedId</th>
-              <th class="text-left px-2 py-1.5 font-semibold text-gray-600 border-b border-gray-200">Complemento</th>
-            </tr></thead>
-            <tbody id="complement-preview-rows"></tbody>
-          </table>
-        </div>
-        <p id="complement-parse-error" class="text-xs text-red-600 hidden"></p>
-      </div>
       <!-- merge priority -->
       <div>
         <p class="text-xs font-semibold text-gray-700 mb-2">Prioridade ao mesclar</p>
@@ -926,15 +1108,12 @@ try {
       </div>
     </div>
     <!-- footer -->
-    <div class="flex items-center px-5 py-3 border-t flex-shrink-0 gap-2">
-      <button id="complement-back-btn" onclick="_complementBack()" class="hidden px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">← Voltar</button>
-      <div class="flex items-center gap-2 ml-auto">
-        <button onclick="_closeComplementModal()" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Cancelar</button>
-        <button id="complement-confirm-btn" onclick="_complementConfirm()" disabled
-          class="px-3 py-1.5 text-xs font-semibold text-white bg-slate-500 rounded hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
-          Carregar e Pré-visualizar
-        </button>
-      </div>
+    <div class="flex items-center justify-end gap-2 px-5 py-3 border-t flex-shrink-0">
+      <button onclick="_closeComplementModal()" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Cancelar</button>
+      <button id="complement-confirm-btn" disabled
+        class="px-3 py-1.5 text-xs font-semibold text-white bg-slate-500 rounded hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
+        Carregar e Reprocessar
+      </button>
     </div>
   </div>
 </div>
@@ -1091,6 +1270,8 @@ try {
   let _modalIssues = [];
   let _mappingRows = [];           // cached rows for filtering
   let _c3Rows     = [];           // cached rows for C3 export
+  let _gridRows   = [];           // last /api/controlpanel/rows response — feeds o Quadro da Esteira
+  let _gridTxnByCompany = {};     // companyId -> contagem de TXN não identificada (chega depois, via /txn-counts)
 
   // Extras-column keys backed by /api/controlpanel/cell-detail. Kept in
   // sync with `_CELL_DETAIL_COLS` in pages/controlpanel.py — when a key
@@ -1124,41 +1305,36 @@ try {
   // são ANEXADAS quando esta rota retorna.
   function _txnCellHtml(companyId, companyName, tx) {
     // tx === null → estado "carregando" ("…"); senão {count, label, cls}.
+    // border-r sempre presente: TXN é a "estação" Reconciliação inteira (1
+    // coluna só), separada do Processamento/NAV que vem depois.
     const data = `data-txn-company="${_escHtml(companyId)}" data-txn-name="${_escHtml(companyName)}"`;
     if (!tx) {
-      return `<td class="px-1 py-1.5 text-center text-gray-300 col-extras-first js-txn-cell" ${data}><span class="opacity-40">…</span></td>`;
+      return `<td class="px-1 py-1.5 text-center text-gray-400 col-extras-first border-r-2 border-gray-200 js-txn-cell" ${data}><span class="opacity-40">…</span></td>`;
     }
     if (tx.count > 0) {
-      return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first cursor-pointer hover:opacity-75 js-open-txn js-txn-cell" ${data}
+      return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first border-r-2 border-gray-200 cursor-pointer hover:opacity-75 js-open-txn js-txn-cell" ${data}
                 data-company-id="${_escHtml(companyId)}" data-date="${_escHtml(_currentDate || '')}"
                 title="Abrir Identificar Transações para ${_escHtml(companyName)} em ${_escHtml(_currentDate || '')}">${_escHtml(tx.label)}</td>`;
     }
-    return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first js-txn-cell" ${data}>${_escHtml(tx.label)}</td>`;
+    return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first border-r-2 border-gray-200 js-txn-cell" ${data}>${_escHtml(tx.label)}</td>`;
   }
 
   function _emptyRowWithTxn(companyId, companyName, tx) {
-    const issueCells = Array(_N_ISSUE_TYPES).fill(
-      `<td class="px-1 py-1.5 text-center text-gray-300">—</td>`).join("");
-    const extraCells = Array.from({length: _N_EXTRA_COLS}, (_, i) =>
-      `<td class="px-1 py-1.5 text-center text-gray-300${i === 0 ? ' col-extras-first' : ''}">—</td>`).join("");
+    const issueCells = Array.from({length: _N_ISSUE_TYPES}, (_, i) => {
+      const div = (i === 1 || i === _N_ISSUE_TYPES - 1) ? " border-r-2 border-gray-200" : "";
+      return `<td class="px-1 py-1.5 text-center text-gray-400${div}">—</td>`;
+    }).join("");
+    const extraCells = Array.from({length: _N_EXTRA_COLS}, (_, i) => {
+      // GAP é sempre a 3ª extra (índice 2) — mesmo corte usado no resto.
+      const div = i === 2 ? " border-r-2 border-gray-200" : "";
+      return `<td class="px-1 py-1.5 text-center text-gray-400${i === 0 ? ' col-extras-first' : ''}${div}">—</td>`;
+    }).join("");
     return `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(companyName.toLowerCase())}">
-      ${_companyCellHtml(companyId, companyName)}
+      <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(companyName)}">${_escHtml(companyName)}</td>
       ${issueCells}
       ${_txnCellHtml(companyId, companyName, tx)}
       ${extraCells}
     </tr>`;
-  }
-
-  // Company-name cell (first column). Clickable → opens the "Verificar por
-  // carteira" modal (select a wallet, see its pending issues on the active
-  // date). Reading companyId/name from data-* (via the delegated tbody
-  // handler) instead of an inline onclick avoids XSS + apostrophe breakage
-  // for names like "D'Or", mirroring the issue-cell pattern.
-  function _companyCellHtml(companyId, companyName) {
-    return `<td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate cursor-pointer hover:text-indigo-600 js-open-wallet-issues"
-                data-company-id="${_escHtml(companyId)}"
-                data-company-name="${_escHtml(companyName)}"
-                title="Ver issues por carteira — ${_escHtml(companyName)}">${_escHtml(companyName)}</td>`;
   }
 
   function _loadTxnCounts(date) {
@@ -1173,7 +1349,7 @@ try {
           const cid  = cell.dataset.txnCompany;
           const name = cell.dataset.txnName || cid;
           const it   = byId[cid];
-          const tx   = it ? it.txn : {count: 0, label: "—", cls: "text-gray-300"};
+          const tx   = it ? it.txn : {count: 0, label: "—", cls: "text-gray-400"};
           cell.outerHTML = _txnCellHtml(cid, name, tx);
           delete byId[cid];                  // consumida
         });
@@ -1188,12 +1364,88 @@ try {
               _emptyRowWithTxn(it.companyId, it.company, it.txn)));
           filterRows();
         }
+        // TXN chega depois do resto — só agora dá pra saber com certeza quem
+        // está 100% liberado (linha verde) e o total de TXN pendente (totais).
+        (items || []).forEach(it => { _gridTxnByCompany[it.companyId] = it.txn?.count || 0; });
+        _markClearRows();
+        _renderTotalsRow();
       })
       .catch(() => {/* TXN é best-effort; silencia para não derrubar a grade */});
   }
 
+  // Reaproveita as mesmas etapas/leitura de pendência do Quadro da Esteira
+  // (_ESTEIRA_STAGES/_esteiraPending, definidos mais abaixo — ok referenciar
+  // aqui, closures só resolvem no momento da CHAMADA, não da declaração) pra
+  // trazer a mesma inteligência de "gargalo" pra dentro da grade principal,
+  // sem precisar abrir o Kanban.
+  function _firstBlockingStage(r) {
+    for (const stage of _ESTEIRA_STAGES) {
+      if (_esteiraPending(r, stage)) return stage;
+    }
+    return null;
+  }
+
+  function _bottleneckBadge(r) {
+    const stage = _firstBlockingStage(r);
+    if (!stage) return "";
+    return `<span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 flex-shrink-0 align-middle" title="Travado em: ${_escHtml(stage.label)}"></span>`;
+  }
+
+  // Zero pendência em toda a esteira (issues + extras + TXN) → "andon verde"
+  // na linha inteira, não só nas colunas individuais.
+  function _isRowClear(r) {
+    if (!r) return false;
+    if ((r.cells || []).some(c => c.count > 0)) return false;
+    for (const e of (r.extras || [])) {
+      if (e.total == null) { if (e.count > 0) return false; }        // GAP
+      else if (e.total > 0 && e.count < e.total) return false;        // ratio parcial
+    }
+    if (_gridTxnByCompany[r.companyId] > 0) return false;
+    return true;
+  }
+
+  function _markClearRows() {
+    document.querySelectorAll("#tbody tr[data-company-id]").forEach(tr => {
+      const r = _gridRows.find(row => row.companyId === tr.dataset.companyId);
+      tr.classList.toggle("row-clear", _isRowClear(r));
+    });
+  }
+
+  // Linha de totais (visão de frota) — soma cada coluna cruzando todas as
+  // empresas visíveis. Fica dentro do <thead> (mesmo bloco sticky do
+  // cabeçalho), então continua visível rolando a grade pra baixo.
+  function _renderTotalsRow() {
+    const row = document.getElementById("totals-row");
+    if (!row || !_gridRows.length) return;
+
+    const issueTds = Array.from({length: _N_ISSUE_TYPES}, (_, i) => {
+      const total = _gridRows.reduce((s, r) => s + (r.cells[i]?.count || 0), 0);
+      const div = (i === 1 || i === _N_ISSUE_TYPES - 1) ? " border-r-2 border-gray-300" : "";
+      return `<td class="px-1 py-1.5 text-center${div}">${total || "—"}</td>`;
+    }).join("");
+
+    const txnTotal = Object.values(_gridTxnByCompany).reduce((a, b) => a + b, 0);
+    const txnTd = `<td class="px-1 py-1.5 text-center col-extras-first border-r-2 border-gray-300">${txnTotal || "—"}</td>`;
+
+    const extraTds = Array.from({length: _N_EXTRA_COLS}, (_, i) => {
+      const sample = _gridRows.find(r => r.extras && r.extras[i]);
+      const isCount = sample && sample.extras[i].total == null; // GAP
+      const sumCount = _gridRows.reduce((s, r) => s + (r.extras[i]?.count || 0), 0);
+      const sep = i === 0 ? " col-extras-first" : "";
+      const div = (sample && sample.extras[i].total == null) ? " border-r-2 border-gray-300" : "";
+      if (isCount) return `<td class="px-1 py-1.5 text-center${sep}${div}">${sumCount || "—"}</td>`;
+      const sumTotal = _gridRows.reduce((s, r) => s + (r.extras[i]?.total || 0), 0);
+      return `<td class="px-1 py-1.5 text-center${sep}${div}">${sumTotal ? `${sumCount}/${sumTotal}` : "—"}</td>`;
+    }).join("");
+
+    row.innerHTML = `
+      <td class="sticky left-0 bg-gray-100 z-10 px-2 py-1.5 text-left">Totais</td>
+      ${issueTds}${txnTd}${extraTds}`;
+  }
+
   function selectDate(date) {
     _currentDate = date;
+    _gridTxnByCompany = {};   // TXN é por data — descarta contagens da data anterior
 
     // highlight active card
     document.querySelectorAll(".date-card").forEach(c =>
@@ -1208,39 +1460,51 @@ try {
     const th = document.getElementById("threshold-input")?.value;
     if (th !== undefined && th !== "") params.set("threshold", th);
     fetch(`/api/controlpanel/rows?${params}`).then(r => r.json()).then(({ rows }) => {
+      _gridRows = rows;
       document.getElementById("tbody").innerHTML = rows.map(r =>
-        `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(r.company.toLowerCase())}">
-          ${_companyCellHtml(r.companyId, r.company)}
-          ${r.cells.map(c => c.count > 0
-            ? `<td class="px-1 py-1.5 text-center ${c.cls} cursor-pointer hover:opacity-75 js-open-modal"
-                 data-company-id="${_escHtml(r.companyId)}"
-                 data-company-name="${_escHtml(r.company)}"
-                 data-issue-type="${_escHtml(c.type)}">${_escHtml(c.label)}</td>`
-            : `<td class="px-1 py-1.5 text-center ${c.cls}">${_escHtml(c.label)}</td>`
-          ).join("")}
+        `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(r.company.toLowerCase())}" data-company-id="${_escHtml(r.companyId)}">
+          <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(r.company)}">${_bottleneckBadge(r)}${_escHtml(r.company)}</td>
+          ${r.cells.map((c, i) => {
+            // Divisor de "estação da esteira" — depois da Posição (fim de
+            // Pré-requisito) e depois da última (Preço para o dia, fim de
+            // Processamento das Carteiras). Mesmos cortes do cabeçalho agrupado.
+            const div = (i === 1 || i === r.cells.length - 1) ? " border-r-2 border-gray-200" : "";
+            return c.count > 0
+              ? `<td class="px-1 py-1.5 text-center ${c.cls}${div} cursor-pointer hover:opacity-75 js-open-modal"
+                   data-company-id="${_escHtml(r.companyId)}"
+                   data-company-name="${_escHtml(r.company)}"
+                   data-issue-type="${_escHtml(c.type)}">${_escHtml(c.label)}</td>`
+              : `<td class="px-1 py-1.5 text-center ${c.cls}${div}">${_escHtml(c.label)}</td>`;
+          }).join("")}
           ${/* TXN: placeholder "…" — preenchido depois por _loadTxnCounts (G é
                 o endpoint mais caro, carregado após a tela renderizar). */
             _txnCellHtml(r.companyId, r.company, null)}
           ${(r.extras || []).map((e, i) => {
             const sep = i === 0 ? " col-extras-first" : "";
+            // Divisor de estação depois do GAP — fim de "Processamento / NAV",
+            // antes de "Publicação" (NAV Grouping/Published). Mesmo corte do
+            // cabeçalho agrupado.
+            const div = e.key === "gap" ? " border-r-2 border-gray-200" : "";
             // Wallet/grouping progress columns become clickable when the
             // denominator is known (total > 0). The "—" placeholder cells
             // (total = 0, no work to inspect) stay inert. Click opens the
             // drill-down modal showing each grouping/wallet's status.
             if (CELL_DETAIL_COLUMNS.has(e.key) && e.total && e.total > 0) {
-              return `<td class="px-1 py-1.5 text-center ${e.cls}${sep} cursor-pointer hover:opacity-75 js-open-cell"
+              return `<td class="px-1 py-1.5 text-center ${e.cls}${sep}${div} cursor-pointer hover:opacity-75 js-open-cell"
                         data-company-id="${_escHtml(r.companyId)}"
                         data-company-name="${_escHtml(r.company)}"
                         data-column="${_escHtml(e.key)}"
                         title="Ver detalhes de ${_escHtml(r.company)} em ${_escHtml(_currentDate || '')}">${_escHtml(e.label)}</td>`;
             }
-            return `<td class="px-1 py-1.5 text-center ${e.cls}${sep}">${_escHtml(e.label)}</td>`;
+            return `<td class="px-1 py-1.5 text-center ${e.cls}${sep}${div}">${_escHtml(e.label)}</td>`;
           }).join("")}
         </tr>`).join("");
 
       document.getElementById("msg").style.display   = "none";
       document.getElementById("table").style.display = "";
       filterRows();
+      _markClearRows();   // 1ª leitura (TXN ainda não chegou — refinado abaixo)
+      _renderTotalsRow();
 
       // Tela já visível com E + /results; agora busca a coluna TXN (endpoint G,
       // o mais caro) em segundo plano e preenche os "…".
@@ -1285,12 +1549,6 @@ try {
   // path. Reading from data-* via dataset avoids both (HTML parser decodes
   // attributes, JS never re-parses them as strings).
   document.getElementById("tbody").addEventListener("click", e => {
-    // Company name (first column): open the per-wallet issue checker.
-    const companyTd = e.target.closest("td.js-open-wallet-issues");
-    if (companyTd) {
-      openWalletIssues(companyTd.dataset.companyId, companyTd.dataset.companyName);
-      return;
-    }
     // Progress-column drill-down (Posições Processadas / NAV Wallet /
     // NAV Grouping / Published): open the cell-detail modal with the
     // grouping/wallet breakdown.
@@ -1313,6 +1571,399 @@ try {
     if (!td) return;
     openModal(td.dataset.companyId, td.dataset.companyName, td.dataset.issueType);
   });
+
+  // Header click → mesmo modal de detalhe de sempre, só que cruzando TODAS as
+  // empresas visíveis nessa coluna (em vez de abrir empresa por empresa).
+  // As 6 colunas de issue (Mapeamento/Classificação/Registro de Preço/Preço
+  // p/ dia/Carteira/Posição) reusam o MESMO modal rico de sempre (openModal),
+  // só que via openModalAllCompanies. As demais (TXN + colunas extra) usam o
+  // modal simples de lista (openAllCompaniesModal) — não têm um "modal por
+  // empresa" equivalente pra replicar.
+  const _ISSUE_TYPE_KEYS = new Set([
+    "missing_wallet", "missing_unprocessed_position", "security_unmapped",
+    "security_missing_classification", "security_missing_price", "security_missing_history_price",
+  ]);
+  document.getElementById("table").querySelector("thead").addEventListener("click", e => {
+    const th = e.target.closest("th[data-column]");
+    if (!th || !_currentDate) return;
+    const column = th.dataset.column, label = th.textContent.trim();
+    if (_ISSUE_TYPE_KEYS.has(column)) openModalAllCompanies(column, label);
+    else                              openAllCompaniesModal(column, label);
+  });
+
+  let _acmRows = [];
+  let _acmColumn = "";
+  let _acmOnlyGap = false;
+
+  function _acmGapThreshold() {
+    const raw = document.getElementById("threshold-input")?.value;
+    const pct = parseFloat(raw);
+    return (Number.isNaN(pct) ? 0.01 : pct) / 100;
+  }
+
+  function _acmIsGap(r) {
+    if (r.detail === "pendente") return false;
+    // Arredonda na mesma casa decimal exibida (2 casas do %) antes de comparar
+    // com o threshold — sem isso, ruído de ponto flutuante do upstream (ex.
+    // 0.00000002) passa como "diferente" mesmo quando a tela mostra 0.00% dos
+    // dois lados, fazendo o toggle parecer que não filtra nada.
+    const diffRounded = Math.round(Math.abs(r.returnDifference || 0) * 10000) / 10000;
+    return diffRounded > _acmGapThreshold();
+  }
+
+  function _acmToggleOnlyGap(checked) {
+    _acmOnlyGap = checked;
+    _acmRenderRows();
+  }
+
+  function _acmRenderRows() {
+    const body = document.getElementById("acm-body");
+    const isNavWallet = _acmColumn === "nav_wallet";
+    const rows = isNavWallet && _acmOnlyGap ? _acmRows.filter(_acmIsGap) : _acmRows;
+    const _fmtPct = v => v == null ? "—" : `${(v * 100).toFixed(2)}%`;
+    const toggle = isNavWallet ? `
+      <label class="flex items-center gap-1.5 text-[11px] text-gray-600 mb-2 select-none">
+        <input type="checkbox" ${_acmOnlyGap ? "checked" : ""} onchange="_acmToggleOnlyGap(this.checked)">
+        Mostrar apenas carteiras com divergência
+      </label>` : ``;
+    if (!rows.length) {
+      body.innerHTML = toggle + '<p class="text-xs text-gray-400 py-6 text-center">Nenhuma carteira nessa seleção.</p>';
+      return;
+    }
+    body.innerHTML = toggle + `
+      <table class="w-full text-xs">
+        <thead><tr class="text-left text-gray-400 border-b">
+          <th class="px-2 py-1.5">Empresa</th><th class="px-2 py-1.5">Carteira</th>
+          ${isNavWallet
+            ? `<th class="px-2 py-1.5">Status</th><th class="px-2 py-1.5">Rentab. NAV</th><th class="px-2 py-1.5">Rentab. Contribuição</th><th class="px-2 py-1.5">Diferença</th>`
+            : `<th class="px-2 py-1.5">Detalhe</th>`}
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr class="border-b last:border-0">
+              <td class="px-2 py-1.5 text-gray-700">${r.company}</td>
+              <td class="px-2 py-1.5 text-gray-600">${r.walletName || "—"}</td>
+              ${isNavWallet ? `
+              <td class="px-2 py-1.5 ${r.detail === 'pendente' ? 'text-amber-600' : 'text-green-600'}">${r.detail}</td>
+              <td class="px-2 py-1.5 font-mono text-gray-600">${_fmtPct(r.returnNavPerShare)}</td>
+              <td class="px-2 py-1.5 font-mono text-gray-600">${_fmtPct(r.returnContribution)}</td>
+              <td class="px-2 py-1.5 font-mono text-gray-600">${_fmtPct(r.returnDifference)}</td>`
+              : `<td class="px-2 py-1.5 font-mono text-gray-500">${r.detail || ""}</td>`}
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }
+
+  async function openAllCompaniesModal(column, label) {
+    const modal = document.getElementById("all-companies-modal");
+    const title = document.getElementById("acm-title");
+    const body  = document.getElementById("acm-body");
+    title.textContent = label;
+    body.innerHTML = '<p class="text-xs text-gray-400 py-6 text-center">Carregando…</p>';
+    modal.style.display = "flex";
+    _acmColumn = column;
+    _acmOnlyGap = false;
+    document.getElementById("acm-action-btn").style.display = column === "txn" ? "" : "none";
+    try {
+      const res = await fetch(`/api/controlpanel/detail-all?date=${encodeURIComponent(_currentDate)}&column=${encodeURIComponent(column)}`);
+      const data = await res.json();
+      if (data.error) {
+        body.innerHTML = `<p class="text-xs text-red-500 py-6 text-center">${data.error}</p>`;
+        return;
+      }
+      _acmRows = data.rows || [];
+      if (!_acmRows.length) {
+        body.innerHTML = '<p class="text-xs text-gray-400 py-6 text-center">Nenhuma pendência — todas as empresas em dia. 🎉</p>';
+        return;
+      }
+      _acmRenderRows();
+    } catch (e) {
+      body.innerHTML = `<p class="text-xs text-red-500 py-6 text-center">Erro: ${e}</p>`;
+    }
+  }
+
+  function closeAllCompaniesModal() {
+    document.getElementById("all-companies-modal").style.display = "none";
+  }
+
+  // ── Processar Transações (POST /data-science/heuristics) ────────────────
+  // Botão dentro do modal de TXN — pede entidade + data (a empresa vem junto,
+  // resolvida a partir da entidade escolhida em /api/controlpanel/entities,
+  // já que uma entidade pertence a uma única empresa).
+  let _ptxEntities = [];
+
+  let _ptxAllRunning   = false;
+  let _ptxAllCancelled = false;
+
+  async function openProcessTxnModal() {
+    const modal  = document.getElementById("process-txn-modal");
+    const select = document.getElementById("ptx-entity");
+    const dateEl = document.getElementById("ptx-date");
+    const msg    = document.getElementById("ptx-msg");
+    msg.textContent = "";
+    dateEl.value = _currentDate || "";
+    if (!_ptxAllRunning) document.getElementById("ptx-all-progress").innerHTML = "";
+    select.innerHTML = `<option value="">Carregando…</option>`;
+    modal.style.display = "flex";
+    try {
+      const r = await fetch("/api/controlpanel/entities");
+      const data = await r.json();
+      _ptxEntities = data.entities || [];
+      if (!_ptxEntities.length) {
+        select.innerHTML = `<option value="">Nenhuma entidade visível</option>`;
+        return;
+      }
+      const byCompany = {};
+      _ptxEntities.forEach(e => (byCompany[e.companyName] ??= []).push(e));
+      select.innerHTML = Object.keys(byCompany).sort().map(companyName => `
+        <optgroup label="${_escHtml(companyName)}">
+          ${byCompany[companyName].map(e =>
+            `<option value="${_escHtml(e.id)}" data-company-id="${_escHtml(e.companyId)}">${_escHtml(e.name)}</option>`
+          ).join("")}
+        </optgroup>`).join("");
+    } catch (e) {
+      select.innerHTML = `<option value="">Erro ao carregar entidades</option>`;
+    }
+  }
+
+  function closeProcessTxnModal() {
+    document.getElementById("process-txn-modal").style.display = "none";
+  }
+
+  async function _runProcessTxn() {
+    const select = document.getElementById("ptx-entity");
+    const dateEl = document.getElementById("ptx-date");
+    const msg    = document.getElementById("ptx-msg");
+    const opt    = select.selectedOptions[0];
+    const entityId  = select.value;
+    const companyId = opt ? opt.dataset.companyId : "";
+    const date      = dateEl.value;
+
+    if (!entityId || !companyId) { msg.innerHTML = `<span class="text-red-500">Selecione uma entidade.</span>`; return; }
+    if (!date)                   { msg.innerHTML = `<span class="text-red-500">Selecione uma data.</span>`; return; }
+    if (!confirm(
+      `Processar transações da entidade "${opt.textContent}" em ${date}?\n\n` +
+      `Esta ação chama POST na API Beehus (heurística de identificação) e não é reversível por esta tela.`
+    )) return;
+
+    const btn = document.getElementById("ptx-run-btn");
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Processando…";
+    msg.textContent = "";
+
+    try {
+      const r = await api("POST", "/api/controlpanel/process-transactions", { entityId, companyId, date });
+      const data = r.body || {};
+      if (r.status === 401) {
+        msg.innerHTML = `<span class="text-red-500">Token Beehus não está carregado ou foi rejeitado. Clique no badge "Token" no topo da página.</span>`;
+        return;
+      }
+      if (!r.ok) {
+        msg.innerHTML = `<span class="text-red-500">Falha: ${_escHtml(data.error || `HTTP ${r.status}`)}</span>`;
+        return;
+      }
+      msg.innerHTML = `<span class="text-green-600">Processamento disparado com sucesso.</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  function _cancelProcessTxnAll() {
+    _ptxAllCancelled = true;
+  }
+
+  async function _runProcessTxnAll() {
+    if (_ptxAllRunning) return;
+    const date = document.getElementById("ptx-date").value;
+    if (!date) { alert("Selecione uma data primeiro."); return; }
+    if (!_ptxEntities.length) { alert("Nenhuma entidade visível pra processar."); return; }
+
+    const companyCount = new Set(_ptxEntities.map(e => e.companyId)).size;
+    if (!confirm(
+      `Processar transações de TODAS as ${_ptxEntities.length} entidade(s) visíveis ` +
+      `(${companyCount} empresa(s)) em ${date}, uma de cada vez (não em paralelo)?\n\n` +
+      `Pode levar um tempo — cada entidade só começa depois que a anterior termina. ` +
+      `Chama POST na API Beehus e não é reversível por esta tela. Dá pra cancelar no meio.`
+    )) return;
+
+    _ptxAllRunning   = true;
+    _ptxAllCancelled = false;
+    const runBtn       = document.getElementById("ptx-run-all-btn");
+    const cancelBtn    = document.getElementById("ptx-cancel-all-btn");
+    const runSingleBtn = document.getElementById("ptx-run-btn");
+    const progress      = document.getElementById("ptx-all-progress");
+    runBtn.disabled       = true;
+    runSingleBtn.disabled = true;
+    cancelBtn.style.display = "";
+
+    const total   = _ptxEntities.length;
+    const results = [];
+
+    const render = (currentLabel) => {
+      const okCount   = results.filter(r => r.ok).length;
+      const failCount = results.length - okCount;
+      const header = currentLabel
+        ? `<p class="text-gray-600 mb-2 flex items-center gap-1.5">
+             <svg class="w-3.5 h-3.5 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+             <span>Processando ${results.length + 1} de ${total}: ${_escHtml(currentLabel)}…</span>
+           </p>`
+        : `<p class="text-gray-700 mb-2 font-medium">
+             ${_ptxAllCancelled ? "Cancelado" : "Concluído"}: ${okCount} de ${results.length} com sucesso${failCount ? `, ${failCount} falha(s)` : ""}.
+           </p>`;
+      const list = results.slice().reverse().map(r => `
+        <div class="flex items-start gap-1.5 py-0.5 ${r.ok ? "text-green-600" : "text-red-500"}">
+          <span class="flex-shrink-0">${r.ok ? "✓" : "✗"}</span>
+          <span class="truncate">${_escHtml(r.label)}${!r.ok && r.error ? ` — ${_escHtml(r.error)}` : ""}</span>
+        </div>`).join("");
+      progress.innerHTML = header +
+        `<div class="max-h-40 overflow-y-auto border rounded p-2 bg-gray-50">${list || '<span class="text-gray-400">—</span>'}</div>`;
+    };
+
+    for (const entity of _ptxEntities) {
+      if (_ptxAllCancelled) break;
+      const label = `${entity.companyName} — ${entity.name}`;
+      render(label);
+      try {
+        const r = await api("POST", "/api/controlpanel/process-transactions", {
+          entityId: entity.id, companyId: entity.companyId, date,
+        });
+        const data = r.body || {};
+        results.push(r.ok ? { ok: true, label } : { ok: false, label, error: data.error || `HTTP ${r.status}` });
+      } catch (e) {
+        results.push({ ok: false, label, error: String(e) });
+      }
+    }
+    render(null);
+
+    runBtn.disabled       = false;
+    runSingleBtn.disabled = false;
+    cancelBtn.style.display = "none";
+    _ptxAllRunning = false;
+  }
+
+  // ── Processar Range de Datas ─────────────────────────────────────────────
+  // As pendências só saem do pre-processing depois que a posição do dia é
+  // processada — um dia ainda não tocado fica invisível pro resto da esteira
+  // (Mapeamento/Classificação/etc. não mostram nada pra ele). Este fluxo
+  // processa todas as empresas visíveis, dia por dia (dias úteis, sempre
+  // sequencial), reaproveitando a mesma rota de data única — nunca dispara
+  // pra empresa sem carteira pendente naquele dia específico.
+  let _prangeRunning   = false;
+  let _prangeCancelled = false;
+
+  function openProcessRangeModal() {
+    const modal = document.getElementById("process-range-modal");
+    const start = document.getElementById("prange-start");
+    const end   = document.getElementById("prange-end");
+    if (!_prangeRunning) {
+      document.getElementById("prange-progress").innerHTML = "";
+      end.value   = _currentDate || "";
+      start.value = _currentDate || "";
+    }
+    modal.style.display = "flex";
+  }
+
+  function closeProcessRangeModal() {
+    document.getElementById("process-range-modal").style.display = "none";
+  }
+
+  function _cancelProcessRange() {
+    _prangeCancelled = true;
+  }
+
+  // Dias úteis (seg-sex) entre as duas datas, inclusive, ordenados do mais
+  // antigo pro mais recente — mesma aproximação (sem feriados) que
+  // `get_biz_dates`/`biz_days_between` já usam no backend.
+  function _businessDaysInRange(startIso, endIso) {
+    const a = new Date(startIso + "T00:00:00");
+    const b = new Date(endIso + "T00:00:00");
+    if (isNaN(a) || isNaN(b)) return [];
+    let lo = a <= b ? a : b;
+    const hi = a <= b ? b : a;
+    const out = [];
+    for (let d = new Date(lo); d <= hi; d.setDate(d.getDate() + 1)) {
+      const wd = d.getDay();
+      if (wd !== 0 && wd !== 6) out.push(d.toISOString().slice(0, 10));
+    }
+    return out;
+  }
+
+  async function _runProcessRange() {
+    if (_prangeRunning) return;
+    const startIso = document.getElementById("prange-start").value;
+    const endIso   = document.getElementById("prange-end").value;
+    if (!startIso || !endIso) { alert("Selecione as duas datas."); return; }
+    const dates = _businessDaysInRange(startIso, endIso);
+    if (!dates.length) { alert("Nenhum dia útil nesse range."); return; }
+
+    if (!confirm(
+      `Processar todas as empresas visíveis em ${dates.length} dia(s) útil(eis), ` +
+      `de ${dates[0]} até ${dates[dates.length - 1]}, um dia de cada vez?\n\n` +
+      `Cada dia só dispara pra empresas com carteira pendente naquele dia. ` +
+      `Chama POST na API Beehus e não é reversível por esta tela. Dá pra cancelar no meio.`
+    )) return;
+
+    _prangeRunning   = true;
+    _prangeCancelled = false;
+    const runBtn    = document.getElementById("prange-run-btn");
+    const cancelBtn = document.getElementById("prange-cancel-btn");
+    const progress  = document.getElementById("prange-progress");
+    runBtn.disabled = true;
+    cancelBtn.style.display = "";
+
+    const total   = dates.length;
+    const results = [];
+
+    const render = (currentDate) => {
+      const header = currentDate
+        ? `<p class="text-gray-600 mb-2 flex items-center gap-1.5">
+             <svg class="w-3.5 h-3.5 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+             <span>Processando dia ${results.length + 1} de ${total}: ${currentDate}…</span>
+           </p>`
+        : `<p class="text-gray-700 mb-2 font-medium">${_prangeCancelled ? "Cancelado" : "Concluído"} — ${results.length} de ${total} dia(s).</p>`;
+      const list = results.slice().reverse().map(r => `
+        <div class="flex items-start gap-1.5 py-0.5 ${r.ok ? "text-gray-700" : "text-red-500"}">
+          <span class="flex-shrink-0">${r.ok ? "✓" : "✗"}</span>
+          <span class="truncate">${_escHtml(r.label)}</span>
+        </div>`).join("");
+      progress.innerHTML = header +
+        `<div class="max-h-48 overflow-y-auto border rounded p-2 bg-gray-50">${list || '<span class="text-gray-400">—</span>'}</div>`;
+    };
+
+    for (const date of dates) {
+      if (_prangeCancelled) break;
+      render(date);
+      try {
+        const r = await api("POST", "/api/controlpanel/process-all-wallets", { date });
+        const data = r.body || {};
+        if (!r.ok) {
+          results.push({ ok: false, label: `${date} — falha: ${_escHtml(data.error || `HTTP ${r.status}`)}` });
+          continue;
+        }
+        const entries  = Object.entries(data.results || {});
+        const okCount  = entries.filter(([, res]) => res && res.ok).length;
+        const failCount = entries.length - okCount;
+        const skipped  = data.skipped || 0;
+        const label = entries.length
+          ? `${date} — ${okCount} processada(s)${failCount ? `, ${failCount} falha(s)` : ""}${skipped ? `, ${skipped} sem pendência` : ""}`
+          : `${date} — nenhuma empresa com carteira pendente`;
+        results.push({ ok: failCount === 0, label });
+      } catch (e) {
+        results.push({ ok: false, label: `${date} — erro de rede: ${_escHtml(String(e))}` });
+      }
+    }
+    render(null);
+
+    runBtn.disabled = false;
+    cancelBtn.style.display = "none";
+    _prangeRunning = false;
+
+    // Se a data em foco no grid está dentro do range processado, atualiza a
+    // tela pra já mostrar o que apareceu.
+    if (_currentDate && dates.includes(_currentDate)) selectDate(_currentDate);
+  }
 
   // ── TXN → Identificar Transações drill-down ────────────────────────────
   // Opens the Identificar Transações tool INLINE (same iframe as the
@@ -1580,18 +2231,19 @@ try {
     };
     const [ok, ng] = labels[column] || ['OK', 'Pendente'];
     return done
-      ? `<span class="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">✓ ${_escHtml(ok)}</span>`
-      : `<span class="inline-block px-2 py-0.5 rounded text-[10px] bg-amber-50 text-amber-700">${_escHtml(ng)}</span>`;
+      ? `<span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">✓ ${_escHtml(ok)}</span>`
+      : `<span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700">${_escHtml(ng)}</span>`;
   }
 
   // Side flag shown only in the "Posições Processadas" drill-down: does
   // a `unprocessedSecurityPositions` doc exist for (walletId, date)?
   // Distinct colouring from `_cdStatusBadge` (sky vs green) so the two
   // columns don't read as redundant when the wallet is fully processed.
+  // Mesma família de pílula (rounded-full + font-medium) do `_cdStatusBadge`.
   function _cdUnprocessedBadge(has) {
     return has
-      ? '<span class="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-sky-100 text-sky-700">✓ Existe</span>'
-      : '<span class="inline-block px-2 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500">Não existe</span>';
+      ? '<span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-100 text-sky-700">✓ Existe</span>'
+      : '<span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">Não existe</span>';
   }
 
   // Per-wallet pending issue chips for the "Posições Processadas" view —
@@ -1609,7 +2261,7 @@ try {
       const t = String(it.type || '').replace(/'/g, "\\'");
       return `<button type="button"
                 onclick="_cdOpenIssueFromCell('${t}')"
-                class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 cursor-pointer"
+                class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 cursor-pointer transition-colors"
                 title="Abrir lista de '${_escHtml(it.label)}' para esta empresa+data">${lbl}</button>`;
     }).join(' ');
   }
@@ -1624,6 +2276,52 @@ try {
     const cname = _cellDetailData.companyName;
     closeCellDetail();
     openModal(cid, cname, type);
+  }
+
+  // Publica o agrupamento direto do drill-down de "Posições Processadas" —
+  // atalho pra quando o operador já vê ali que todas as carteiras do
+  // agrupamento foram processadas (não espera o NAV Grouping/Published já
+  // ter sido calculado; se ainda não calculou, o upstream retorna erro claro
+  // em vez de publicar algo incompleto).
+  async function _cdPublishGrouping(groupingId, groupingName, btn) {
+    const data = _cellDetailData;
+    if (!data) return;
+    if (!confirm(
+      `Publicar o agrupamento "${groupingName}" (${data.companyName} · ${data.date})?\n\n` +
+      `Esta ação chama PATCH na API Beehus e não é reversível por esta tela.`
+    )) return;
+
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = "Publicando…";
+    try {
+      const r = await api("POST", "/api/beehus/nav/publish", {
+        companyId: data.companyId, positionDate: data.date, groupingIds: [groupingId],
+      });
+      if (r.status === 401) {
+        alert(
+          "Token Beehus não está carregado ou foi rejeitado.\n" +
+          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
+        );
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        return;
+      }
+      if (!r.ok) {
+        const body = r.body || {};
+        alert(`Falha ao publicar: ${body.error || `HTTP ${r.status}`}`);
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        return;
+      }
+      btn.textContent = "Publicado ✓";
+      btn.classList.remove("ec-btn-primary");
+      btn.classList.add("bg-green-100", "text-green-700");
+    } catch (e) {
+      alert("Erro de rede: " + e);
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
   }
 
   function renderCellDetail() {
@@ -1711,7 +2409,7 @@ try {
         // visually balanced.
         const issuesCell = (w.hasUnprocessed && Array.isArray(w.issues) && w.issues.length)
           ? `<div class="flex flex-wrap gap-1 justify-start">${_cdIssuesChips(w.issues)}</div>`
-          : '<span class="text-gray-300">—</span>';
+          : '<span class="text-gray-400">—</span>';
         return `
           <tr class="border-b border-gray-50">
             <td class="px-3 py-1.5 text-gray-700 truncate" title="${_escHtml(w.walletId)}">${_escHtml(w.walletName)}</td>
@@ -1724,13 +2422,19 @@ try {
       const groupingsHtml = filteredGroupings.map(g => {
         const rows = g.wallets.map(_walletRow).join('');
         const empty = g.wallets.length === 0
-          ? `<tr><td colspan="${colCount}" class="px-3 py-1.5 text-center text-[10px] text-gray-300 italic">— sem wallets correspondentes ao filtro —</td></tr>`
+          ? `<tr><td colspan="${colCount}" class="px-3 py-1.5 text-center text-[10px] text-gray-400 italic">— sem wallets correspondentes ao filtro —</td></tr>`
           : '';
+        const canPublish = g.doneCount > 0 && g.doneCount === g.totalCount;
         return `
           <div class="mb-4">
-            <div class="flex items-center justify-between px-3 py-1.5 bg-gray-100 rounded-t">
+            <div class="flex items-center justify-between gap-2 px-3 py-1.5 bg-gray-100 rounded-t">
               <span class="text-xs font-semibold text-gray-700 truncate" title="${_escHtml(g.groupingId)}">${_escHtml(g.groupingName)}</span>
-              <span class="text-[10px] text-gray-500 whitespace-nowrap">${g.doneCount}/${g.totalCount}</span>
+              <span class="flex items-center gap-2 flex-shrink-0">
+                ${canPublish ? `
+                <button type="button" onclick="_cdPublishGrouping('${_escJs(g.groupingId)}','${_escJs(g.groupingName)}',this)"
+                        class="ec-btn ec-btn-primary text-[10px] px-2 py-0.5">Publicar</button>` : ``}
+                <span class="text-[10px] text-gray-500 whitespace-nowrap">${g.doneCount}/${g.totalCount}</span>
+              </span>
             </div>
             <table class="w-full text-xs border-collapse border border-gray-100 rounded-b">
               ${theadHtml}
@@ -1878,18 +2582,30 @@ try {
     return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
+  // Só populado quando o modal é aberto pelo CABEÇALHO da coluna (todas as
+  // empresas de uma vez) — mapeia walletId -> {id, name} da empresa, pra
+  // _applyMappingDirect saber em quais empresas aplicar cada mapeamento.
+  let _companyByWallet = {};
+  let _crossCompanyMode = false;
+
   function _groupBySecurity(issues) {
     const map = {};
+    _companyByWallet = {};
     issues.forEach(i => {
       const key = i.unprocessedSecurityId || i.externalId || "(sem id)";
-      if (!map[key]) map[key] = { externalId: i.externalId, unprocessedSecurityId: i.unprocessedSecurityId, wallets: {} };
+      if (!map[key]) map[key] = { externalId: i.externalId, unprocessedSecurityId: i.unprocessedSecurityId, wallets: {}, companies: {} };
       const wid = i.walletId;
       if (wid && !map[key].wallets[wid]) map[key].wallets[wid] = i.walletName || "";
+      if (wid && i.companyId) {
+        _companyByWallet[wid] = { id: i.companyId, name: i.company || i.companyId };
+        if (!map[key].companies[i.companyId]) map[key].companies[i.companyId] = i.company || i.companyId;
+      }
     });
     return Object.values(map)
       .map(r => {
         const walletList = Object.entries(r.wallets).map(([id, name]) => ({ id, name }));
-        return { externalId: r.externalId, unprocessedSecurityId: r.unprocessedSecurityId, walletCount: walletList.length, wallets: walletList };
+        const companyList = Object.entries(r.companies).map(([id, name]) => ({ id, name }));
+        return { externalId: r.externalId, unprocessedSecurityId: r.unprocessedSecurityId, walletCount: walletList.length, wallets: walletList, companies: companyList };
       })
       .sort((a, b) => b.walletCount - a.walletCount);
   }
@@ -2026,7 +2742,7 @@ try {
           : "—";
         return `<tr class="border-t border-gray-100 hover:bg-blue-50 cursor-pointer"
                 onclick="_selectSecurityByIndex(${i})">
-          <td class="px-3 py-2 text-gray-700 text-[11px]">${_escHtml(s.beehusName) || '<span class="text-gray-300">— sem cadastro</span>'}</td>
+          <td class="px-3 py-2 text-gray-700 text-[11px]">${_escHtml(s.beehusName) || '<span class="text-gray-400">— sem cadastro</span>'}</td>
           <td class="px-3 py-2 font-mono text-[10px] text-gray-500">${_escHtml(s.mainId)}</td>
           <td class="px-3 py-2 text-[10px] text-gray-500">${_escHtml(s.securityType)}</td>
           <td class="px-3 py-2 text-[10px] text-gray-500 truncate max-w-xs" title="${_escHtml(wallets)}">${_escHtml(wallets)}</td>
@@ -2225,7 +2941,7 @@ try {
 
       const cells = tr.querySelectorAll("td");
       // cells: 0=cb, 1=uid, 2=type, 3=conf, 4=secEnc, 5=mainId, 6=indexer, 7=match, 8=cart, 9=pu, 10=preço
-      const editIcon = `<svg class="w-3 h-3 inline-block text-gray-300 group-hover:text-blue-500 ml-1 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>`;
+      const editIcon = `<svg class="w-3 h-3 inline-block text-gray-400 group-hover:text-blue-500 ml-1 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>`;
       if (cells[4]) {
         cells[4].className = "px-2 py-1.5 truncate cursor-pointer group hover:bg-blue-50";
         cells[4].title = sec.beehusName + " — clique para alterar";
@@ -2241,7 +2957,7 @@ try {
         cells[6].title = sec.indexer || "";
         cells[6].innerHTML = sec.indexer
           ? `<span class="text-[10px] text-gray-600">${_escHtml(sec.indexer)}</span>`
-          : `<span class="text-gray-300 text-[10px]">—</span>`;
+          : `<span class="text-gray-400 text-[10px]">—</span>`;
       }
       if (cells[7]) {
         cells[7].innerHTML = `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold bg-purple-100 text-purple-700" title="Seleção manual">manual</span>`;
@@ -2250,7 +2966,7 @@ try {
       const cb = cells[0]?.querySelector("input[type=checkbox]");
       if (cb) { cb.disabled = false; cb.checked = true; }
       // Reset price cell until we fetch it
-      if (cells[10]) cells[10].innerHTML = `<span class="text-gray-300">—</span>`;
+      if (cells[10]) cells[10].innerHTML = `<span class="text-gray-400">—</span>`;
     }
 
     _closeSecuritySearch();
@@ -2504,18 +3220,35 @@ try {
     _visibleCheckedMappingRows().forEach(tr => {
       const uid = tr.dataset.uid;
       const secId = tr.dataset.securityId;
-      if (uid && secId) checked.push({ from: uid, to: secId });
+      if (!uid || !secId) return;
+      if (_crossCompanyMode) {
+        // Empresas afetadas = empresas das carteiras que têm esse uid pendente
+        // (populado em _companyByWallet quando o modal abriu pelo cabeçalho).
+        const wallets = (_walletsByUid[uid] || []);
+        const companyIds = [...new Set(
+          wallets.map(w => _companyByWallet[w.id]?.id).filter(Boolean)
+        )];
+        if (companyIds.length) checked.push({ from: uid, to: secId, companyIds });
+      } else {
+        checked.push({ from: uid, to: secId });
+      }
     });
 
     if (!checked.length) { alert("Nenhum item selecionado."); return; }
-    if (!_currentCompanyId) { alert("Empresa não identificada."); return; }
+    if (!_currentCompanyId && !_crossCompanyMode) { alert("Empresa não identificada."); return; }
 
+    const totalCompanies = _crossCompanyMode
+      ? new Set(checked.flatMap(m => m.companyIds)).size
+      : 1;
     const preview = checked.slice(0, 5)
       .map(m => `  • ${m.from}\n      → ${m.to}`).join("\n");
     const more = checked.length > 5 ? `\n  … +${checked.length - 5} outros` : "";
+    const scopeMsg = _crossCompanyMode
+      ? `Isso aplica em ${totalCompanies} empresa(s) de uma vez (cada mapeamento vale para todas as empresas onde esse ativo apareceu).\n\n`
+      : "";
     if (!confirm(
       `Aplicar ${checked.length} mapeamento(s) direto no sistema?\n\n` +
-      `${preview}${more}\n\n` +
+      `${scopeMsg}${preview}${more}\n\n` +
       `Esta ação chama PATCH na API Beehus e não é reversível por esta tela.`
     )) return;
 
@@ -2526,10 +3259,12 @@ try {
 
     let applied = false;
     try {
-      const r = await api("POST", "/api/controlpanel/apply-mapping", {
-        companyId: _currentCompanyId,
-        mappingsToInclude: checked,
-      });
+      const r = _crossCompanyMode
+        ? await api("POST", "/api/controlpanel/apply-mapping-all", { mappings: checked })
+        : await api("POST", "/api/controlpanel/apply-mapping", {
+            companyId: _currentCompanyId,
+            mappingsToInclude: checked,
+          });
       const data = r.body || {};
       if (r.status === 401) {
         alert(
@@ -2544,7 +3279,19 @@ try {
         return;
       }
       applied = true;
-      btn.innerHTML = `&#10003; ${data.applied || checked.length} mapeados`;
+      if (_crossCompanyMode) {
+        const results = data.results || {};
+        const names = data.companyNames || {};
+        const okCids  = Object.entries(results).filter(([, v]) => v.ok);
+        const failCids = Object.entries(results).filter(([, v]) => !v.ok);
+        btn.innerHTML = `&#10003; ${okCids.length}/${okCids.length + failCids.length} empresas mapeadas`;
+        if (failCids.length) {
+          alert(`Falhou em ${failCids.length} empresa(s):\n` +
+            failCids.map(([cid, v]) => `  • ${names[cid] || cid}: ${v.error || "erro"}`).join("\n"));
+        }
+      } else {
+        btn.innerHTML = `&#10003; ${data.applied || checked.length} mapeados`;
+      }
       // Uncheck applied rows so they can't be re-applied accidentally.
       document.querySelectorAll("#modal-tbody input[type=checkbox]:checked").forEach(cb => { cb.checked = false; });
       _updateSelectionCount?.();  // zera o badge "selecionados" imediatamente
@@ -2561,7 +3308,7 @@ try {
   }
 
   function _fmtNum(v) {
-    if (v == null) return `<span class="text-gray-300">—</span>`;
+    if (v == null) return `<span class="text-gray-400">—</span>`;
     return `<span class="font-mono text-[10px] text-gray-600">${Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 6})}</span>`;
   }
 
@@ -3687,7 +4434,7 @@ try {
       const label  = (_secTypeFields[t] && _secTypeFields[t].label) || t;
       const active = t === _regActiveTab;
       if (!count) {
-        return `<span class="px-2.5 py-1 text-[11px] rounded-t text-gray-300 cursor-default"
+        return `<span class="px-2.5 py-1 text-[11px] rounded-t text-gray-400 cursor-default"
           title="Sem ativos deste tipo">${_escHtml(label)} (0)</span>`;
       }
       const cls = active
@@ -3998,6 +4745,27 @@ try {
     URL.revokeObjectURL(url);
   }
 
+  // Colunas Carteira/Empresa (só no modo cross-empresa) — substituem PU/Preço,
+  // que ficam sempre vazios ali (o /match roda sem companyId quando cruza
+  // empresas, então não há preço/PU pra resolver). Uma linha pode ter várias
+  // carteiras/empresas (mesmo ativo pendente em mais de uma) — mostra o nome
+  // quando é só uma, ou "N empresas"/"N carteiras" quando é mais.
+  function _walletCompanyCells(r) {
+    const wallets = r.wallets || [];
+    const companies = r.companies || [];
+    const walletCell = wallets.length === 1
+      ? `<span class="text-[10px] text-gray-600 truncate" title="${_escHtml(wallets[0].name)}">${_escHtml(wallets[0].name || wallets[0].id)}</span>`
+      : `<span class="text-[10px] text-gray-500">${wallets.length} carteiras</span>`;
+    const companyCell = companies.length === 1
+      ? `<span class="text-[10px] text-gray-700 truncate" title="${_escHtml(companies[0].name)}">${_escHtml(companies[0].name)}</span>`
+      : companies.length > 1
+        ? `<span class="text-[10px] text-gray-700" title="${_escHtml(companies.map(c => c.name).join(', '))}">${companies.length} empresas</span>`
+        : `<span class="text-gray-400 text-[10px]">—</span>`;
+    return `
+      <td class="px-2 py-1.5 truncate">${companyCell}</td>
+      <td class="px-2 py-1.5 truncate">${walletCell}</td>`;
+  }
+
   // ── Render mapeamento ─────────────────────────────────────────────────────
   // Single row renderer used both for the immediate skeleton (candidate=null,
   // type="") and for the post-match render. Keeping one source of truth means
@@ -4098,27 +4866,27 @@ try {
     const tcPct = tc ? (tc * 100).toFixed(0) + "%" : "—";
     const tcBadge = tc
       ? `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold ${_confCls(tc)}">${tcPct}</span>`
-      : `<span class="text-gray-300">—</span>`;
+      : `<span class="text-gray-400">—</span>`;
 
     const c = r.candidate;
     const hasMatch = c && c.score > 0;
     const secId = c?.securityId || "";
     let secCell, mainIdCell, indexerCell, scoreBadge;
-    const editIcon = `<svg class="w-3 h-3 inline-block text-gray-300 group-hover:text-blue-500 ml-1 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>`;
+    const editIcon = `<svg class="w-3 h-3 inline-block text-gray-400 group-hover:text-blue-500 ml-1 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>`;
     if (c) {
       secCell = `<span class="text-[10px] text-gray-700 truncate">${_escHtml(c.beehusName)}</span>${editIcon}`;
       mainIdCell = `<span class="font-mono text-[10px] text-gray-500">${_escHtml(c.mainId)}</span>`;
       indexerCell = c.indexer
         ? `<span class="text-[10px] text-gray-600">${_escHtml(c.indexer)}</span>`
-        : `<span class="text-gray-300 text-[10px]">—</span>`;
+        : `<span class="text-gray-400 text-[10px]">—</span>`;
       scoreBadge = c.score === "manual"
         ? `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold bg-purple-100 text-purple-700" title="Seleção manual">manual</span>`
         : `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold ${_matchScoreCls(c.score)}" style="cursor:help" title="${_escHtml(_matchScoreTooltip(c))}">${Math.min(100, c.score)}%</span>`;
     } else {
-      secCell = `<span class="text-gray-300 text-[10px]">— selecionar</span>${editIcon}`;
-      mainIdCell = `<span class="text-gray-300 text-[10px]">—</span>`;
-      indexerCell = `<span class="text-gray-300 text-[10px]">—</span>`;
-      scoreBadge = `<span class="text-gray-300">—</span>`;
+      secCell = `<span class="text-gray-400 text-[10px]">— selecionar</span>${editIcon}`;
+      mainIdCell = `<span class="text-gray-400 text-[10px]">—</span>`;
+      indexerCell = `<span class="text-gray-400 text-[10px]">—</span>`;
+      scoreBadge = `<span class="text-gray-400">—</span>`;
     }
 
     // All checkboxes are always clickable — a checked row with no match
@@ -4137,8 +4905,9 @@ try {
       <td class="px-1 py-1.5 text-center">
         <input type="checkbox" ${cbChecked} onchange="_updateSelectionCount()" class="rounded" />
       </td>
-      <td class="px-2 py-1.5 text-gray-400 font-mono text-[10px] truncate" title="${_escHtml(_uidTooltip(r))}">${_escHtml(r.unprocessedSecurityId)}</td>
-      <td class="px-2 py-1.5 clf-type">${r.type ? _typeSelect(r.unprocessedSecurityId, r.type) : '<span class="text-gray-300">—</span>'}</td>
+      ${_crossCompanyMode ? _walletCompanyCells(r) : ``}
+      <td class="px-2 py-1.5 text-gray-400 font-mono text-[10px] truncate" title="${_escHtml(r.unprocessedSecurityId)}">${_escHtml(r.unprocessedSecurityId)}</td>
+      <td class="px-2 py-1.5 clf-type">${r.type ? _typeSelect(r.unprocessedSecurityId, r.type) : '<span class="text-gray-400">—</span>'}</td>
       <td class="px-1 py-1.5 clf-conf text-center">${tcBadge}</td>
       <td class="px-2 py-1.5 truncate cursor-pointer group hover:bg-blue-50"
           title="${c ? _escHtml(c.beehusName) + ' — clique para alterar' : 'Clique para selecionar um security'}"
@@ -4150,8 +4919,9 @@ try {
         <button onclick="_openWallets('${_escHtml(r.unprocessedSecurityId).replace(/'/g,"\\'")}')"
           class="inline-block px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-[10px] font-semibold hover:bg-blue-100 hover:text-blue-700 cursor-pointer" title="Ver carteiras">${r.walletCount}</button>
       </td>
+      ${_crossCompanyMode ? `` : `
       <td class="px-1 py-1.5 text-right whitespace-nowrap tabular-nums">${_fmtNum(r.pu)}</td>
-      <td class="px-1 py-1.5 text-right whitespace-nowrap tabular-nums" title="${lpTitle}">${_fmtNum(lp?.value)}</td>
+      <td class="px-1 py-1.5 text-right whitespace-nowrap tabular-nums" title="${lpTitle}">${_fmtNum(lp?.value)}</td>`}
     </tr>`;
   }
 
@@ -4168,98 +4938,6 @@ try {
     card.appendChild(ov);
   }
 
-  // Shared fetch + result-merge used by both the initial load and complement reprocess.
-  function _runMatchFetch(items, extraBody) {
-    const tbody = document.getElementById("modal-tbody");
-    const msg   = document.getElementById("modal-msg");
-    _mappingLoader(true);
-    const body = Object.assign(
-      { items, companyId: _currentCompanyId, date: _currentDate },
-      extraBody
-    );
-    fetch("/api/controlpanel/match", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    }).then(r => r.json()).then(({ results }) => {
-      const byId = {};
-      (results || []).forEach(r => byId[r.unprocessedId] = r);
-
-      // Merge match results into existing _mappingRows. A row whose
-      // candidate.score === "manual" was picked by the operator while the
-      // matcher was still running — preserve that pick instead of letting
-      // the server suggestion overwrite it.
-      _mappingRows.forEach(row => {
-        const m = byId[row.unprocessedSecurityId];
-        if (!m) return;
-        row.type           = m.predicted_type || "";
-        row.typeConfidence = m.type_confidence || 0;
-        row.pu             = m.pu ?? null;
-        row.extracted      = m.extracted || {};
-        const isManual = row.candidate && row.candidate.score === "manual";
-        if (!isManual) {
-          row.candidate = m.candidate || null;
-          row.lastPrice = m.lastPrice ?? null;
-        }
-      });
-
-      // Manual picks sort to the top.
-      _mappingRows.sort((a, b) => {
-        const sa = a.candidate?.score === "manual" ? Infinity : (a.candidate?.score || 0);
-        const sb = b.candidate?.score === "manual" ? Infinity : (b.candidate?.score || 0);
-        return sb - sa;
-      });
-
-      // Insert or refresh the filter bar above the table.
-      const tableParent = tbody.closest(".overflow-y-auto");
-      if (tableParent) {
-        const existing = document.getElementById("mapping-filters");
-        if (!existing) {
-          const bar = document.createElement("div");
-          bar.id = "mapping-filters";
-          bar.innerHTML = _buildFilterBar(_mappingRows);
-          tableParent.parentElement.insertBefore(bar, tableParent);
-        } else {
-          existing.innerHTML = _buildFilterBar(_mappingRows);
-        }
-      }
-
-      tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
-      if (msg) msg.style.display = "none";
-      _mappingLoader(false);
-      _updateSelectionCount();
-
-      // Fallback: fetch price individually for candidates whose price was not
-      // resolved in the batch (mirrors the manual-selection flow exactly).
-      const _lpDateParam = _currentDate ? `&date=${encodeURIComponent(_currentDate)}` : "";
-      _mappingRows.forEach(row => {
-        if (!row.candidate || row.candidate.score === "manual") return;
-        if (row.lastPrice && row.lastPrice.value != null) return;
-        const sid = row.candidate.securityId;
-        if (!sid) return;
-        fetch(`/api/controlpanel/last-price?securityId=${encodeURIComponent(sid)}${_lpDateParam}`)
-          .then(r => r.json())
-          .then(({ lastPrice }) => {
-            if (!lastPrice || lastPrice.value == null) return;
-            row.lastPrice = lastPrice;
-            const tr2 = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(row.unprocessedSecurityId)}"]`);
-            if (!tr2) return;
-            const cells2 = tr2.querySelectorAll("td");
-            if (cells2[10]) {
-              cells2[10].title = lastPrice.date || "";
-              cells2[10].innerHTML = _fmtNum(lastPrice.value);
-            }
-          })
-          .catch(() => {});
-      });
-    }).catch(err => {
-      console.error("match error:", err);
-      if (msg) msg.style.display = "none";
-      // Drop the loader; skeleton rows stay so the operator can still pick manually.
-      _mappingLoader(false);
-    });
-  }
-
   function _renderMapeamento(issues) {
     const thead = document.getElementById("modal-thead");
     const tbody = document.getElementById("modal-tbody");
@@ -4270,23 +4948,29 @@ try {
     thead.parentElement.style.tableLayout = "fixed";
     thead.innerHTML = `<tr>
       <th class="px-1 py-2 text-center" style="width:3%"><input type="checkbox" onchange="_selectAll(this.checked)" title="Selecionar todos" /></th>
-      <th class="px-2 py-2 text-left" style="width:19%">Unprocessed Security</th>
-      <th class="px-2 py-2 text-left" style="width:11%">Tipo</th>
-      <th class="px-1 py-2 text-center" style="width:6%">Conf.</th>
-      <th class="px-2 py-2 text-left" style="width:16%">Security Encontrado</th>
-      <th class="px-2 py-2 text-left" style="width:11%">mainId</th>
-      <th class="px-2 py-2 text-left" style="width:7%">Indexador</th>
-      <th class="px-1 py-2 text-center" style="width:6%">Match</th>
+      ${_crossCompanyMode ? `
+      <th class="px-2 py-2 text-left" style="width:9%">Empresa</th>
+      <th class="px-2 py-2 text-left" style="width:9%">Carteira</th>` : ``}
+      <th class="px-2 py-2 text-left" style="width:${_crossCompanyMode ? 15 : 19}%">Unprocessed Security</th>
+      <th class="px-2 py-2 text-left" style="width:${_crossCompanyMode ? 9 : 11}%">Tipo</th>
+      <th class="px-1 py-2 text-center" style="width:${_crossCompanyMode ? 5 : 6}%">Conf.</th>
+      <th class="px-2 py-2 text-left" style="width:${_crossCompanyMode ? 13 : 16}%">Security Encontrado</th>
+      <th class="px-2 py-2 text-left" style="width:${_crossCompanyMode ? 9 : 11}%">mainId</th>
+      <th class="px-2 py-2 text-left" style="width:${_crossCompanyMode ? 5 : 7}%">Indexador</th>
+      <th class="px-1 py-2 text-center" style="width:${_crossCompanyMode ? 5 : 6}%">Match</th>
       <th class="px-1 py-2 text-center" style="width:5%">Cart.</th>
+      ${_crossCompanyMode ? `` : `
       <th class="px-1 py-2 text-right" style="width:8%">PU</th>
-      <th class="px-1 py-2 text-right" style="width:8%">Preço</th>
+      <th class="px-1 py-2 text-right" style="width:8%">Preço</th>`}
     </tr>`;
     tbody.innerHTML = "";
     msg.innerHTML = "";
     msg.style.display = "none";
 
-    // Remove old filter bar if present
+    // Remove old filter bar / other renderers' toolbars if present
     document.getElementById("mapping-filters")?.remove();
+    document.getElementById("c3-toolbar")?.remove();
+    document.getElementById("class-toolbar")?.remove();
 
     const grouped = _groupBySecurity(issues);
     const ids = grouped.map(r => r.unprocessedSecurityId).filter(Boolean);
@@ -4317,31 +5001,122 @@ try {
 
     // Single full-modal spinner while the matcher identifies all rows.
     msg.style.display = "none";
+    _mappingLoader(true);
 
     const items = ids.map(id => ({ unprocessedId: id }));
-    _runMatchFetch(items, {});
+
+    fetch("/api/controlpanel/match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, companyId: _currentCompanyId, date: _currentDate })
+    }).then(r => r.json()).then(({ results }) => {
+      const byId = {};
+      (results || []).forEach(r => byId[r.unprocessedId] = r);
+
+      // Merge match results into existing _mappingRows. A row whose
+      // candidate.score === "manual" was picked by the operator while the
+      // matcher was still running — preserve that pick instead of letting
+      // the server suggestion overwrite it.
+      _mappingRows.forEach(row => {
+        const m = byId[row.unprocessedSecurityId];
+        if (!m) return;
+        row.type           = m.predicted_type || "";
+        row.typeConfidence = m.type_confidence || 0;
+        row.pu             = m.pu ?? null;
+        row.extracted      = m.extracted || {};   // isin/ticker/taxId/type for the asset-info line
+        const isManual = row.candidate && row.candidate.score === "manual";
+        if (!isManual) {
+          row.candidate = m.candidate || null;
+          row.lastPrice = m.lastPrice ?? null;
+        }
+      });
+
+      // Manual picks sort to the top — they have no numeric score to
+      // compare against the matcher's 0–100 range.
+      _mappingRows.sort((a, b) => {
+        const sa = a.candidate?.score === "manual" ? Infinity : (a.candidate?.score || 0);
+        const sb = b.candidate?.score === "manual" ? Infinity : (b.candidate?.score || 0);
+        return sb - sa;
+      });
+
+      // Insert filter bar above table (depends on the set of types the
+      // matcher returned, so it has to wait until now).
+      const tableParent = tbody.closest(".overflow-y-auto");
+      if (tableParent) {
+        const bar = document.createElement("div");
+        bar.id = "mapping-filters";
+        bar.innerHTML = _buildFilterBar(_mappingRows);
+        tableParent.parentElement.insertBefore(bar, tableParent);
+      }
+
+      tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
+      msg.style.display = "none";
+      _mappingLoader(false);
+      _updateSelectionCount();
+
+      // Fallback: fetch price individually for candidates whose price was not
+      // resolved in the batch (mirrors the manual-selection flow exactly).
+      const _lpDateParam = _currentDate ? `&date=${encodeURIComponent(_currentDate)}` : "";
+      _mappingRows.forEach(row => {
+        if (!row.candidate || row.candidate.score === "manual") return;
+        if (row.lastPrice && row.lastPrice.value != null) return;
+        const sid = row.candidate.securityId;
+        if (!sid) return;
+        fetch(`/api/controlpanel/last-price?securityId=${encodeURIComponent(sid)}${_lpDateParam}`)
+          .then(r => r.json())
+          .then(({ lastPrice }) => {
+            if (!lastPrice || lastPrice.value == null) return;
+            row.lastPrice = lastPrice;
+            const tr2 = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(row.unprocessedSecurityId)}"]`);
+            if (!tr2) return;
+            const cells2 = tr2.querySelectorAll("td");
+            if (cells2[10]) {
+              cells2[10].title = lastPrice.date || "";
+              cells2[10].innerHTML = _fmtNum(lastPrice.value);
+            }
+          })
+          .catch(() => {});
+      });
+    }).catch(err => {
+      console.error("match error:", err);
+      msg.style.display = "none";
+      // Drop the loader so a failed matcher doesn't leave the modal spinning;
+      // skeleton rows stay so the operator can still pick a security manually.
+      _mappingLoader(false);
+    });
   }
 
   function _renderDefault(issues) {
+    document.getElementById("mapping-filters")?.remove();
+    document.getElementById("c3-toolbar")?.remove();
+    document.getElementById("class-toolbar")?.remove();
     const thead0 = document.getElementById("modal-thead");
     // Reset to auto layout (the Mapeamento render switches it to fixed).
     thead0.parentElement.style.tableLayout = "";
+    const cross = _crossCompanyMode;
+    const showPrice = _currentType === "security_missing_history_price";
     thead0.innerHTML = `<tr>
+      ${cross ? `<th class="px-3 py-2 text-left">Empresa</th>` : ``}
       <th class="px-3 py-2 text-left">External ID</th>
       <th class="px-3 py-2 text-left">Carteira</th>
       <th class="px-3 py-2 text-left">Security</th>
+      ${showPrice ? `<th class="px-3 py-2 text-left">BeehusName</th><th class="px-3 py-2 text-left">Tipo de Preço</th>` : ``}
       <th class="px-3 py-2 text-left">Unprocessed Security</th>
       <th class="px-3 py-2 text-left">Criado em</th>
       <th class="px-3 py-2"></th>
     </tr>`;
     document.getElementById("modal-tbody").innerHTML = issues.map(i =>
       `<tr class="border-t border-gray-100 hover:bg-gray-50">
+        ${cross ? `<td class="px-3 py-2 text-gray-700 text-[10px] truncate">${_escHtml(i.company || '')}</td>` : ``}
         <td class="px-3 py-2 text-gray-600 font-mono text-[10px]">${_escHtml(i.externalId)}</td>
         <td class="px-3 py-2 text-gray-700 text-[10px]">
           ${_escHtml(i.walletName || '')}
-          ${i.walletId ? `<span class="block text-gray-300 font-mono">${_escHtml(i.walletId)}</span>` : ''}
+          ${i.walletId ? `<span class="block text-gray-400 font-mono">${_escHtml(i.walletId)}</span>` : ''}
         </td>
         <td class="px-3 py-2 text-gray-400 font-mono text-[10px]">${_escHtml(i.securityId)}</td>
+        ${showPrice ? `
+        <td class="px-3 py-2 text-gray-700 text-[10px]">${i.beehusName ? _escHtml(i.beehusName) : '—'}</td>
+        <td class="px-3 py-2 text-gray-700 text-[10px] font-mono">${i.priceType ? _escHtml(i.priceType) : '—'}</td>` : ``}
         <td class="px-3 py-2 text-gray-400 font-mono text-[10px]">${_escHtml(i.unprocessedSecurityId)}</td>
         <td class="px-3 py-2 text-gray-400 whitespace-nowrap">${_escHtml(i.createdAt)}</td>
         <td class="px-3 py-2"></td>
@@ -4349,35 +5124,176 @@ try {
   }
 
   // ── Classificação (security_missing_classification) ────────────────────────
-  // Renderer próprio: troca External ID/Carteira por beehusName + mainId do
-  // cadastro em db.securities (preenchidos pelo backend a partir do
-  // securityId do issue).
+  // Cada empresa tem sua PRÓPRIA árvore de categorias (Renda Fixa > Caixa,
+  // etc — tela Parceiros > Classificação de Ativos). Não existe (ainda) rota
+  // de escrita conhecida pra vincular um ativo a um nó dessa árvore, então:
+  // o operador seleciona a categoria por linha aqui e "Gerar JSON
+  // Classificação" salva um arquivo em arquivos externos/ pra aplicar
+  // manualmente — mesma ideia do "Gerar JSON Mapeamento".
 
-  function _renderClassificacao(issues) {
-    document.getElementById("modal-thead").innerHTML = `<tr>
+  let _classificacaoRows = [];
+  let _companyVariablesCache = {};  // companyId -> [{id, label}]
+
+  function _dedupeClassificacao(issues) {
+    const map = {};
+    issues.forEach(i => {
+      const cid = i.companyId || _currentCompanyId || "";
+      const key = `${cid}::${i.securityId || i.externalId || ""}`;
+      if (!map[key]) {
+        map[key] = {
+          companyId: cid,
+          company: i.company || "",
+          securityId: i.securityId || "",
+          beehusName: i.beehusName || "",
+          mainId: i.mainId || "",
+          unprocessedId: i.unprocessedSecurityId || "",
+          wallets: {},
+        };
+      }
+      if (i.walletId) map[key].wallets[i.walletId] = i.walletName || "";
+    });
+    return Object.values(map).map(r => ({ ...r, walletNames: Object.values(r.wallets) }));
+  }
+
+  async function _loadCompanyVariables(companyId) {
+    if (!companyId) return [];
+    if (_companyVariablesCache[companyId]) return _companyVariablesCache[companyId];
+    try {
+      const res = await fetch(`/api/controlpanel/company-variables?companyId=${encodeURIComponent(companyId)}`);
+      const data = await res.json();
+      _companyVariablesCache[companyId] = data.nodes || [];
+    } catch (e) {
+      _companyVariablesCache[companyId] = [];
+    }
+    return _companyVariablesCache[companyId];
+  }
+
+  async function _renderClassificacao(issues) {
+    const thead = document.getElementById("modal-thead");
+    thead.parentElement.style.tableLayout = "";
+    const cross = _crossCompanyMode;
+    thead.innerHTML = `<tr>
+      <th class="px-2 py-2 text-center w-8"><input type="checkbox" onchange="_classSelectAll(this.checked)" title="Selecionar todos" /></th>
+      ${cross ? `<th class="px-3 py-2 text-left">Empresa</th><th class="px-3 py-2 text-left">Carteira</th>` : ``}
       <th class="px-3 py-2 text-left">beehusName</th>
       <th class="px-3 py-2 text-left">mainId</th>
-      <th class="px-3 py-2 text-left">Security</th>
-      <th class="px-3 py-2 text-left">Criado em</th>
-      <th class="px-3 py-2"></th>
+      <th class="px-3 py-2 text-left">Categoria</th>
     </tr>`;
-    document.getElementById("modal-tbody").innerHTML = issues.map(i =>
-      `<tr class="border-t border-gray-100 hover:bg-gray-50">
-        <td class="px-3 py-2 text-[10px] text-gray-700">${i.beehusName ? _escHtml(i.beehusName) : '—'}</td>
-        <td class="px-3 py-2 font-mono text-[10px] text-gray-500">${i.mainId ? _escHtml(i.mainId) : '—'}</td>
-        <td class="px-3 py-2 text-gray-400 font-mono text-[10px]">${_escHtml(i.securityId)}</td>
-        <td class="px-3 py-2 text-gray-400 whitespace-nowrap">${_escHtml(i.createdAt)}</td>
-        <td class="px-3 py-2"></td>
-      </tr>`).join("");
+
+    _classificacaoRows = _dedupeClassificacao(issues);
+    document.getElementById("modal-tbody").innerHTML =
+      `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">Carregando árvore de categorias…</td></tr>`;
+
+    const companyIds = [...new Set(_classificacaoRows.map(r => r.companyId).filter(Boolean))];
+    await Promise.all(companyIds.map(cid => _loadCompanyVariables(cid)));
+
+    document.getElementById("modal-tbody").innerHTML = _classificacaoRows.map((r, idx) => `
+      <tr class="border-t border-gray-100 hover:bg-gray-50" data-idx="${idx}">
+        <td class="px-2 py-2 text-center"><input type="checkbox" class="class-check" onchange="_classUpdateCount()" /></td>
+        ${cross ? `
+        <td class="px-3 py-2 text-[10px] text-gray-700 truncate">${_escHtml(r.company)}</td>
+        <td class="px-3 py-2 text-[10px] text-gray-500 truncate">${r.walletNames.length === 1 ? _escHtml(r.walletNames[0]) : `${r.walletNames.length} carteiras`}</td>` : ``}
+        <td class="px-3 py-2 text-[10px] text-gray-700">${r.beehusName ? _escHtml(r.beehusName) : "—"}</td>
+        <td class="px-3 py-2 font-mono text-[10px] text-gray-500">${r.mainId ? _escHtml(r.mainId) : "—"}</td>
+        <td class="px-3 py-2">
+          <div class="flex items-center gap-1.5">
+            <select class="class-select border rounded px-1.5 py-1 text-[10px] bg-white w-full max-w-[220px]" onchange="_classUpdateCount()">
+              <option value="">— selecionar —</option>
+              ${(_companyVariablesCache[r.companyId] || []).map(n =>
+                `<option value="${_escHtml(n.id)}">${_escHtml(n.label)}</option>`
+              ).join("")}
+            </select>
+          </div>
+        </td>
+      </tr>`).join("") || `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">Nenhum item.</td></tr>`;
+
+    document.getElementById("mapping-filters")?.remove();
+    document.getElementById("c3-toolbar")?.remove();
+    document.getElementById("class-toolbar")?.remove();
+    const wrap = document.getElementById("modal-tbody").closest(".overflow-y-auto");
+    const bar = document.createElement("div");
+    bar.id = "class-toolbar";
+    bar.className = "sticky top-0 bg-white border-b px-6 py-2 flex items-center gap-4 text-xs z-10";
+    bar.innerHTML = `
+      <span id="class-sel-count" class="text-gray-400">0 selecionado(s)</span>
+      <span class="flex-1"></span>
+      <button onclick="_gerarJsonClassificacao()" id="class-json-btn"
+        class="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium opacity-40 cursor-not-allowed" disabled
+        title="Salva um JSON em arquivos externos/ com as classificações escolhidas — não grava direto na Beehus (ainda não existe rota de escrita conhecida)">
+        &#8595; Gerar JSON Classificação
+      </button>`;
+    wrap.parentElement.insertBefore(bar, wrap);
+    _classUpdateCount();
+  }
+
+  function _classSelectAll(checked) {
+    document.querySelectorAll("#modal-tbody .class-check").forEach(cb => cb.checked = checked);
+    _classUpdateCount();
+  }
+
+  function _classUpdateCount() {
+    const rows = Array.from(document.querySelectorAll("#modal-tbody tr[data-idx]"));
+    const checkedRows = rows.filter(tr => tr.querySelector(".class-check")?.checked);
+    const el = document.getElementById("class-sel-count");
+    if (el) el.textContent = `${checkedRows.length} selecionado(s)`;
+    const withCategory = checkedRows.filter(tr => tr.querySelector(".class-select")?.value);
+    const btn = document.getElementById("class-json-btn");
+    if (btn) {
+      btn.disabled = withCategory.length === 0;
+      btn.className = withCategory.length > 0
+        ? "px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700"
+        : "px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium opacity-40 cursor-not-allowed";
+    }
+  }
+
+  async function _gerarJsonClassificacao() {
+    const rows = Array.from(document.querySelectorAll("#modal-tbody tr[data-idx]"));
+    const items = [];
+    rows.forEach(tr => {
+      const cb = tr.querySelector(".class-check");
+      const sel = tr.querySelector(".class-select");
+      if (!cb?.checked || !sel?.value) return;
+      const r = _classificacaoRows[Number(tr.dataset.idx)];
+      items.push({
+        companyId: r.companyId, company: r.company,
+        securityId: r.securityId, beehusName: r.beehusName,
+        unprocessedId: r.unprocessedId,
+        nodeId: sel.value, nodeLabel: sel.options[sel.selectedIndex].textContent,
+      });
+    });
+    if (!items.length) { alert("Nenhum item com categoria selecionada."); return; }
+
+    const btn = document.getElementById("class-json-btn");
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = "Gerando…";
+    try {
+      const res = await fetch("/api/controlpanel/classificacao/gerar-json", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (data.error) { alert(`Erro: ${data.error}`); return; }
+      alert(`JSON gerado: ${data.file} (${data.count} item(ns)) em "arquivos externos/".`);
+    } catch (e) {
+      alert(`Erro: ${e}`);
+    } finally {
+      btn.innerHTML = orig;
+      _classUpdateCount();
+    }
   }
 
   // ── Registro de Preço (security_missing_price) ─────────────────────────────
 
   function _renderRegistroPreco(issues) {
     _c3Rows = issues.map(i => ({ ...i, c3: false, consumoAuto: false }));
+    const cross = _crossCompanyMode;
 
     // toolbar above table
     const wrap = document.getElementById("modal-tbody").closest(".overflow-y-auto");
+    document.getElementById("mapping-filters")?.remove();
+    document.getElementById("class-toolbar")?.remove();
     document.getElementById("c3-toolbar")?.remove();
     const bar = document.createElement("div");
     bar.id = "c3-toolbar";
@@ -4396,9 +5312,10 @@ try {
       <th class="px-2 py-2 text-center w-8">
         <input type="checkbox" title="Selecionar todos" onchange="_c3SelectAll(this.checked)">
       </th>
+      ${cross ? `<th class="px-3 py-2 text-left">Empresa</th><th class="px-3 py-2 text-left">Carteira</th>` : ``}
       <th class="px-3 py-2 text-left">Security ID</th>
       <th class="px-3 py-2 text-left">BeehusName</th>
-      <th class="px-3 py-2 text-left">Carteira</th>
+      ${cross ? `` : `<th class="px-3 py-2 text-left">Carteira</th>`}
       <th class="px-3 py-2 text-center w-20">C3</th>
       <th class="px-3 py-2 text-center w-32">Consumo Automático</th>
     </tr>`;
@@ -4408,12 +5325,16 @@ try {
         <td class="px-2 py-2 text-center">
           <input type="checkbox" onchange="_c3Toggle(${i}, this.checked)">
         </td>
+        ${cross ? `
+        <td class="px-3 py-2 text-[10px] text-gray-700 truncate">${r.company ? _escHtml(r.company) : '—'}</td>
+        <td class="px-3 py-2 text-[10px] text-gray-500 truncate">${r.walletName ? _escHtml(r.walletName) : '—'}</td>` : ``}
         <td class="px-3 py-2 font-mono text-[10px] text-gray-600">${r.securityId ? _escHtml(r.securityId) : '—'}</td>
         <td class="px-3 py-2 text-[10px] text-gray-700">${r.beehusName ? _escHtml(r.beehusName) : '—'}</td>
+        ${cross ? `` : `
         <td class="px-3 py-2 text-[10px] text-gray-500">
           ${r.walletName ? `<span class="text-gray-700">${_escHtml(r.walletName)}</span>` : ''}
-          ${r.walletId ? `<span class="block font-mono text-gray-300">${_escHtml(r.walletId)}</span>` : '—'}
-        </td>
+          ${r.walletId ? `<span class="block font-mono text-gray-400">${_escHtml(r.walletId)}</span>` : '—'}
+        </td>`}
         <td class="px-2 py-2 text-center">
           <input type="checkbox" id="c3-c3-${i}" onchange="_c3ToggleC3(${i}, this.checked)">
         </td>
@@ -4438,7 +5359,17 @@ try {
   }
 
   function _c3Toggle(i, checked) {
-    // row-level select checkbox (the first column) just drives count display
+    // Selecionar a linha inteira (checkbox ao lado de Empresa) marca C3 e
+    // Consumo Automático junto — evita o operador ter que marcar 3 caixas
+    // por linha.
+    if (checked) {
+      _c3Rows[i].c3 = true;
+      _c3Rows[i].consumoAuto = true;
+      const c3cb = document.getElementById(`c3-c3-${i}`);
+      if (c3cb) c3cb.checked = true;
+      const autoCb = document.getElementById(`c3-auto-${i}`);
+      if (autoCb) autoCb.checked = true;
+    }
     _c3UpdateCount();
   }
 
@@ -4449,6 +5380,14 @@ try {
 
   function _c3ToggleAuto(i, checked) {
     _c3Rows[i].consumoAuto = checked;
+    // Consumo Automático implica C3 (o ativo consumido automaticamente
+    // também precisa ir pro C3).
+    if (checked) {
+      _c3Rows[i].c3 = true;
+      const c3cb = document.getElementById(`c3-c3-${i}`);
+      if (c3cb) c3cb.checked = true;
+      _c3UpdateCount();
+    }
   }
 
   function _c3UpdateCount() {
@@ -4472,7 +5411,7 @@ try {
       securityId:        r.securityId  || "",
       beehusName:        r.beehusName  || "",
       entityId:          "",
-      companyId:         _currentCompanyId || "",
+      companyId:         r.companyId || _currentCompanyId || "",
       walletId:          r.walletId    || "",
       pu:                0,
       consumoAutomatico: r.consumoAuto,
@@ -4507,6 +5446,7 @@ try {
   }
 
   function openModal(companyId, company, type) {
+    _crossCompanyMode = false;
     _currentType = type;
     _currentCompanyId = companyId;
     document.getElementById("modal-title").textContent    = company;
@@ -4536,12 +5476,50 @@ try {
       });
   }
 
+  // Mesmo modal/renderers do openModal (Mapeamento/Classificação/Registro de
+  // Preço/Default), só que cruzando TODAS as empresas visíveis de uma vez —
+  // aberto pelo cabeçalho da coluna em vez de uma célula de uma empresa só.
+  // _currentCompanyId fica "" (sem empresa única); _companyByWallet (populado
+  // dentro de _groupBySecurity a partir de issue.companyId) é quem permite ao
+  // "Mapear no sistema" saber em quais empresas aplicar cada mapeamento.
+  function openModalAllCompanies(type, label) {
+    _crossCompanyMode = true;
+    _currentType = type;
+    _currentCompanyId = "";
+    document.getElementById("modal-title").textContent    = `${label} — todas as empresas`;
+    document.getElementById("modal-subtitle").textContent = `${type.replaceAll("_"," ")} · ${_currentDate}`;
+    document.getElementById("modal-msg").textContent      = "Carregando...";
+    document.getElementById("modal-msg").style.display    = "block";
+    document.getElementById("modal-tbody").innerHTML      = "";
+    document.getElementById("modal").style.display        = "flex";
+
+    fetch(`/api/controlpanel/detail-all-full?date=${_currentDate}&type=${type}`)
+      .then(r => r.json()).then(({ issues }) => {
+        _modalIssues = issues;
+        if (!issues.length) {
+          document.getElementById("modal-msg").textContent = "Nenhum issue para esta seleção — todas as empresas em dia.";
+          return;
+        }
+        document.getElementById("modal-description").textContent = issues[0]?.description || "";
+        document.getElementById("modal-thead").parentElement.style.tableLayout = "";
+        _mappingLoader(false);
+        if      (type === "security_unmapped")              _renderMapeamento(issues);
+        else if (type === "security_missing_price")          _renderRegistroPreco(issues);
+        else if (type === "security_missing_classification") _renderClassificacao(issues);
+        else                                                 _renderDefault(issues);
+        document.getElementById("modal-msg").style.display = "none";
+      });
+  }
+
   function closeModal() {
     document.getElementById("modal").style.display = "none";
     document.getElementById("modal-description").textContent = "";
+    _crossCompanyMode = false;
+    _companyByWallet = {};
     _mappingLoader(false);
     document.getElementById("mapping-filters")?.remove();
     document.getElementById("c3-toolbar")?.remove();
+    document.getElementById("class-toolbar")?.remove();
     _mappingRows = [];
     _c3Rows     = [];
   }
@@ -4672,7 +5650,6 @@ try {
 
   // ── Complement upload modal ────────────────────────────────────────────────
   let _complementFile = null;
-  let _complementParsed = null;  // {total, preview[]} — populated after parse
 
   function _openComplementModal() {
     document.getElementById('complement-modal').style.display = 'flex';
@@ -4681,115 +5658,14 @@ try {
   function _closeComplementModal() {
     document.getElementById('complement-modal').style.display = 'none';
     _complementFile = null;
-    _complementParsed = null;
     document.getElementById('complement-file-input').value = '';
     const nameEl = document.getElementById('complement-filename');
     nameEl.textContent = '';
     nameEl.classList.add('hidden');
-    const btn = document.getElementById('complement-confirm-btn');
-    btn.disabled = true;
-    btn.textContent = 'Carregar e Pré-visualizar';
+    document.getElementById('complement-confirm-btn').disabled = true;
     const dz = document.getElementById('complement-dropzone');
     dz.classList.remove('border-slate-400', 'bg-slate-50');
     dz.classList.add('border-gray-300');
-    document.getElementById('complement-upload-section').classList.remove('hidden');
-    document.getElementById('complement-preview-section').classList.add('hidden');
-    document.getElementById('complement-back-btn').classList.add('hidden');
-    document.getElementById('complement-preview-count').textContent = '';
-    document.getElementById('complement-preview-rows').innerHTML = '';
-    const errEl = document.getElementById('complement-parse-error');
-    errEl.textContent = '';
-    errEl.classList.add('hidden');
-  }
-
-  function _complementBack() {
-    _complementParsed = null;
-    document.getElementById('complement-upload-section').classList.remove('hidden');
-    document.getElementById('complement-preview-section').classList.add('hidden');
-    document.getElementById('complement-back-btn').classList.add('hidden');
-    const btn = document.getElementById('complement-confirm-btn');
-    btn.textContent = 'Carregar e Pré-visualizar';
-    btn.disabled = (_complementFile === null);
-  }
-
-  function _complementConfirm() {
-    if (_complementParsed === null) {
-      _complementLoad();
-    } else {
-      _complementReprocess();
-    }
-  }
-
-  function _complementLoad() {
-    if (!_complementFile) return;
-    const btn = document.getElementById('complement-confirm-btn');
-    const origText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Carregando…';
-
-    const fd = new FormData();
-    fd.append('file', _complementFile);
-
-    fetch('/api/controlpanel/parse-complement', { method: 'POST', body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (!data.ok) {
-          // show error inside preview section
-          document.getElementById('complement-upload-section').classList.add('hidden');
-          document.getElementById('complement-preview-section').classList.remove('hidden');
-          document.getElementById('complement-back-btn').classList.remove('hidden');
-          const errEl = document.getElementById('complement-parse-error');
-          errEl.textContent = data.error || 'Erro ao processar o arquivo.';
-          errEl.classList.remove('hidden');
-          btn.textContent = origText;
-          btn.disabled = true;
-          return;
-        }
-        _complementParsed = data;
-        // populate preview table
-        const n = data.total;
-        const shown = data.preview.length;
-        document.getElementById('complement-preview-count').textContent =
-          n + ' linha' + (n !== 1 ? 's' : '') + ' identificada' + (n !== 1 ? 's' : '') +
-          (n > shown ? ' (exibindo as primeiras ' + shown + ')' : '');
-        const tbody = document.getElementById('complement-preview-rows');
-        tbody.innerHTML = '';
-        data.preview.forEach(function (row) {
-          const tr = document.createElement('tr');
-          tr.innerHTML =
-            '<td class="px-2 py-1 border-b border-gray-100 font-mono text-gray-700 break-all max-w-[12rem]">' + _escHtml(row.uid) + '</td>' +
-            '<td class="px-2 py-1 border-b border-gray-100 text-gray-600 break-all">' + _escHtml(row.complement) + '</td>';
-          tbody.appendChild(tr);
-        });
-        // switch to preview view
-        document.getElementById('complement-upload-section').classList.add('hidden');
-        document.getElementById('complement-preview-section').classList.remove('hidden');
-        document.getElementById('complement-back-btn').classList.remove('hidden');
-        btn.textContent = 'Confirmar e Reprocessar';
-        btn.disabled = false;
-      })
-      .catch(function (err) {
-        btn.textContent = origText;
-        btn.disabled = false;
-        alert('Erro ao carregar arquivo: ' + (err.message || err));
-      });
-  }
-
-  function _complementReprocess() {
-    if (!_complementParsed || !_mappingRows.length) return;
-    const priority = (document.querySelector('input[name="complement-priority"]:checked') || {}).value || "uid";
-    const complements = _complementParsed.rows || [];
-    const items = _mappingRows.map(r => ({ unprocessedId: r.unprocessedSecurityId }));
-    _closeComplementModal();
-    _runMatchFetch(items, { complements, complement_priority: priority });
-  }
-
-  function _escHtml(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
   }
 
   (function () {
@@ -4822,6 +5698,7 @@ try {
       dz.classList.remove('border-slate-500', 'bg-slate-100');
       const file = e.dataTransfer.files[0];
       if (file) {
+        // sync file-input so the change event fires consistently
         try {
           const dt = new DataTransfer();
           dt.items.add(file);
@@ -4986,6 +5863,195 @@ try {
     } finally {
       ApiLog.add(method, path, status, respBody, Math.round(performance.now() - t0));
     }
+  }
+
+  async function processAllWallets() {
+    if (!_currentDate) { alert("Selecione uma data primeiro."); return; }
+    if (!confirm(
+      `Processar as carteiras que têm posição bruta pronta e ainda não foram processadas, ` +
+      `em todas as empresas visíveis, na data ${_currentDate}?\n\n` +
+      `Empresas sem nada pendente pra processar são puladas automaticamente. ` +
+      `Esta ação chama POST no processamento de posições da API Beehus, empresa por empresa, ` +
+      `e não é reversível por esta tela.`
+    )) return;
+
+    const btn = document.getElementById("process-all-wallets-btn");
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Processando…`;
+
+    try {
+      const r = await api("POST", "/api/controlpanel/process-all-wallets", { date: _currentDate });
+      const data = r.body || {};
+      if (r.status === 401) {
+        alert(
+          "Token Beehus não está carregado ou foi rejeitado.\n" +
+          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
+        );
+        return;
+      }
+      if (!r.ok) {
+        alert(`Falha ao processar: ${data.error || `HTTP ${r.status}`}`);
+        return;
+      }
+      const results = data.results || {};
+      const companyNames = data.companyNames || {};
+      const entries = Object.entries(results);
+      const ok = entries.filter(([, res]) => res && res.ok).length;
+      const failed = entries.filter(([, res]) => !res || !res.ok);
+      const skipped = data.skipped || 0;
+      let msg = entries.length
+        ? `Processamento disparado: ${ok} de ${entries.length} empresa(s) com sucesso.`
+        : `Nenhuma empresa tinha carteira pendente pra processar.`;
+      if (skipped) msg += `\n${skipped} empresa(s) sem nada pendente foram puladas.`;
+      if (failed.length) {
+        const preview = failed.slice(0, 10)
+          .map(([cid, res]) => `  • ${companyNames[cid] || cid}: ${res?.error || "falha desconhecida"}`)
+          .join("\n");
+        const more = failed.length > 10 ? `\n  … +${failed.length - 10} outras` : "";
+        msg += `\n\nFalhas:\n${preview}${more}`;
+      }
+      alert(msg);
+      selectDate(_currentDate);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
+
+  // ── Quadro da Esteira ────────────────────────────────────────────────────
+  // Kanban 100% client-side a partir de _gridRows (já carregado pelo /rows do
+  // grid). Uma empresa aparece em TODA etapa onde ainda tem pendência (pode
+  // repetir em várias colunas) — bucketar só na primeira etapa escondia
+  // pendências reais de etapas seguintes. "Concluído" (bucket final, verde) =
+  // zero pendência em todas as etapas — NÃO confundir com a coluna "Published"
+  // (etapa de publicação em si; quem aparece lá ainda está pendente nela).
+  // GAP fica de fora da sequência (é checagem de qualidade,
+  // não etapa bloqueante) — vira só um aviso ⚠ no card.
+  const _ESTEIRA_STAGES = [
+    { key: "missing_wallet",                  label: "Carteira",          kind: "issue", noun: "carteira(s) faltando" },
+    { key: "missing_unprocessed_position",    label: "Posição",           kind: "issue", noun: "posição(ões) pendente(s)" },
+    { key: "security_unmapped",               label: "Mapeamento",        kind: "issue", noun: "ativo(s) sem mapear" },
+    { key: "security_missing_classification", label: "Classificação",     kind: "issue", noun: "ativo(s) sem classificar" },
+    { key: "security_missing_price",          label: "Registro de Preço", kind: "issue", noun: "ativo(s) sem preço" },
+    { key: "security_missing_history_price",  label: "Preço para o dia",  kind: "issue", noun: "ativo(s) sem preço do dia" },
+    { key: "processed",                       label: "Processar",         kind: "extra", noun: "carteira(s) processada(s)" },
+    { key: "nav_wallet",                      label: "NAV Wallet",        kind: "extra", noun: "carteira(s) com NAV" },
+    { key: "nav_grouping",                    label: "NAV Grouping",      kind: "extra", noun: "agrupamento(s) com NAV" },
+    { key: "published",                       label: "Published",        kind: "extra", noun: "agrupamento(s) publicado(s)" },
+  ];
+
+  // {count, total|null} — count/total pro "kind:extra" (ratio, ex. 8/12
+  // processadas); count = pendências e total = null pro "kind:issue".
+  function _esteiraCounts(row, stage) {
+    if (stage.kind === "issue") {
+      const cell = (row.cells || []).find(c => c.type === stage.key);
+      return { count: cell ? cell.count : 0, total: null };
+    }
+    const extra = (row.extras || []).find(e => e.key === stage.key);
+    return { count: extra ? extra.count : 0, total: extra ? extra.total : null };
+  }
+
+  function _esteiraCountLabel(row, stage) {
+    const { count, total } = _esteiraCounts(row, stage);
+    return total == null ? `${count} ${stage.noun}` : `${count}/${total} ${stage.noun}`;
+  }
+
+  function _esteiraPending(row, stage) {
+    const { count, total } = _esteiraCounts(row, stage);
+    return total == null ? count > 0 : (total > 0 && count < total);
+  }
+
+  function _escJs(s) {
+    return String(s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  }
+
+  function openEsteiraModal() {
+    const modal = document.getElementById("esteira-modal");
+    const body  = document.getElementById("esteira-body");
+    document.getElementById("esteira-date").textContent = _currentDate || "";
+    modal.style.display = "flex";
+    if (!_gridRows.length) {
+      body.innerHTML = '<p class="text-xs text-gray-400 py-6 text-center">Carregue uma data primeiro.</p>';
+      return;
+    }
+
+    // Uma empresa aparece em TODA etapa onde ainda tem pendência — não só na
+    // primeira (bucketar só na primeira escondia pendências reais de etapas
+    // mais à frente sempre que a empresa também tinha algo pendente antes).
+    // "Concluído" (bucket final) = zero pendência em TODAS as etapas.
+    const byStage = new Map(_ESTEIRA_STAGES.map(s => [s.key, []]));
+    const gapByCompany = {};
+    _gridRows.forEach(row => {
+      _ESTEIRA_STAGES.forEach(stage => {
+        if (_esteiraPending(row, stage)) byStage.get(stage.key).push(row);
+      });
+      const gapExtra = (row.extras || []).find(e => e.key === "gap");
+      if (gapExtra && gapExtra.count > 0) gapByCompany[row.companyId] = gapExtra.count;
+    });
+    const done = _gridRows.filter(row => !_ESTEIRA_STAGES.some(stage => _esteiraPending(row, stage)));
+
+    const cardHtml = (row, stage) => {
+      const onclick = stage
+        ? (stage.kind === "issue"
+            ? `openModal('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`
+            : `openCellDetail('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`)
+        : "";
+      const gap = gapByCompany[row.companyId];
+      const gapBadge = gap ? `<span class="text-amber-500 flex-shrink-0" title="${gap} carteira(s) com GAP">⚠</span>` : "";
+      const countLine = stage
+        ? `<span class="block text-[10px] text-gray-400 mt-0.5">${_escHtml(_esteiraCountLabel(row, stage))}</span>` : "";
+      return `
+        <button ${onclick ? `onclick="${onclick}"` : "disabled"}
+          class="w-full text-left px-2 py-1.5 bg-white border border-gray-200 rounded text-[11px] text-gray-700 ${onclick ? "hover:border-blue-300 hover:bg-blue-50 cursor-pointer" : "cursor-default"}"
+          title="${_escHtml(row.company)}">
+          <span class="flex items-center justify-between gap-1">
+            <span class="truncate font-medium">${_escHtml(row.company)}</span>${gapBadge}
+          </span>
+          ${countLine}
+        </button>`;
+    };
+
+    const columnHtml = (stage) => {
+      const rowsHere = byStage.get(stage.key);
+      const totalPending = rowsHere.reduce((sum, row) => {
+        const { count, total } = _esteiraCounts(row, stage);
+        return sum + (total == null ? count : Math.max(0, total - count));
+      }, 0);
+      return `
+        <div class="flex-shrink-0 w-60 bg-gray-50 rounded-lg border border-gray-200 flex flex-col h-full">
+          <div class="px-3 py-2 border-b bg-white rounded-t-lg flex items-center justify-between flex-shrink-0">
+            <span class="text-xs font-semibold text-gray-700">${stage.label}</span>
+            <span class="text-[10px] font-mono ${rowsHere.length ? "text-amber-600" : "text-gray-400"}"
+                  title="${rowsHere.length} empresa(s) · ${totalPending} pendência(s) no total">
+              ${rowsHere.length} emp · ${totalPending}
+            </span>
+          </div>
+          <div class="p-2 overflow-y-auto flex-1 space-y-1.5">
+            ${rowsHere.length ? rowsHere.map(row => cardHtml(row, stage)).join("")
+                              : `<p class="text-[10px] text-gray-400 text-center py-2">—</p>`}
+          </div>
+        </div>`;
+    };
+
+    body.innerHTML = `
+      <div class="flex gap-3 h-full overflow-x-auto pb-1">
+        ${_ESTEIRA_STAGES.map(columnHtml).join("")}
+        <div class="flex-shrink-0 w-60 bg-green-50 rounded-lg border border-green-200 flex flex-col h-full">
+          <div class="px-3 py-2 border-b bg-white rounded-t-lg flex items-center justify-between flex-shrink-0">
+            <span class="text-xs font-semibold text-green-700" title="Zero pendência em todas as etapas, incluindo publicação — não confundir com a coluna \"Published\" (que é a etapa de publicação em si, ainda pendente pra quem aparece lá)">Concluído</span>
+            <span class="text-[10px] font-mono text-green-600">${done.length}</span>
+          </div>
+          <div class="p-2 overflow-y-auto flex-1 space-y-1.5">
+            ${done.length ? done.map(row => cardHtml(row, null)).join("")
+                          : `<p class="text-[10px] text-gray-400 text-center py-2">—</p>`}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function closeEsteiraModal() {
+    document.getElementById("esteira-modal").style.display = "none";
   }
 
   const Token = {

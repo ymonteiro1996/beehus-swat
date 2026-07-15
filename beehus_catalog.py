@@ -2026,7 +2026,28 @@ def issues_detail(company_id, date, issue_type):
         st = get_preprocessing_status(company_id=cid, position_date=pd)
     except (BeehusAPIError, BeehusAuthError, Exception):  # noqa: BLE001
         return []
-    return _rows_from_status(st, issue_type)
+    if not isinstance(st, dict):
+        return []
+    rows = []
+    for it in (st.get(key) or []):
+        if not isinstance(it, dict):
+            continue
+        base = {
+            "type":                  issue_type,
+            "description":           "",
+            "externalOrigin":        "",
+            "externalId":            str(it.get("externalId") or ""),
+            "securityId":            id_str(it.get("securityId")),
+            "unprocessedSecurityId": str(it.get("unprocessedSecurityId") or ""),
+            "createdAt":             _parse_iso_dt(it.get("createdAt")),
+        }
+        aw = it.get("affectedWallets")
+        if isinstance(aw, list) and aw:
+            for w in aw:
+                rows.append({**base, "walletId": _aw_wallet_id(w)})
+        else:
+            rows.append({**base, "walletId": id_str(it.get("walletId"))})
+    return rows
 
 
 def issues_by_wallet_detail(company_id, date):

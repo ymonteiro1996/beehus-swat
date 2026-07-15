@@ -14,6 +14,9 @@ from beehus_api import (
     BeehusAPIError,
     BeehusAuthError,
     update_security_mappings,
+    list_company_variables,
+    process_processed_position,
+    run_heuristics,
 )
 from db import (db, get_biz_dates, load_config_delays, get_company_filter,
                 company_visible, get_company_names, get_wallet_names,
@@ -70,6 +73,10 @@ def _get_matcher():
     global _matcher
     if _matcher is not None:
         return _matcher
+    # Call _get_classifier() BEFORE acquiring _init_lock: both functions share
+    # the same non-reentrant Lock, so calling it inside the lock causes a
+    # deadlock on the first request when _clf is also None.
+    clf = _get_classifier()
     with _init_lock:
         if _matcher is None:
             # SecurityMatcher is API/file-backed: its cache loads from the daily
@@ -264,33 +271,48 @@ def _navpackage_counts_by_company(date, threshold):
 
 def _extra_cell(count, total, *, mode="ratio"):
     """Format an extras cell. mode: 'ratio' shows X/Y with colour by completeness;
-    'count' shows just X with red if > 0 (for GAP)."""
+    'count' shows just X with red if > 0 (for GAP).
+
+    Todos os tons "ativos" ficam no mesmo tier FORTE (`-100` + texto `-700` +
+    `font-medium`) — antes misturava `-100` (verde/GAP) com `-50`/`-600`
+    (vermelho/âmbar zero) sem critério. A versão anterior desta função tinha
+    ido pro tier `-50` uniforme, mas isso deixou a grid quase monocromática —
+    numa tela que depende de cor pra saltar aos olhos, o tier fraco não
+    funciona. Verde fica reservado só pra "completo" (nunca reaproveitado com
+    outro sentido — ver `_cell_cls`)."""
     if mode == "count":
-        if count > 0:
-            cls = "bg-red-100 text-red-700 font-medium"
-        else:
-            cls = "text-gray-400"
+        cls = "bg-red-100 text-red-700 font-medium" if count > 0 else "text-gray-400"
         return {"count": count, "total": None, "label": str(count), "cls": cls}
 
     # ratio mode
     if total <= 0:
-        cls = "text-gray-300"
+        cls = "text-gray-400"
         label = "—"
     elif count >= total:
         cls = "bg-green-100 text-green-700 font-medium"
         label = f"{count}/{total}"
     elif count == 0:
-        cls = "bg-red-50 text-red-600"
+        cls = "bg-red-100 text-red-700 font-medium"
         label = f"{count}/{total}"
     else:
-        cls = "bg-amber-50 text-amber-700"
+        cls = "bg-amber-100 text-amber-700 font-medium"
         label = f"{count}/{total}"
     return {"count": count, "total": total, "label": label, "cls": cls}
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _cell_cls(count):
-    return "bg-green-100 text-green-700 font-medium" if count > 0 else "text-gray-300"
+    """Cor de SEVERIDADE da contagem de pendência (issue-type columns / TXN).
+    0 = liberado (texto neutro, mesma convenção do "—" em outras colunas) — o
+    mesmo sentido de "completo" usado em `_extra_cell`, sem mais conflito
+    entre os dois (antes count>0 usava verde, o oposto do que verde significa
+    ali). >0 usa dois degraus (âmbar/vermelho) pra dar noção de tamanho do
+    backlog — corte em 10 é um valor inicial razoável, ajustável."""
+    if count <= 0:
+        return "text-gray-400"
+    if count < 10:
+        return "bg-amber-100 text-amber-700 font-medium"
+    return "bg-red-100 text-red-700 font-medium"
 
 
 # Como derivar cada contagem do endpoint E (pre-processing) p/ bater 1:1 com o
@@ -682,6 +704,84 @@ def get_detail():
 
     _enrich_issue_securities(issues)
 
+    if typ == "security_missing_history_price":
+        _attach_price_type(issues, default_company_id=cid)
+
+    return jsonify({"issues": issues, "date": date, "type": typ})
+
+
+def _attach_price_type(issues, *, default_company_id=None):
+    """Preenche `issue["priceType"]` (B1/B2/C1/C2/C3, ou None) com o escopo do
+    record de preço mais específico já cadastrado p/ o ativo — ajuda o operador
+    a achar ONDE lançar o preço do dia (uma request em lote p/ todas as
+    `issues`, resolução local por item, sem N chamadas)."""
+    sec_ids = [i["securityId"] for i in issues if i.get("securityId")]
+    if not sec_ids:
+        return
+    records = beehus_catalog.security_price_records(sec_ids)
+    for issue in issues:
+        sid = issue.get("securityId")
+        if not sid:
+            continue
+        rec = beehus_catalog.resolve_price_record(
+            sid, records=records,
+            company_id=issue.get("companyId") or default_company_id,
+            wallet_id=issue.get("walletId"),
+        )
+        issue["priceType"] = rec.get("type") if rec else None
+
+
+@bp.route("/api/controlpanel/detail-all-full")
+def get_detail_all():
+    """Mesmo shape de /api/controlpanel/detail (lista de issues, com
+    walletName/beehusName/mainId já resolvidos), cruzando TODAS as empresas
+    visíveis — cada issue ganha companyId/company. Alimenta o modal de
+    Mapeamento (e os demais renderers) quando aberto pelo CABEÇALHO da
+    coluna em vez de uma célula de uma empresa só."""
+    date = (request.args.get("date") or "").strip() or get_biz_dates(1)[0]
+    typ  = (request.args.get("type") or "").strip()
+    if not typ:
+        return jsonify({"issues": [], "date": date, "type": typ}), 400
+
+    company_names = get_company_names()
+    wallet_names  = get_wallet_names()
+    cids = _visible_company_ids()
+
+    results = _fanout_companies(cids, lambda cid: beehus_catalog.issues_detail(cid, date, typ))
+
+    issues = []
+    for cid, company_issues in results.items():
+        for issue in company_issues:
+            issues.append({
+                **_format_issue(issue),
+                "walletName": wallet_names.get(str(issue.get("walletId", "") or ""), ""),
+                "companyId":  cid,
+                "company":    company_names.get(cid, cid),
+            })
+    issues.sort(key=lambda x: (x["company"], x["createdAt"]))
+
+    def _to_oid(val):
+        try:
+            return ObjectId(val)
+        except (TypeError, ValueError):
+            return None
+
+    sec_ids = [_to_oid(i["securityId"]) for i in issues if i.get("securityId")]
+    sec_ids = [s for s in sec_ids if s]
+    sec_map = {}
+    if sec_ids:
+        sec_map = {
+            str(s["_id"]): s
+            for s in beehus_catalog.securities_by_ids(sec_ids).values()
+        }
+    for issue in issues:
+        sec = sec_map.get(issue.get("securityId", "")) or {}
+        issue["beehusName"] = sec.get("beehusName", "") or ""
+        issue["mainId"]     = sec.get("mainId", "") or ""
+
+    if typ == "security_missing_history_price":
+        _attach_price_type(issues)
+
     return jsonify({"issues": issues, "date": date, "type": typ})
 
 
@@ -1036,6 +1136,209 @@ def cell_detail():
             1 for w in wallets if w["id"] in unprocessed_set
         )
     return jsonify(payload)
+
+
+# ── Modal cross-empresa (cabeçalho da coluna) ────────────────────────────────
+# Mesmo detalhe que já existe por empresa (get_detail / cell_detail / txn),
+# só que cruzando TODAS as empresas visíveis de uma vez — clicar no CABEÇALHO
+# da coluna em vez de abrir empresa por empresa. Uma linha por ocorrência,
+# sempre com o nome da empresa, pra caber num único modal genérico no front.
+
+_DETAIL_ALL_WORKERS = 10
+
+
+def _fanout_companies(company_ids, fn):
+    """Roda fn(companyId) em paralelo (máx. 10) — mesmo padrão de
+    beehus_catalog.preprocessing_status_many. Uma empresa que falhar sai do
+    dict (lista vazia), não derruba as demais."""
+    out = {}
+    workers = min(_DETAIL_ALL_WORKERS, max(1, len(company_ids)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for cid, res in zip(company_ids, ex.map(fn, company_ids)):
+            out[cid] = res or []
+    return out
+
+
+def _visible_company_ids():
+    cf = get_company_filter()
+    ids = beehus_catalog.all_company_ids()
+    if cf:
+        ids = [c for c in ids if c in cf]
+    return sorted(c for c in ids if company_visible(c))
+
+
+def _visible_entities():
+    """[{id, name, companyId, companyName}] — uma entidade ("carteira-mãe")
+    pertence a UMA empresa (via `wallets_index`, que já traz `companyId`/
+    `entityId` normalizados de todas as carteiras) — usado pra alimentar o
+    seletor de entidade do "Processar Transações" sem exigir que o operador
+    escolha a empresa também."""
+    names = beehus_catalog.entity_names()
+    companies = get_company_names()
+    by_entity = {}
+    for w in beehus_catalog.wallets_index().values():
+        eid = w.get("entityId")
+        cid = w.get("companyId")
+        if not eid or not cid or not company_visible(cid):
+            continue
+        by_entity.setdefault(eid, cid)
+    out = [
+        {"id": eid, "name": names.get(eid, eid),
+         "companyId": cid, "companyName": companies.get(cid, cid)}
+        for eid, cid in by_entity.items()
+    ]
+    out.sort(key=lambda e: (e["companyName"], e["name"]))
+    return out
+
+
+@bp.route("/api/controlpanel/entities")
+def entities():
+    return jsonify({"entities": _visible_entities()})
+
+
+@bp.route("/api/controlpanel/process-transactions", methods=["POST"])
+def process_transactions():
+    """Dispara a heurística de identificação de transações (POST upstream
+    /data-science/heuristics) pra uma entidade+data escolhidas no modal.
+
+    Body: { "entityId": str, "companyId": str, "date": "YYYY-MM-DD" }
+
+    `companyId` vem resolvido pelo próprio front (a partir da entidade
+    escolhida em `/api/controlpanel/entities`), mas é revalidado aqui contra
+    `company_visible` antes de disparar."""
+    body = request.get_json(silent=True) or {}
+    entity_id     = (body.get("entityId") or "").strip()
+    company_id    = (body.get("companyId") or "").strip()
+    position_date = (body.get("date") or "").strip()
+
+    if not entity_id or not company_id or not position_date:
+        return jsonify({"error": "entityId, companyId e date são obrigatórios"}), 400
+    if not company_visible(company_id):
+        return jsonify({"error": "empresa não visível"}), 403
+
+    try:
+        result = run_heuristics(
+            company_id=company_id, current=position_date, entity_id=entity_id,
+        )
+    except BeehusAuthError as e:
+        return jsonify({"error": str(e), "upstream_status": e.status,
+                        "upstream_body": e.body}), 401
+    except BeehusAPIError as e:
+        return jsonify({"error": str(e), "upstream_status": e.status,
+                        "upstream_body": e.body}), 502
+
+    return jsonify({"ok": True, "response": result if result is not None else {}})
+
+
+@bp.route("/api/controlpanel/detail-all")
+def detail_all():
+    """Detalhe de UMA coluna cruzando TODAS as empresas visíveis. `column` é
+    qualquer chave de ISSUE_TYPES, "txn", ou de EXTRA_COLS ("gap" incluso)."""
+    date_  = (request.args.get("date") or "").strip() or get_biz_dates(1)[0]
+    column = (request.args.get("column") or "").strip()
+    if not column:
+        return jsonify({"error": "column é obrigatório"}), 400
+
+    company_names = get_company_names()
+    cids = _visible_company_ids()
+    issue_keys = {k for k, _ in ISSUE_TYPES}
+    rows = []
+
+    if column in issue_keys:
+        wallet_names = get_wallet_names()
+        results = _fanout_companies(cids, lambda cid: beehus_catalog.issues_detail(cid, date_, column))
+        for cid, issues in results.items():
+            for issue in issues:
+                wid = issue.get("walletId") or ""
+                rows.append({
+                    "companyId":  cid,
+                    "company":    company_names.get(cid, cid),
+                    "walletName": wallet_names.get(wid, wid) if wid else "",
+                    "detail":     issue.get("unprocessedSecurityId") or issue.get("securityId") or "",
+                })
+
+    elif column == "txn":
+        for cid, n in _unidentified_txn_count_by_company(date_).items():
+            if cid not in cids:
+                continue
+            rows.append({
+                "companyId": cid, "company": company_names.get(cid, cid),
+                "walletName": "", "detail": f"{n} transação(ões) não identificada(s)",
+            })
+
+    elif column == "processed":
+        def _run(cid):
+            wallets = _wallets_for_company(cid)
+            done = _processed_done_wallets(cid, date_, {w["id"] for w in wallets})
+            return [w for w in wallets if w["id"] not in done]
+        results = _fanout_companies(cids, _run)
+        for cid, pending in results.items():
+            for w in pending:
+                rows.append({
+                    "companyId": cid, "company": company_names.get(cid, cid),
+                    "walletName": w["name"] or w["id"], "detail": "pendente",
+                })
+
+    elif column == "nav_wallet":
+        # Ao contrário das demais colunas (só pendências), aqui listamos TODAS
+        # as carteiras — as já processadas trazem a rentabilidade (NAV vs
+        # Contribuição) e a diferença, pra revisão rápida logo após calcular.
+        nav_res = beehus_catalog.nav_results_many(cids, date_)
+        results = _fanout_companies(cids, _wallets_for_company)
+        for cid, wallets in results.items():
+            detailed = {
+                beehus_catalog.id_str(w.get("walletId")): w
+                for w in (nav_res.get(cid) or {}).get("walletsWithNavDetailed") or []
+            }
+            for w in wallets:
+                entry = detailed.get(w["id"])
+                if entry:
+                    rows.append({
+                        "companyId": cid, "company": company_names.get(cid, cid),
+                        "walletName": w["name"] or w["id"], "detail": "ok",
+                        "returnNavPerShare":  entry.get("returnNavPerShare"),
+                        "returnContribution": entry.get("returnContribution"),
+                        "returnDifference":   entry.get("returnDifference"),
+                    })
+                else:
+                    rows.append({
+                        "companyId": cid, "company": company_names.get(cid, cid),
+                        "walletName": w["name"] or w["id"], "detail": "pendente",
+                    })
+
+    elif column in ("nav_grouping", "published"):
+        def _run(cid):
+            groupings = _untrashed_groupings_for_company(cid)
+            done = _nav_done_groupings(cid, date_, only_published=(column == "published"))
+            return [g for g in groupings if g["id"] not in done]
+        results = _fanout_companies(cids, _run)
+        for cid, pending in results.items():
+            for g in pending:
+                rows.append({
+                    "companyId": cid, "company": company_names.get(cid, cid),
+                    "walletName": g["name"], "detail": "pendente",
+                })
+
+    elif column == "gap":
+        threshold = _diff_threshold_decimal(request)
+        wallet_names = get_wallet_names()
+        results = beehus_catalog.nav_results_many(cids, date_)
+        for cid, res in results.items():
+            for w in res.get("walletsWithNavDetailed") or []:
+                if not beehus_catalog._nav_results_is_gap(w, threshold):
+                    continue
+                wid = beehus_catalog.id_str(w.get("walletId"))
+                rows.append({
+                    "companyId": cid, "company": company_names.get(cid, cid),
+                    "walletName": w.get("walletName") or wallet_names.get(wid, wid),
+                    "detail": f"NAV {w.get('returnNavPerShare')} vs Contrib {w.get('returnContribution')}",
+                })
+
+    else:
+        return jsonify({"error": f"coluna inválida: {column}"}), 400
+
+    rows.sort(key=lambda r: (r["company"], r["walletName"]))
+    return jsonify({"rows": rows, "date": date_, "column": column})
 
 
 # ── Classifier endpoints ──────────────────────────────────────────────────────
@@ -1493,6 +1796,213 @@ def apply_mapping():
         "applied": len(cleaned),
         "response": result if result is not None else {},
     })
+
+
+@bp.route("/api/controlpanel/apply-mapping-all", methods=["POST"])
+def apply_mapping_all():
+    """Mesma coisa que /api/controlpanel/apply-mapping, só que pro modal
+    cross-empresa: cada mapeamento (from→to) pode valer para VÁRIAS empresas
+    de uma vez (o mesmo unprocessedId apareceu em cada uma delas).
+
+    Body: { "mappings": [{"from": str, "to": str, "companyIds": [str, ...]}, ...] }
+
+    Agrupa por empresa e dispara uma PATCH por empresa (update_security_mappings),
+    em paralelo, isolando falhas — uma empresa sem securityMappingId não impede
+    as demais de serem mapeadas."""
+    body = request.get_json(silent=True) or {}
+    mappings = body.get("mappings") or []
+    if not isinstance(mappings, list) or not mappings:
+        return jsonify({"error": "mappings deve ser uma lista não vazia"}), 400
+
+    by_company = {}
+    for m in mappings:
+        if not isinstance(m, dict):
+            continue
+        frm = (m.get("from") or "").strip()
+        to  = (m.get("to") or "").strip()
+        if not frm or not to:
+            continue
+        for cid in (m.get("companyIds") or []):
+            if cid and company_visible(cid):
+                by_company.setdefault(cid, []).append({"from": frm, "to": to})
+
+    if not by_company:
+        return jsonify({"error": "nenhum mapeamento válido/visível"}), 400
+
+    def _run(cid):
+        try:
+            mapping_id = beehus_catalog.security_mapping_id(cid)
+            if not mapping_id:
+                return {"ok": False, "error": "securityMappingId não encontrado para esta empresa"}
+            update_security_mappings(
+                mapping_id, mappings_to_include=by_company[cid], mappings_to_exclude=[],
+            )
+            return {"ok": True, "applied": len(by_company[cid])}
+        except (BeehusAuthError, BeehusAPIError) as e:
+            return {"ok": False, "error": str(e)}
+
+    return jsonify({
+        "results": _fanout_companies(list(by_company.keys()), _run),
+        "companyNames": get_company_names(),
+    })
+
+
+@bp.route("/api/controlpanel/process-all-wallets", methods=["POST"])
+def process_all_wallets():
+    """Dispara o processamento de posições (POST /processed-position/process)
+    SÓ das carteiras que têm posição bruta pronta e ainda não foram
+    processadas, em todas as empresas visíveis, numa `date` só.
+
+    Body: { "date": "YYYY-MM-DD" }
+
+    Evita overproduction: antes só existia `wallets=[]` (= "processa a
+    empresa inteira"), o que reprocessava carteiras já prontas e chamava a
+    API até pra empresa sem NADA pendente. Agora primeiro calcula, por
+    empresa, `carteiras com unprocessed - carteiras já processadas` — só
+    dispara o POST (e só pras carteiras certas) quando essa diferença não é
+    vazia; empresa sem nada pra processar nem entra na chamada."""
+    body = request.get_json(silent=True) or {}
+    position_date = (body.get("date") or "").strip()
+    if not position_date:
+        return jsonify({"error": "date é obrigatório"}), 400
+
+    cids = _visible_company_ids()
+    if not cids:
+        return jsonify({"error": "nenhuma empresa visível"}), 400
+
+    def _ready_wallets(cid):
+        wallet_ids = {w["id"] for w in _wallets_for_company(cid)}
+        if not wallet_ids:
+            return []
+        has_raw = _unprocessed_existing_wallets(cid, position_date, wallet_ids)
+        done    = _processed_done_wallets(cid, position_date, wallet_ids)
+        return sorted(has_raw - done)
+
+    ready_by_company = _fanout_companies(cids, _ready_wallets)
+    targets = {cid: wids for cid, wids in ready_by_company.items() if wids}
+    skipped = len(cids) - len(targets)
+
+    if not targets:
+        return jsonify({
+            "results": {}, "companyNames": get_company_names(),
+            "date": position_date, "skipped": skipped,
+        })
+
+    def _run(cid):
+        try:
+            result = process_processed_position(
+                company_id=cid, position_date=position_date, wallets=targets[cid],
+            )
+            return {"ok": True, "walletsProcessed": len(targets[cid]),
+                    "response": result if result is not None else {}}
+        except (BeehusAuthError, BeehusAPIError) as e:
+            return {"ok": False, "error": str(e)}
+
+    return jsonify({
+        "results": _fanout_companies(list(targets.keys()), _run),
+        "companyNames": get_company_names(),
+        "date": position_date,
+        "skipped": skipped,
+    })
+
+
+# ── Classificação por empresa (árvore hierárquica) ───────────────────────────
+# Cada empresa tem sua PRÓPRIA árvore de categorias (Renda Fixa > Caixa, etc,
+# configurada na tela Parceiros > Classificação de Ativos). Não achamos uma
+# rota de ESCRITA pra vincular um ativo a um nó dessa árvore — por ora, o
+# operador seleciona no Painel e a gente gera um JSON (arquivos externos/)
+# pra aplicar manualmente, mesmo padrão do "Gerar JSON Mapeamento".
+
+_EXTERNAL_FILES_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "arquivos externos")
+
+
+def _all_company_variables_cached():
+    """Lista bruta de company-variables de TODAS as empresas, cacheada 5 min.
+
+    O endpoint upstream IGNORA `companyId` (sempre devolve todo mundo) —
+    então buscamos uma vez só e filtramos aqui, em vez de repetir a mesma
+    chamada pesada uma vez por empresa mostrada no modal cross-empresa."""
+    def _load():
+        try:
+            return list_company_variables()
+        except (BeehusAPIError, BeehusAuthError):
+            return []
+    return _cached_ttl("company_variables::all", _load)
+
+
+def _get_company_variables_cached(company_id):
+    """Árvore de classificação de UMA empresa, filtrada da lista completa
+    (cacheada 5 min)."""
+    for doc in _all_company_variables_cached():
+        if isinstance(doc, dict) and str(doc.get("companyId") or "") == str(company_id):
+            return doc
+    return None
+
+
+@bp.route("/api/controlpanel/company-variables")
+def company_variables():
+    """Árvore de classificação (hierarchicalVariables) de UMA empresa —
+    alimenta o dropdown de categoria no modal de Classificação."""
+    company_id = (request.args.get("companyId") or "").strip()
+    if not company_id or not company_visible(company_id):
+        return jsonify({"nodes": []}), 403 if company_id else 400
+
+    doc = _get_company_variables_cached(company_id)
+    nodes = (doc or {}).get("hierarchicalVariables") or []
+    out = []
+    for n in nodes:
+        levels = [n.get(f"variable{i}") for i in range(1, 6)]
+        label = " → ".join(lv for lv in levels if lv)
+        out.append({"id": n.get("_id"), "label": label})
+    out.sort(key=lambda n: n["label"])
+    return jsonify({"nodes": out})
+
+
+@bp.route("/api/controlpanel/classificacao/gerar-json", methods=["POST"])
+def gerar_json_classificacao():
+    """Salva um JSON com as classificações escolhidas manualmente na pasta
+    `arquivos externos/` — ponte manual enquanto não existe rota de escrita
+    conhecida pra gravar isso direto na Beehus. Formato IDÊNTICO ao de
+    `arquivos externos/securityClassifications_next_29-05-2026.json` (achado
+    já existente no projeto — mesmo esquema usado antes na prática):
+    `{companyId, securityId, companyVariables, hierarchicalVariable}`.
+
+    Body: { "items": [{"companyId","securityId","nodeId"}, ...] }
+    """
+    body = request.get_json(silent=True) or {}
+    items = body.get("items") or []
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items deve ser uma lista não vazia"}), 400
+
+    cleaned = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        cid = (it.get("companyId") or "").strip()
+        sec_id = (it.get("securityId") or "").strip()
+        node_id = (it.get("nodeId") or "").strip()
+        if not cid or not sec_id or not node_id or not company_visible(cid):
+            continue
+        cleaned.append({
+            "companyId":          cid,
+            "securityId":         sec_id,
+            "companyVariables":   [],
+            "hierarchicalVariable": node_id,
+        })
+    if not cleaned:
+        return jsonify({"error": "nenhum item válido/visível"}), 400
+
+    os.makedirs(_EXTERNAL_FILES_DIR, exist_ok=True)
+    # datetime.now() (não today_in_brt(), que só tem granularidade de dia) —
+    # garante nome único mesmo gerando vários arquivos no mesmo dia.
+    from datetime import datetime as _dt
+    stamp = _dt.now().strftime("%Y-%m-%d_%H%M%S")
+    filename = f"classificacao_{stamp}.json"
+    path = os.path.join(_EXTERNAL_FILES_DIR, filename)
+    atomic_write_json(path, cleaned)
+
+    return jsonify({"ok": True, "file": filename, "count": len(cleaned)})
 
 
 @bp.route("/api/controlpanel/search-securities")
