@@ -1,4 +1,4 @@
-# SWAT launcher: starts Flask, waits for it to come up, then opens the
+﻿# SWAT launcher: starts Flask, waits for it to come up, then opens the
 # browser with the session token so the cookie gets set transparently.
 # Run this instead of `python app.py` for normal daily use.
 
