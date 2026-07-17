@@ -39,8 +39,6 @@ import re
 from datetime import date as _date, datetime
 from typing import Optional
 
-from bson import ObjectId
-from bson.errors import InvalidId
 
 import security_matcher  # _score_candidate, get_cache, SecurityCache, _parse_date
 

@@ -27,16 +27,14 @@ Endpoints:
                                        groupingIds[], walletIds[]}` →
                                        `{wallets[], dates[]}`.
 """
+# ─────────────────────────────────────────────────────────────────────────
+# 1. IMPORTS E CONFIGURAÇÃO DO BLUEPRINT
+# ─────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
-import io
-import re
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta, date
 
-from bson import ObjectId
-from bson.errors import InvalidId
 from flask import Blueprint, jsonify, render_template, request
-from openpyxl import Workbook
 
 import beehus_catalog
 from beehus_api import (
@@ -46,51 +44,42 @@ from beehus_api import (
 )
 from db import (
     company_visible,
-    db,
     get_grouping_index,
     get_security_names,
     get_wallet_names,
     resolve_wallet,
 )
+# Helpers genéricos reaproveitados de utils/ (regra do CLAUDE.md: comum -> utils/,
+# reusar em vez de duplicar). A validação de id/data e a geração do .xlsx de
+# posições agora vivem lá e são compartilhadas com outras telas.
+from utils.validacao import safe_id, safe_date, to_object_id
+from utils.planilhas import build_positions_xlsx
 
 bp = Blueprint("carteira", __name__)
 
-_SAFE_ID_RE   = re.compile(r"^[A-Za-z0-9_.\-]+$")
-_SAFE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Aliases finos para os utilitários de validação — mantêm os call-sites curtos
+# (_safe / _safe_date / _to_oid) sem duplicar a lógica, que vive em utils/.
+_safe      = safe_id
+_safe_date = safe_date
+_to_oid    = to_object_id
 
 
-def _safe(s):
-    if not isinstance(s, str) or not _SAFE_ID_RE.match(s):
-        raise ValueError(f"invalid id: {s!r}")
-    return s
-
-
-def _safe_date(d):
-    if not isinstance(d, str) or not _SAFE_DATE_RE.match(d):
-        raise ValueError(f"invalid date: {d!r}")
-    return d
-
-
-def _to_oid(v):
-    try:
-        return ObjectId(str(v))
-    except (InvalidId, TypeError):
-        return None
-
-
-def _to_oids(values):
-    out = []
-    for v in values or []:
-        oid = _to_oid(v)
-        if oid is not None:
-            out.append(oid)
-    return out
+# ─────────────────────────────────────────────────────────────────────────
+# 2. HELPERS / REGRAS DE NEGÓCIO (funções puras + montagem da matriz)
+# ─────────────────────────────────────────────────────────────────────────
 
 
 def _biz_dates_range(initial_iso, final_iso):
-    """Inclusive list of business days (Mon-Fri) from `initial_iso` to
-    `final_iso`, oldest → newest. Both endpoints are validated by
-    `_safe_date` before calling this. Returns ISO-formatted strings."""
+    """Contexto:
+    Lista inclusiva de dias úteis (seg–sex) de `initial_iso` a `final_iso`, do
+    mais antigo ao mais novo. Os extremos já vêm validados por safe_date. Retorna
+    strings ISO — são as colunas de data da matriz de posições.
+
+    Pseudocódigo:
+      1. Converte as datas ISO de entrada em objetos date.
+      2. Percorre dia a dia do início ao fim, acumulando os dias de semana.
+      3. Retorna a lista de datas ISO acumuladas.
+    """
     cur = date.fromisoformat(initial_iso)
     end = date.fromisoformat(final_iso)
     out = []
@@ -137,37 +126,6 @@ def _resolve_wallets(company_id, grouping_ids, wallet_ids):
     return list(beehus_catalog.wallets_for_company(company_id).keys())
 
 
-def _unprocessed_id_maps(company_id, wallet_ids, dates):
-    """Return `{walletId: {securityId: unprocessedId}}` for each wallet, read
-    DIRECTLY from the wallet's raw `unprocessed-security-positions` snapshots:
-    every `securities[]` entry carries the authoritative pair
-    `preProcessingData.securityId → unprocessedId` for that wallet. We take, per
-    securityId, the `unprocessedId` from the most-recent snapshot ON OR BEFORE
-    the window's last date that holds the security (the current `Ativo` label).
-    ONE batched fetch covers every wallet (the B endpoint accepts a range +
-    plural walletIds).
-
-    This supersedes the previous approach (the company `securityMappings`
-    `from→to` map disambiguated by the snapshot): that map COLLIDES — ~38% of
-    this company's securityIds carry several historical `from` labels — so any
-    held security whose sid had multiple candidates and wasn't pinned by the
-    snapshot rendered "—". Reading `preProcessingData.securityId` straight from
-    the snapshot is the exact pair the wallet actually held: a strict superset of
-    the old logic (never loses a security it resolved, picks the SAME uid,
-    resolves more). Validated against company 23313334000110 / a single wallet:
-    0 regressions, 0 uid disagreements, +7 securities resolved.
-
-    A security held in the processed position but present in NO raw snapshot of
-    the wallet (e.g. look-through components / event-created lines) has no
-    `unprocessedId` and stays unresolved (renders "—") — there is no raw upload
-    label to attach, by construction.
-    """
-    if not company_id or not wallet_ids or not dates:
-        return {}
-    return beehus_catalog.unprocessed_sid_uid_map(
-        company_id, wallet_ids, max(dates))
-
-
 def _cash_unprocessed_ids(wallet_ids, company_id=None, date=None):
     """Return `{walletId: unprocessedId}` from `cashAccounts` for each
     wallet — drives both the Caixa row label and the `Ativo` value of the
@@ -183,8 +141,18 @@ def _cash_unprocessed_ids(wallet_ids, company_id=None, date=None):
     return beehus_catalog.cash_unprocessed_ids(wallet_ids, company_id, date)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 3. ROTAS (@bp.route) — finas: validam a entrada, chamam helpers e respondem.
+# ─────────────────────────────────────────────────────────────────────────
+
+
 @bp.route("/carteira")
 def index():
+    """Contexto:
+    Renderiza a página de filtros da Carteira (exibida dentro do iframe de
+    ferramentas). Sem lógica de negócio — a tela é montada no cliente pelo
+    static/js/carteira.js a partir das rotas /api/carteira/*.
+    """
     return render_template("carteira.html")
 
 
@@ -552,55 +520,19 @@ def search_securities():
 
 
 # ── Apply: upload edited positions as a new unprocessedSecurityPositions ──────
-
-def _build_carteira_xlsx(*, target_date, wallet_id, rows, cash, currency_id,
-                         cash_unprocessed_id="Caixa"):
-    """Build the upstream-shaped workbook for a single (wallet, date).
-
-    Schema (shared with `pages.excecoes._build_xlsx` and `pages.repetir_posicoes._build_combined_xlsx`):
-        Data, Carteira, Ativo, Quant, PU, SaldoBruto, Caixa, Moeda
-
-    The cash row's `Ativo` is the wallet's `cashAccounts.unprocessedId`
-    (e.g. "Caixa" for BRL wallets, "Cash" for USD). Defaults to "Caixa"
-    when the caller omits it, preserving the historical behaviour for
-    wallets without a cashAccount on file.
-
-    A cash row is appended only when the operator supplied a value — an
-    empty cash field means "don't touch caixa", not "set caixa to zero"."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Posicoes"
-    ws.append(["Data", "Carteira", "Ativo", "Quant", "PU",
-               "SaldoBruto", "Caixa", "Moeda"])
-    for r in rows:
-        ws.append([
-            target_date,
-            wallet_id,
-            r.get("ativo") or "",
-            r.get("quantity") or 0,
-            r.get("pu") or 0,
-            r.get("balance") or 0,
-            "Não",
-            currency_id or "",
-        ])
-    if cash is not None:
-        ws.append([
-            target_date,
-            wallet_id,
-            (cash_unprocessed_id or "Caixa"),
-            0,
-            0,
-            cash,
-            "Sim",
-            currency_id or "",
-        ])
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
+# O workbook de posições é gerado por utils.planilhas.build_positions_xlsx
+# (schema Data/Carteira/Ativo/Quant/PU/SaldoBruto/Caixa/Moeda), compartilhado
+# com as telas Exceções e Repetir Posições.
 
 def _round(v, digits):
+    """Contexto:
+    Arredonda `v` para `digits` casas, tolerando entrada inválida (retorna 0 em
+    erro). Usado ao normalizar qtd/pu/saldo antes de montar o .xlsx de envio.
+
+    Pseudocódigo:
+      1. Tenta round(float(v), digits).
+      2. Em TypeError/ValueError, retorna 0.
+    """
     try:
         return round(float(v), digits)
     except (TypeError, ValueError):
@@ -706,7 +638,7 @@ def apply_edits():
     if cash_value is not None and not cash_uid:
         cash_uid = _cash_unprocessed_ids([wallet_id]).get(wallet_id, "")
 
-    xlsx = _build_carteira_xlsx(
+    xlsx = build_positions_xlsx(
         target_date=target_date,
         wallet_id=wallet_id,
         rows=rows_xlsx,

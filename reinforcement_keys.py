@@ -167,18 +167,6 @@ def apply_type_overrides(normalized_key, current_type):
     return current_type
 
 
-def type_override_reason(normalized_key):
-    """Human-readable reason string for the override that would fire on
-    this key (or `None` when no override applies)."""
-    for predicate, _forced_type, reason in _TYPE_OVERRIDES:
-        try:
-            if predicate(normalized_key):
-                return reason
-        except Exception:
-            continue
-    return None
-
-
 # ── Negating prefixes (lookup-time) ──────────────────────────────────────────
 
 # Order matters: more specific (longer) prefixes first so `DEBITO CBLC

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/block_mongo_writes.py",
+            "timeout": 15,
+            "statusMessage": "Verificando escrita direta no Mongo..."
+          }
+        ]
+      }
+    ]
+  }
+}

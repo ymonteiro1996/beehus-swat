@@ -1,0 +1,450 @@
+/* Estilos da tela Painel de Controle. Extraído para static/ (CLAUDE.md). */
+  /* Dentro do shell (templates/shell.html), o botão "Token" vive no sidebar
+     global — então escondemos o chip Token da favorites-bar para não duplicar.
+     Fora do shell (acesso direto a /controlpanel) o chip continua visível. */
+  #chip-token { display: none !important; }
+  /* Home Issues table — same single-scroll model used by Strip
+     (`.sp-table-wrap`): only horizontal scroll inside the wrap; vertical
+     scroll is delegated to the page so external + internal scroll never
+     compete. The thead keeps its Tailwind `sticky top-0`; we don't
+     override `top` because a non-zero `top` on `<thead position:sticky>`
+     reorders rendering inside the table on Chromium. */
+  .table-wrap { overflow-x: auto; }
+  .date-card             { transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease; }
+  .date-card:hover        { background: #f0f7ff; }
+  .date-card.active      { border-color: #1d4ed8; background: #eff6ff; box-shadow: 0 1px 3px 0 rgba(29, 78, 216, 0.25); }
+  .date-card.active .card-date  { color: #1d4ed8; }
+  .date-card.active .card-total { color: #1d4ed8; }
+
+  /* Render the date pills as one continuous horizontal bar: zero gap +
+     overlapping borders (margin-left: -2px so neighbours share a single
+     2px line instead of stacking 4px). Only the first/last children get
+     rounded outer corners; hover/active raise z-index so the highlighted
+     border draws on top of its neighbours. */
+  #date-cards .date-card                    { border-radius: 0; position: relative; }
+  #date-cards .date-card + .date-card       { margin-left: -2px; }
+  #date-cards .date-card:first-child        { border-top-left-radius: 0.5rem; border-bottom-left-radius: 0.5rem; }
+  #date-cards .date-card:last-child         { border-top-right-radius: 0.5rem; border-bottom-right-radius: 0.5rem; }
+  #date-cards .date-card:hover,
+  #date-cards .date-card.active             { z-index: 1; }
+  /* Token + Log badge / modal styles — mirrors templates/beehus_console.html so
+     the UX is identical across pages. Local to /controlpanel; no global leakage. */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 80; display: none; }
+  .modal-overlay.show { display: flex; align-items: center; justify-content: center; }
+  .modal-card    { background: white; border-radius: 0.75rem; width: min(900px, 90vw); max-height: 85vh; display: flex; flex-direction: column; }
+  .ec-btn       { padding: 0.4rem 0.85rem; font-size: 0.75rem; border-radius: 0.375rem; cursor: pointer; transition: background-color .12s ease, box-shadow .12s ease; }
+  .ec-btn-primary { background: #2563eb; color: white; box-shadow: 0 1px 2px 0 rgba(37, 99, 235, 0.3); }
+  .ec-btn-primary:hover { background: #1d4ed8; }
+  .ec-btn-muted { background: #e5e7eb; color: #374151; }
+  .ec-btn-muted:hover { background: #d1d5db; }
+  .ec-input     { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.4rem 0.6rem; font-size: 0.75rem; background: white; font-family: ui-monospace, Consolas, monospace; }
+  .ec-input:focus { outline: none; box-shadow: 0 0 0 2px #93c5fd; }
+  .badge-ok    { background: #d1fae5; color: #065f46; }
+  .badge-err   { background: #fee2e2; color: #991b1b; }
+  .badge-info  { background: #dbeafe; color: #1e40af; }
+  .log-entry   { border-bottom: 1px solid #e5e7eb; padding: 0.5rem 0; }
+  .log-entry pre { white-space: pre-wrap; word-break: break-word; font-size: 0.7rem; margin: 0; }
+  #token-badge { cursor: pointer; user-select: none; transition: box-shadow .12s ease; }
+  #token-badge:hover { box-shadow: 0 0 0 2px #93c5fd; }
+
+  /* ── Funções favorites-bar ──────────────────────────────────────────────
+     A compact, single-row launcher for every tool that used to live on the
+     Funções (/beehus) page. Inspired by browser bookmark bars and Excel's
+     ribbon: small icons, small text tags, grouped with thin dividers, and
+     a collapse toggle on the right. The whole bar can be hidden — when
+     collapsed, only a thin "Funções ▾" handle remains so the operator can
+     reclaim vertical space on the Issues table. */
+  .fb-bar {
+    /* Block container with stacked rows. Each .fb-bar-row is itself a
+       horizontal flex strip that handles its own overflow, so the two rows
+       (existing groups + workflow strip) can scroll independently without
+       affecting each other. */
+    display: block;
+    background: linear-gradient(to bottom, #ffffff, #f9fafb);
+    border: 1px solid #e5e7eb;
+    /* Floating "pill" look: soft rounded corners + diffuse shadow on
+       all sides so the bar feels lifted off the page rather than
+       butted against it. */
+    border-radius: 12px;
+    margin: 14px 16px;
+    box-shadow:
+       0 1px 2px  0   rgba(0, 0, 0, 0.04),
+       0 4px 12px -2px rgba(0, 0, 0, 0.08);
+    padding: 0.25rem 0.75rem;
+    overflow: hidden;
+    user-select: none;
+  }
+  html.dark .fb-bar {
+    background: linear-gradient(to bottom, #1f2937, #111827);
+    border-color: #374151;
+    box-shadow:
+       0 1px 2px  0   rgba(0, 0, 0, 0.3),
+       0 4px 12px -2px rgba(0, 0, 0, 0.5);
+  }
+
+  /* ── Shared "surface" look ────────────────────────────────────────────────
+     Same soft border + layered shadow as .fb-bar, reused on the grid card and
+     the Kanban board so every top-level container in the page reads as one
+     visual system instead of a plain flat `shadow`. */
+  .panel-card {
+    border: 1px solid #e5e7eb;
+    box-shadow:
+       0 1px 2px  0   rgba(0, 0, 0, 0.04),
+       0 4px 12px -2px rgba(0, 0, 0, 0.08);
+  }
+  html.dark .panel-card {
+    border-color: #374151;
+    box-shadow:
+       0 1px 2px  0   rgba(0, 0, 0, 0.3),
+       0 4px 12px -2px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Zebra + hover na grade principal, propagados pra 1ª coluna (sticky,
+     bg-white fixo) — sem isso o hover/zebra "sumia" debaixo dela ao rolar
+     horizontalmente. Specificity (id+type) vence a utility class Tailwind
+     de propósito, então a linha usa só isto, não `hover:bg-gray-50` inline. */
+  #tbody tr:nth-child(even)                  { background-color: #f9fafb; }
+  #tbody tr:hover                            { background-color: #f3f4f6; }
+  #tbody tr:nth-child(even) > td:first-child { background-color: #f9fafb; }
+  #tbody tr:hover > td:first-child           { background-color: #f3f4f6; }
+
+  /* "Andon verde" — empresa 100% liberada (zero pendência em toda a esteira,
+     incluindo TXN). Recompensa visual pra quem está em dia, não só alerta
+     pra quem está travado. Inset em vez de border pra não empurrar layout. */
+  #tbody tr.row-clear > td:first-child { box-shadow: inset 3px 0 0 0 #22c55e; }
+
+  /* Row inside the bar — each row is a horizontal flex strip that scrolls
+     on its own when content exceeds the viewport. The second row gets a
+     top divider so the two strips read as related but distinct rows. */
+  .fb-bar-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+  .fb-bar-row::-webkit-scrollbar { height: 4px; }
+  .fb-bar-row::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+  html.dark .fb-bar-row::-webkit-scrollbar-thumb { background: #4b5563; }
+  .fb-bar-row + .fb-bar-row {
+    border-top: 1px solid #e5e7eb;
+    margin-top: 0.25rem;
+    padding-top: 0.25rem;
+  }
+  html.dark .fb-bar-row + .fb-bar-row { border-top-color: #374151; }
+
+  /* Each group is a vertical block: tiny section label on top + a 4-row
+     CSS-grid of chips that flow column-first. With 4 rows fixed, a group
+     of 7 chips renders as 4 rows × 2 cols (last column has 3 chips), a
+     group of 2 chips renders as 2 rows × 1 col, etc. The whole bar is
+     therefore exactly 4 chip-rows tall regardless of viewport width. */
+  .fb-group {
+    display: flex; flex-direction: column; align-items: stretch;
+    padding: 0.5rem 0.75rem;
+    border-right: 1px solid #e5e7eb;
+    flex-shrink: 0;
+  }
+  html.dark .fb-group { border-color: #374151; }
+  .fb-group:last-of-type { border-right: 0; }
+
+  .fb-group-label {
+    font-size: 0.5625rem; /* ~9px — tightened from 0.625rem */
+    font-weight: 600;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.2rem;
+    white-space: nowrap;
+  }
+  html.dark .fb-group-label { color: #6b7280; }
+
+  .fb-group-chips {
+    display: grid;
+    grid-template-rows: repeat(3, auto);
+    grid-auto-flow: column;
+    gap: 2px 4px;
+  }
+
+  /* Inputs inside the bar (Filtros group). Same height/typography as a
+     chip, but with editable text and a leading icon that follows the
+     same per-kind tinting as chips. */
+  .fb-input-wrap {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.3rem;
+    background: white;
+    font-size: 0.6875rem; /* ~11px — matches .fb-chip */
+    line-height: 1;
+    transition: border-color .1s ease, box-shadow .1s ease;
+  }
+  .fb-input-wrap:focus-within { border-color: #93c5fd; box-shadow: 0 0 0 2px #dbeafe; }
+  html.dark .fb-input-wrap { background: #1f2937; border-color: #4b5563; }
+  html.dark .fb-input-wrap:focus-within { border-color: #3b82f6; box-shadow: 0 0 0 2px #1e3a8a; }
+  .fb-input-wrap svg { width: 0.8125rem; height: 0.8125rem; flex-shrink: 0; color: #9ca3af; }
+  .fb-input-wrap input {
+    border: 0; outline: 0;
+    background: transparent;
+    font-size: 0.6875rem;
+    line-height: 1;
+    color: #374151;
+    padding: 0;
+    width: 9rem;
+  }
+  .fb-input-wrap input[type=date] { width: 6rem; color: #6b7280; }
+  html.dark .fb-input-wrap input { color: #d1d5db; }
+  html.dark .fb-input-wrap input[type=date] { color: #9ca3af; }
+  .fb-input-wrap input::placeholder { color: #9ca3af; }
+  .fb-input-wrap input[type=number] { width: 3rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .fb-input-wrap .fb-input-suffix { color: #9ca3af; font-size: 0.625rem; padding-left: 0.1rem; }
+  /* GAP-style leading label (replaces the SVG icon in the Threshold input
+     where the metric name is more useful than another generic icon). */
+  .fb-input-wrap .fb-input-prefix { color: #6b7280; font-size: 0.625rem; font-weight: 600; letter-spacing: 0.02em; padding-right: 0.15rem; }
+  html.dark .fb-input-wrap .fb-input-prefix { color: #9ca3af; }
+
+  /* Token chip status: red when no Beehus bearer token is loaded, green
+     once one is. Background + border + text/icon colours all flip via the
+     `fb-chip-token-on` / `fb-chip-token-off` classes (the hover/active
+     rules above still work; these states paint on top with !important to
+     beat the per-kind icon-tinting rule). */
+  .fb-chip-token-off { background: #fee2e2 !important; border-color: #fca5a5 !important; color: #991b1b !important; }
+  .fb-chip-token-off:hover { background: #fecaca !important; border-color: #f87171 !important; color: #7f1d1d !important; }
+  .fb-chip-token-off svg { color: #991b1b !important; }
+  .fb-chip-token-on  { background: #d1fae5 !important; border-color: #6ee7b7 !important; color: #065f46 !important; }
+  .fb-chip-token-on:hover { background: #a7f3d0 !important; border-color: #34d399 !important; color: #064e3b !important; }
+  .fb-chip-token-on  svg { color: #065f46 !important; }
+  html.dark .fb-chip-token-off { background: #7f1d1d !important; border-color: #b91c1c !important; color: #fecaca !important; }
+  html.dark .fb-chip-token-off svg { color: #fecaca !important; }
+  html.dark .fb-chip-token-on  { background: #064e3b !important; border-color: #047857 !important; color: #a7f3d0 !important; }
+  html.dark .fb-chip-token-on  svg { color: #a7f3d0 !important; }
+
+  /* Cache-status row inside the Cache group (third row of the chip grid).
+     Plain text, no border/hover — it's a status indicator, not a chip. */
+  .fb-cache-status {
+    display: inline-flex; align-items: center;
+    font-size: 0.625rem; line-height: 1;
+    color: #6b7280;
+    padding: 0.225rem 0.45rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 14rem;
+  }
+  html.dark .fb-cache-status { color: #9ca3af; }
+
+  /* Filtros group: each input wrap is forced to the same fixed width so
+     all three boxes line up (right-aligned via justify-items: end). The
+     inner <input> flexes to fill the remaining space inside its wrap,
+     so the company field shows the "Filtrar empresa..." placeholder
+     while date/GAP get the same outer box width. */
+  .fb-group-filtros .fb-group-chips           { justify-items: end; }
+  .fb-group-filtros .fb-input-wrap            { width: 7.5rem; box-sizing: border-box; position: relative; }
+  .fb-group-filtros .fb-input-wrap input      { flex: 1; width: auto; min-width: 0; }
+  /* Date input: hide the native right-side calendar icon by making the
+     picker indicator transparent and stretching it across the whole
+     input — clicking anywhere still opens the picker, but the visible
+     calendar icon is now the SVG on the LEFT of the wrap. */
+  .fb-group-filtros .fb-input-wrap input[type=date]::-webkit-calendar-picker-indicator {
+    position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
+  }
+  html.dark .fb-input-wrap .fb-input-suffix { color: #6b7280; }
+
+  /* Vertical divider between issue columns and the new pipeline-state
+     columns. Applied to the first extras header and every extras body cell
+     so the separator survives sorting/filtering. */
+  th.col-extras-first, td.col-extras-first { border-left: 2px solid #d1d5db; }
+  html.dark th.col-extras-first, html.dark td.col-extras-first { border-left-color: #4b5563 !important; }
+
+  .fb-chip {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+    background: transparent;
+    color: #374151;
+    font-size: 0.6875rem; /* ~11px — tightened from 0.75rem */
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color .1s ease, border-color .1s ease, color .1s ease;
+  }
+  .fb-chip:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+  .fb-chip:active { background: #dbeafe; }
+  html.dark .fb-chip { color: #d1d5db; }
+  html.dark .fb-chip:hover { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
+  .fb-chip svg { width: 0.8125rem; height: 0.8125rem; flex-shrink: 0; }
+
+  /* Per-action color accents (icon only — keeps the row visually quiet). */
+  .fb-chip[data-kind=create]  svg { color: #059669; }
+  .fb-chip[data-kind=delete]  svg { color: #dc2626; }
+  .fb-chip[data-kind=process] svg { color: #2563eb; }
+  .fb-chip[data-kind=nav]     svg { color: #7c3aed; }
+  .fb-chip[data-kind=publish] svg { color: #d97706; }
+  .fb-chip[data-kind=flow]    svg { color: #0891b2; }
+
+  /* Sticky stack ordering: header on top, then this bar. The bar must sit
+     ABOVE the inline /beehus iframe (which is in normal flow with z-auto
+     in the parent stacking context) so the operator can always reach the
+     chips, even mid-tool. */
+  .fb-bar { position: sticky; top: 0; z-index: 30; }
+  /* Belt-and-braces: keep the iframe firmly behind the bar/header in the
+     parent stacking context (modals/overlays inside the iframe have their
+     own z-context and can never escape the iframe to cover the bar). */
+  #tool-view { position: relative; z-index: 1; }
+
+  /* Highlight the active chip so the operator always knows which tool the
+     iframe currently shows. Toggled by Funcoes.open / showIssues. */
+  .fb-chip.active {
+    background: #2563eb !important;
+    border-color: #2563eb !important;
+    color: white !important;
+  }
+  .fb-chip.active svg { color: white !important; }
+  html.dark .fb-chip.active {
+    background: #3b82f6 !important;
+    border-color: #3b82f6 !important;
+    color: white !important;
+  }
+
+  /* Inline-tool view: hosts a /beehus iframe inside Issues so the form
+     looks like part of the page. Sized to fill the remaining viewport
+     under the sticky header (49px) + sticky favorites-bar (~74px on the
+     2-row layout). */
+  #tool-view {
+    height: calc(100vh - 49px - 90px);
+    background: #f3f4f6;
+  }
+  html.dark #tool-view { background: #111827; }
+  #tool-view iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .hidden-view { display: none !important; }
+
+  /* Loader shown over the tool iframe while a tool is opening + fetching
+     (e.g. after clicking the TXN counter on the painel: covers iframe load +
+     classifier init + filter load + "Buscando transações…"). Sits above the
+     iframe (#tool-view is position:relative). */
+  #tool-loader {
+    position: absolute; inset: 0; z-index: 50;
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px;
+    background: rgba(243, 244, 246, 0.88);
+  }
+  #tool-loader.show { display: flex; }
+  html.dark #tool-loader { background: rgba(17, 24, 39, 0.88); }
+  #tool-loader-label { font-size: 13px; font-weight: 500; color: #374151; }
+  html.dark #tool-loader-label { color: #e5e7eb; }
+
+  /* ── Strip (Position Stripping) — extraído para partial reaproveitado
+     pela página /stripping. Ver templates/partials/_strip_styles.html. */
+  {% include 'partials/_strip_styles.html' %}
+
+  /* ── Guia (segunda .fb-bar-row) ─────────────────────────────────────────
+     Exibe uma imagem-guia do fluxo diário no lugar dos antigos chips
+     interativos da pipeline. A linha inteira é ocultada via `.collapsed` em
+     `#wf-row` quando o operador clica no chip `Guia` em Visão. */
+  .fb-group-guia {
+    flex: 1 1 100%;
+    border-right: 0;
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+    display: flex;
+    /* Sobrepõe o `flex-direction: column` herdado de `.fb-group` para que
+       o rótulo "Sequência correta" fique à esquerda da imagem, e não
+       acima dela. */
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Imagem-guia: usa tamanho natural, limitado apenas em altura. Sem
+     `max-width:100%` para evitar que a imagem se estique até a largura
+     da barra. `align-self:center` impede que o flex pai (.fb-bar-row tem
+     align-items:stretch) force estiramento vertical. */
+  .wf-guide-img {
+    display: block;
+    width: auto;
+    height: auto;
+    max-height: 160px;
+    align-self: center;
+    border-radius: 0.5rem;
+  }
+  /* Rótulo "Sequência correta" ao lado da imagem-guia. Mesma linguagem
+     visual dos `.fb-group-label` (uppercase + tracking) mas um pouco
+     maior porque está em destaque ao lado da imagem. */
+  .wf-guide-label {
+    align-self: center;
+    margin-right: 0.75rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  html.dark .wf-guide-label { color: #9ca3af; }
+  /* Fallback amigável quando o arquivo de imagem ainda não foi adicionado em
+     /static. O <img> esconde a si mesmo via onerror e expõe o aviso ao lado. */
+  .wf-guide-missing {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    padding: 0.5rem 0.75rem;
+    border: 1px dashed #d1d5db;
+    border-radius: 0.5rem;
+  }
+  html.dark .wf-guide-missing { color: #6b7280; border-color: #374151; }
+
+  /* Collapsed state — `toggleWorkflow()` flips this on `#wf-row` to hide
+     a linha inteira. O chip de toggle gira a chevron 180° para sinalizar. */
+  #wf-row.collapsed { display: none; }
+  #chip-wf-toggle .wf-toggle-icon { transition: transform .2s ease; }
+  #chip-wf-toggle.collapsed .wf-toggle-icon { transform: rotate(180deg); }
+
+  /* ── Menu-bar toggle ─────────────────────────────────────────────────────
+     Botão minúsculo no canto superior direito da `.fb-bar` para ocultar a
+     primeira linha (chips) e liberar espaço vertical. Quando a barra de
+     menu é oculta, o `#wf-row` (guia) é forçado a ficar visível — assim a
+     barra nunca colapsa para altura zero e o operador continua vendo o
+     guia visual do fluxo. Reabrir a barra restaura o estado anterior do
+     guia (não fechamos automaticamente). */
+  .fb-menu-toggle {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    z-index: 5;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #9ca3af;
+    border: 1px solid #e5e7eb;
+    cursor: pointer;
+    line-height: 1;
+    transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .fb-menu-toggle:hover { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
+  html.dark .fb-menu-toggle { color: #6b7280; border-color: #374151; }
+  html.dark .fb-menu-toggle:hover { background: #374151; color: #d1d5db; border-color: #4b5563; }
+  .fb-menu-toggle svg { width: 10px; height: 10px; transition: transform .2s ease; }
+  /* Quando a barra está colapsada, vira o chevron para indicar "expandir". */
+  #funcoes-bar.menu-collapsed .fb-menu-toggle svg { transform: rotate(180deg); }
+  /* Esconde a primeira fb-bar-row (chips) quando o operador colapsa o menu.
+     A segunda fb-bar-row (#wf-row) é forçada a aparecer pelo JS removendo
+     `.collapsed`, então ela mostra o guia mesmo nesse estado. */
+  #funcoes-bar.menu-collapsed > .fb-bar-row:first-of-type { display: none; }
+  /* Sem a primeira row, a segunda perde o divisor/padding extra adicionado
+     por `.fb-bar-row + .fb-bar-row` — neutraliza para evitar borda solta. */
+  #funcoes-bar.menu-collapsed > .fb-bar-row + .fb-bar-row {
+    border-top: 0;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  /* ── Repetir Posições (chip "Projetada") — extraído para partial
+     reaproveitado pela página /repetir-posicoes. As regras `.rp-*`,
+     `.cl-*` e `.fb-chip*` redefinidas pelo Repetir são incluídas aqui;
+     o redefine no fim vence por ordem e bate visualmente com o chip
+     do painel. Ver templates/partials/_repetir_styles.html. */
+  {% include 'partials/_repetir_styles.html' %}

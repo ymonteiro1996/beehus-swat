@@ -109,13 +109,6 @@ def _api_error_response(e: BeehusAPIError):
     }), status
 
 
-def _sorted_dicts_to_list(d: dict, name_key="name"):
-    return sorted(
-        [{"id": k, name_key: v or k} for k, v in d.items()],
-        key=lambda x: (x[name_key] or "").lower(),
-    )
-
-
 # ── Token ─────────────────────────────────────────────────────────────────────
 
 @bp.route("/api/beehus/token", methods=["GET"])
@@ -1732,52 +1725,6 @@ def identify_txn_reinforcement_normalize():
     description = str(data.get("description") or "")
     key = _normalize_reinforcement_key(description) if description.strip() else ""
     return jsonify({"key": key})
-
-
-@bp.route("/api/beehus/identify-transactions/wallet-securities", methods=["GET"])
-def identify_txn_wallet_securities():
-    """Return the union of securityIds held by `walletId` at the FIXED dates
-    D, D-1 and D-2 business days (D = `liquidationDate`), fetched via the
-    Beehus API at each EXACT date — no backward scan over sparse dates.
-
-    Used by the security-edit modal to restrict the free-text search to a
-    universe of securities the wallet actually holds — matches the L1∪L2
-    candidate pool that `TransactionSecurityClassifier` scores against.
-    """
-    wallet_id        = (request.args.get("walletId") or "").strip()
-    liquidation_date = (request.args.get("liquidationDate") or "").strip()
-    if not wallet_id or not liquidation_date:
-        return jsonify({"error": "walletId and liquidationDate are required"}), 400
-
-    # Authorization: resolve the wallet's company and gate against the
-    # caller's visible-companies set (consistent with the rest of the page).
-    try:
-        ObjectId(wallet_id)
-    except (InvalidId, TypeError):
-        return jsonify({"error": "invalid walletId"}), 400
-    wallet_doc = resolve_wallet(wallet_id, {"companyId": 1})
-    if not wallet_doc:
-        return jsonify({"securityIds": []})
-    company_id = str(wallet_doc.get("companyId") or "")
-    if not company_visible(company_id):
-        return jsonify({"securityIds": []}), 403
-
-    # Fixed dates: D (liquidationDate), D-1 and D-2 business days. One exact-
-    # date API call each; a date with no position simply contributes nothing.
-    d = str(liquidation_date)[:10]
-    dates = [d, business_days_before(d, 1), business_days_before(d, 2)]
-    sec_ids = set()
-    for dt in dates:
-        if not dt:
-            continue
-        doc = beehus_catalog.processed_doc(wallet_id, dt, company_id)
-        if not doc:
-            continue
-        for s in (doc.get("securities") or []):
-            sid = beehus_catalog.id_str(s.get("securityId")) if s.get("securityId") else ""
-            if sid:
-                sec_ids.add(sid)
-    return jsonify({"securityIds": sorted(sec_ids)})
 
 
 @bp.route("/api/beehus/identify-transactions/wallet-position-detail", methods=["GET"])

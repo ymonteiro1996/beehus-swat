@@ -1,0 +1,26 @@
+/* Estilos da tela Correções. Extraído para static/ (CLAUDE.md). */
+  .table-wrap { overflow-x: auto; max-height: calc(100vh - 380px); overflow-y: auto; }
+  .date-card.active { border-color: #1d4ed8; background: #eff6ff; }
+  .date-card.active .card-date  { color: #1d4ed8; }
+  .date-card.active .card-total { color: #1d4ed8; }
+  .tab-btn.active { border-bottom-color: #2563eb !important; color: #2563eb !important; }
+  .filter-row th { background: #f9fafb; }
+  html.dark .filter-row th { background: #1f2937; }
+  .col-filter {
+    width: 100%;
+    font-size: 10px;
+    padding: 3px 6px;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    background: white;
+    color: #374151;
+  }
+  html.dark .col-filter { background: #374151; color: #d1d5db; border-color: #4b5563; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 60; padding: 1rem; }
+  .modal-overlay.show { display: flex; }
+  .modal-card { background: white; border-radius: 1rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,.25); display: flex; flex-direction: column; max-height: 90vh; }
+  .badge-ok   { background: #d1fae5; color: #065f46; }
+  .badge-err  { background: #fee2e2; color: #991b1b; }
+  .badge-info { background: #dbeafe; color: #1e40af; }
+  #token-badge { cursor: pointer; user-select: none; transition: box-shadow .12s ease; }
+  #token-badge:hover { box-shadow: 0 0 0 2px #93c5fd; }

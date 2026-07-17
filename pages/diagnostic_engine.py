@@ -31,7 +31,6 @@ still gets a valid result.
     history_returns: [float]   # optional, for Step 6.1 (empty disables it)
     thresholds: {sid: {lowerBound, upperBound, mean, stdDev}}  # optional
 """
-import math
 import statistics
 from datetime import date as _date, timedelta
 

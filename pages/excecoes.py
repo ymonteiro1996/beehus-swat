@@ -44,9 +44,8 @@ from datetime import datetime
 from flask import Blueprint, jsonify, render_template, request, send_file
 from openpyxl import Workbook
 
-from db import (db, get_company_filter, company_visible, get_company_names,
-                get_grouping_index, get_security_names, get_wallet_names,
-                resolve_wallet, atomic_write_json)
+from db import (get_company_filter, company_visible, get_company_names, get_grouping_index,
+                get_security_names, resolve_wallet, atomic_write_json)
 from beehus_api import (
     upload_unprocessed_security_positions_file,
     update_transaction,

@@ -65,17 +65,6 @@ def enable_timing(on: bool = True) -> None:
     _timing_on = bool(on)
 
 
-def reset_timing() -> None:
-    with _timing_lock:
-        _timing_log.clear()
-
-
-def get_timing() -> list:
-    """Snapshot of recorded calls: list of dicts {method, path, summary, status, ms}."""
-    with _timing_lock:
-        return list(_timing_log)
-
-
 def _param_summary(params, path):
     """Compact one-line summary of the query params that matter for cost —
     chiefly `date`/`initialDate`/`finalDate` and the SIZE of `walletIds`."""

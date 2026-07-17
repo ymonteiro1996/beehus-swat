@@ -60,15 +60,12 @@ from openpyxl import Workbook
 from db import (
     atomic_write_json,
     company_visible,
-    db,
     get_company_filter,
     get_company_names,
     get_security_names,
     get_wallet_names,
     resolve_wallet,
-    sum_cash,
     sum_cash_by_dates,
-    today_in_brt,
 )
 from beehus_api import (
     upload_unprocessed_security_positions_file,
@@ -1705,17 +1702,6 @@ def _find_orphan_transactions(wallet_id, target_date, *,
     orphans.sort(key=lambda o: (o.get("liquidationDate") or "",
                                  o.get("securityName") or ""))
     return orphans
-
-
-def _provisions_sum(company_id, wallet_id, target_date):
-    """Sum `db.provisions.balance` whose `[initialDate, liquidationDate)`
-    window covers `target_date`. Thin wrapper over `_provisions_detail`
-    so the two views stay in sync — they read the same docs and apply
-    the same filters, the sum is just an aggregation of `balance`."""
-    return sum(
-        (p.get("balance") or 0)
-        for p in _provisions_detail(company_id, wallet_id, target_date)
-    )
 
 
 def _target_processed_position(wallet_id, target_date):

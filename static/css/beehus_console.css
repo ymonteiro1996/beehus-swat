@@ -1,0 +1,185 @@
+/* Estilos da tela Beehus Console. Extraído para static/ (CLAUDE.md). */
+  .section-card { background: white; border-radius: 0.75rem; box-shadow: 0 1px 3px 0 rgba(0,0,0,.1); padding: 1rem 1.1rem; }
+  .section-title { font-weight: 600; color: #374151; font-size: 0.8125rem; margin-bottom: 0.25rem; }
+  .section-hint  { font-size: 0.6875rem; color: #9ca3af; margin-bottom: 0.75rem; }
+  html.dark .section-title { color: #e5e7eb; }
+  html.dark .section-hint  { color: #6b7280; }
+  .type-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.1rem 0.25rem 0.1rem 0.55rem; border: 1px solid #c7d2fe; border-radius: 9999px; font-size: 0.6875rem; color: #4338ca; background: #eef2ff; }
+  .chip-x    { background: transparent; border: none; cursor: pointer; padding: 0 0.2rem; color: #6366f1; font-weight: 700; line-height: 1; font-size: 0.85rem; }
+  .chip-x:hover { color: #312e81; }
+  html.dark .type-chip { background: #312e81; color: #c7d2fe; border-color: #4338ca; }
+  html.dark .chip-x    { color: #c7d2fe; }
+  .collapsible-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+  .collapsible-header:hover .section-title { color: #1d4ed8; }
+  .collapse-indicator { font-size: 0.625rem; color: #9ca3af; transition: transform .15s ease; }
+  .collapsed .collapse-indicator { transform: rotate(-90deg); }
+  .collapsible-body { transition: max-height .2s ease, opacity .2s ease; overflow: hidden; }
+  .collapsed > .collapsible-body { max-height: 0; opacity: 0; margin: 0; padding: 0; pointer-events: none; }
+  .field-grid   { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+  .field-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+  .field-grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+  .field-grid-5 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.75rem; }
+  .label        { display: block; font-size: 0.6875rem; color: #6b7280; margin-bottom: 0.25rem; }
+  .input        { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.4rem 0.6rem; font-size: 0.75rem; background: white; }
+  .input:focus  { outline: none; box-shadow: 0 0 0 2px #93c5fd; }
+  .btn          { padding: 0.4rem 0.85rem; font-size: 0.75rem; border-radius: 0.375rem; cursor: pointer; }
+  .btn-primary  { background: #2563eb; color: white; }
+  .btn-primary:hover  { background: #1d4ed8; }
+  .btn-success  { background: #059669; color: white; }
+  .btn-success:hover  { background: #047857; }
+  .btn-danger   { background: #dc2626; color: white; }
+  .btn-danger:hover   { background: #b91c1c; }
+  .btn-muted    { background: #e5e7eb; color: #374151; }
+  .btn-muted:hover    { background: #d1d5db; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 50; display: none; }
+  .modal-overlay.show { display: flex; align-items: center; justify-content: center; }
+  .modal-card    { background: white; border-radius: 0.75rem; width: min(900px, 90vw); max-height: 85vh; display: flex; flex-direction: column; }
+
+  /* Blocking busy overlay — sits above modals so a long action triggered from
+     within a modal still gets a "wait" gate. cursor:wait + user-select:none +
+     pointer-events on the overlay (default) freeze interaction. */
+  .busy-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 1rem;
+    cursor: wait;
+    user-select: none;
+  }
+  .busy-overlay.show { display: flex; }
+  .busy-spinner {
+    width: 3rem; height: 3rem;
+    border: 4px solid rgba(255,255,255,0.2);
+    border-top-color: #fbbf24;   /* brand accent (Scalling Engine yellow) */
+    border-radius: 50%;
+    animation: busy-spin 0.7s linear infinite;
+  }
+  @keyframes busy-spin { to { transform: rotate(360deg); } }
+  .busy-label { color: white; font-size: 0.875rem; letter-spacing: 0.025em; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+  html.dark .section-card,
+  html.dark .modal-card { background: #1f2937 !important; }
+  html.dark .input      { background: #374151 !important; color: #d1d5db !important; border-color: #4b5563 !important; }
+  .log-entry { border-bottom: 1px solid #e5e7eb; padding: 0.5rem 0; }
+  .log-entry pre { white-space: pre-wrap; word-break: break-word; font-size: 0.7rem; }
+  html.dark .log-entry { border-color: #374151; }
+  .badge-ok    { background: #d1fae5; color: #065f46; }
+  .badge-err   { background: #fee2e2; color: #991b1b; }
+  .badge-info  { background: #dbeafe; color: #1e40af; }
+  .badge-amber { background: #fef3c7; color: #92400e; }
+  html.dark .badge-ok    { background: #064e3b; color: #d1fae5; }
+  html.dark .badge-err   { background: #7f1d1d; color: #fee2e2; }
+  html.dark .badge-info  { background: #1e3a8a; color: #dbeafe; }
+  html.dark .badge-amber { background: #78350f; color: #fef3c7; }
+  /* Reusable badge sizing for the confidence column. */
+  .conf-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; min-width: 44px; text-align: center; }
+  /* Editable Preço exec. / IRRF inputs in the Identificar Transações grid. The
+     badge-* colour classes (added by _execColorCls / _irrfColorCls) repaint the
+     background for the color-grading. */
+  .exec-inp { width: 82px; text-align: right; border: 1px solid #d1d5db; border-radius: 4px; padding: 1px 4px; font-size: 11px; background: #fff; }
+  .exec-inp.badge-ok, .exec-inp.badge-amber, .exec-inp.badge-err { border-color: transparent; }
+  html.dark .exec-inp { background: #1f2937; border-color: #374151; color: #e5e7eb; }
+  /* Subtle amber tint for rows the classifier flagged as needing human review.
+     Stands out even when the user sorts or filters away from the review bucket. */
+  .conf-review-row td { background-color: #fffbeb; }
+  html.dark .conf-review-row td { background-color: #422006; }
+  #token-badge { cursor: pointer; user-select: none; transition: box-shadow .12s ease; }
+  #token-badge:hover { box-shadow: 0 0 0 2px #93c5fd; }
+  .flow-steps { list-style: none; padding: 0; margin: 0; }
+  .flow-steps li { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; font-size: 0.75rem; border-bottom: 1px solid #f3f4f6; }
+  .flow-steps li:last-child { border-bottom: 0; }
+  html.dark .flow-steps li { border-color: #374151; }
+  .step-icon { width: 1.1rem; text-align: center; font-weight: 700; }
+  .step-icon[data-state=pending] { color: #9ca3af; }
+  .step-icon[data-state=running] { color: #2563eb; }
+  .step-icon[data-state=done]    { color: #059669; }
+  .step-icon[data-state=error]   { color: #dc2626; }
+  .step-icon[data-state=skipped] { color: #9ca3af; opacity: 0.75; }
+  .step-msg { margin-left: auto; color: #6b7280; font-size: 0.6875rem; }
+  html.dark .step-msg { color: #9ca3af; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .step-icon[data-state=running] { display: inline-block; animation: spin 1s linear infinite; }
+  .day-grid { max-height: 340px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 0.5rem; }
+  html.dark .day-grid { border-color: #374151; }
+  .day-grid li { display: grid; grid-template-columns: 100px auto 1fr auto; gap: 0.5rem; align-items: center;
+                 padding: 0.3rem 0.6rem; font-size: 0.6875rem; border-bottom: 1px solid #f3f4f6; }
+  html.dark .day-grid li { border-color: #374151; }
+  .day-grid li:last-child { border-bottom: 0; }
+  .day-grid .day-date  { font-family: ui-monospace, Consolas, monospace; color: #4b5563; }
+  html.dark .day-grid .day-date { color: #d1d5db; }
+  .day-grid .step-row  { display: inline-flex; gap: 0.4rem; }
+  .day-grid .step-row .step-icon { font-size: 0.75rem; }
+  .table-wrap   { max-height: 50vh; overflow: auto; }
+  /* The Identificar Transações result table is the page's main work surface
+     once a search returns rows; let it consume the rest of the viewport so
+     the operator scrolls the table, not the page. */
+  #i-result .table-wrap { max-height: calc(100vh - 240px); }
+  table.txn-table { width: 100%; border-collapse: collapse; font-size: 0.6875rem; }
+  table.txn-table th, table.txn-table td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #e5e7eb; text-align: left; }
+  html.dark table.txn-table th, html.dark table.txn-table td { border-color: #374151; }
+  table.txn-table thead th { position: sticky; top: 0; background: #eef2ff; color: #4338ca; text-transform: uppercase; font-size: 0.625rem; letter-spacing: 0.02em; font-weight: 600; }
+  html.dark table.txn-table thead th { background: #1e3a8a; color: #c7d2fe; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .menu-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
+  .menu-grid { display: grid; grid-template-columns: 1fr; gap: 0.5rem; }
+  .menu-card { cursor: pointer; transition: transform .12s ease, box-shadow .12s ease;
+               padding: 0.55rem 0.75rem; min-height: 3.25rem; display: flex; align-items: center; }
+  .menu-card > * { width: 100%; align-items: center; }
+  .menu-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
+  .menu-card .icon { width: 2rem; height: 2rem; border-radius: 0.5rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .menu-card .icon svg { width: 1rem; height: 1rem; }
+  .icon-create { background: #d1fae5; color: #047857; }
+  .icon-delete { background: #fee2e2; color: #b91c1c; }
+  .icon-process { background: #dbeafe; color: #1d4ed8; }
+  .icon-nav     { background: #ede9fe; color: #6d28d9; }
+  html.dark .icon-create  { background: #064e3b; color: #6ee7b7; }
+  html.dark .icon-delete  { background: #7f1d1d; color: #fca5a5; }
+  html.dark .icon-process { background: #1e3a8a; color: #bfdbfe; }
+  html.dark .icon-nav     { background: #4c1d95; color: #ddd6fe; }
+  .wallets-transfer { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.75rem; align-items: stretch; }
+  .wallets-pane     { display: flex; flex-direction: column; border: 1px solid #e5e7eb; border-radius: 0.5rem; background: white; min-height: 240px; }
+  html.dark .wallets-pane { background: #1f2937; border-color: #374151; }
+  .wallets-pane-header { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.65rem; border-bottom: 1px solid #f3f4f6; background: #fafafa; border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; font-size: 0.6875rem; }
+  html.dark .wallets-pane-header { background: #111827; border-color: #374151; color: #d1d5db; }
+  .wallets-list     { flex: 1; width: 100%; border: none; padding: 0.25rem; font-size: 0.75rem; outline: none; background: transparent; color: inherit; min-height: 200px; max-height: 50vh; overflow-y: auto; }
+  .wallets-list:focus { box-shadow: 0 0 0 2px #93c5fd inset; border-radius: 0.5rem; }
+  .wallets-actions  { display: flex; flex-direction: column; justify-content: center; gap: 0.4rem; }
+  .wallets-actions .btn { min-width: 2.25rem; padding: 0.3rem 0.5rem; }
+  /* Div-based listbox used by Publicar Agrupamentos so each row can carry
+     a name column and a right-aligned delta column. Visually compatible
+     with .wallets-list but renders <div> rows instead of <option>. */
+  .picker-list { flex: 1; width: 100%; padding: 0.25rem; min-height: 200px; max-height: 50vh; overflow-y: auto;
+                 background: transparent; color: inherit; outline: none; }
+  .picker-list:focus { box-shadow: 0 0 0 2px #93c5fd inset; border-radius: 0.5rem; }
+  .picker-row  { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; align-items: baseline;
+                 padding: 0.15rem 0.4rem; border-radius: 0.25rem; cursor: pointer; user-select: none;
+                 font-size: 0.75rem; line-height: 1.3; }
+  .picker-row:hover { background: #f3f4f6; }
+  .picker-row.highlighted { background: #dbeafe; color: #1e3a8a; }
+  html.dark .picker-row:hover { background: #374151; }
+  html.dark .picker-row.highlighted { background: #1e3a8a; color: #dbeafe; }
+  .picker-row-name  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-row-delta { color: #6b7280; font-variant-numeric: tabular-nums; min-width: 6rem; text-align: right; }
+  html.dark .picker-row-delta { color: #9ca3af; }
+  .picker-row.highlighted .picker-row-delta { color: inherit; }
+
+  /* Segmented date-mode toggle in the Identificar Transações filters. */
+  .seg-toggle { display: inline-flex; border: 1px solid #d1d5db; border-radius: 0.375rem; overflow: hidden; }
+  .seg-btn { padding: 0.1rem 0.5rem; font-size: 0.6875rem; line-height: 1; cursor: pointer; background: white; color: #374151; border: 0; }
+  .seg-btn + .seg-btn { border-left: 1px solid #d1d5db; }
+  .seg-btn.active { background: #2563eb; color: white; }
+  .seg-btn:hover:not(.active) { background: #f3f4f6; }
+  html.dark .seg-toggle { border-color: #4b5563; }
+  html.dark .seg-btn { background: #1f2937; color: #e5e7eb; }
+  html.dark .seg-btn.active { background: #2563eb; color: white; }
+  html.dark .seg-btn:hover:not(.active) { background: #374151; }
+  /* The header carries Beehus's title + Token + Log + view-scoped config
+     button. Hidden in-frame so Issues' main header is the only header.
+     Note: descendant selector. base.html nests the content block inside
+     a flex column wrapper, so the header is NOT a direct child of body.
+     The `header.bg-white.shadow` chain keeps the match narrow enough to
+     avoid touching other `.bg-white` elements (cards, modals). */
+  body header.bg-white.shadow { display: none !important; }

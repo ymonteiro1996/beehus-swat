@@ -35,8 +35,8 @@ Regras (spec), todas calculadas NESTE projeto (não no sistema origem):
     (nav/cota/GAP + ativos divergentes + caixa).
 """
 from flask import Blueprint, render_template, jsonify, request, Response
-from db import (get_biz_dates, get_company_filter, company_visible,
-                get_company_names, resolve_wallet)
+from db import (get_company_filter, company_visible, get_company_names,
+                resolve_wallet)
 import beehus_catalog
 from pages.conciliacao_unprocessed import (_aggregate_positions, _position_name_hints,
                                            _group_unprocessed, _mapping_from_position)
@@ -2207,15 +2207,6 @@ def index():
     if cf:
         companies = [c for c in companies if c["id"] in cf]
     return render_template("conciliacao_mov.html", companies=companies)
-
-
-@bp.route("/api/conciliacao-mov/dates")
-def get_dates():
-    company_id = request.args.get("companyId", "")
-    end_date = request.args.get("endDate") or None
-    if not company_id or not company_visible(company_id):
-        return jsonify({"cards": []})
-    return jsonify({"cards": [{"date": d} for d in get_biz_dates(_NUM_DATES, end_date)]})
 
 
 @bp.route("/api/conciliacao-mov/rows")

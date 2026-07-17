@@ -1,0 +1,12 @@
+/* Estilos da tela Precificação (Preços na Curva). Extraído para static/
+   conforme o CLAUDE.md (JS/CSS fora do HTML). */
+  .sec-badge { display: inline-flex; flex-direction: column; background: #f9fafb; border: 1px solid #e5e7eb;
+               border-radius: 8px; padding: 4px 10px; font-size: 10px; }
+  .sec-badge .label { text-transform: uppercase; letter-spacing: .05em; color: #9ca3af; }
+  .sec-badge .val   { font-weight: 600; color: #374151; margin-top: 1px; }
+  .drop-row         { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #f3f4f6; }
+  .drop-row:hover   { background: #fff7ed; }
+  .drop-row:last-child { border-bottom: none; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center;
+              width: 20px; height: 20px; border-radius: 50%; background: #f97316; color: white;
+              font-size: 10px; font-weight: 700; flex-shrink: 0; }

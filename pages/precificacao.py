@@ -10,7 +10,7 @@ import beehus_catalog
 from flask import Blueprint, Response, jsonify, render_template, request
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from db import db, get_company_filter, get_wallet_names
+from db import get_company_filter, get_wallet_names
 
 bp = Blueprint("precificacao", __name__)
 

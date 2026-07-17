@@ -1,5 +1,4 @@
 import concurrent.futures
-import csv
 import io
 import json
 import os
@@ -8,7 +7,7 @@ from datetime import date
 
 from bson import ObjectId
 from flask import Blueprint, render_template, jsonify, make_response, request
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from beehus_api import (
@@ -77,7 +76,8 @@ def _get_matcher():
     # Call _get_classifier() BEFORE acquiring _init_lock: both functions share
     # the same non-reentrant Lock, so calling it inside the lock causes a
     # deadlock on the first request when _clf is also None.
-    clf = _get_classifier()
+    # Called for its side effect (warms _clf); return value intentionally unused.
+    _get_classifier()
     with _init_lock:
         if _matcher is None:
             # SecurityMatcher is API/file-backed: its cache loads from the daily
@@ -571,58 +571,6 @@ def txn_counts():
 
 
 # ── Per-company issue summary (used by Fluxo apontamentos) ────────────────────
-
-@bp.route("/api/controlpanel/issues-summary")
-def issues_summary():
-    """Pending-issue counts for a single (company, date), narrowed to the
-    types the caller cares about.
-
-    Query params:
-        companyId  required
-        date       required, YYYY-MM-DD
-        types      optional, comma-separated. Defaults to all ISSUE_TYPES keys.
-
-    The Fluxo apontamento for each step asks for a focused subset (e.g. just
-    the four "post-process" issue types). Returning one type at a time would
-    multiply round-trips for no benefit, so the endpoint accepts a list and
-    aggregates once. Labels come from ISSUE_TYPES so the UI doesn't need to
-    keep its own copy in sync.
-    """
-    cid  = (request.args.get("companyId") or "").strip()
-    date = (request.args.get("date") or "").strip()
-    if not cid or not date:
-        return jsonify({"error": "companyId and date are required"}), 400
-    if not company_visible(cid):
-        return jsonify({"error": "company not visible"}), 403
-
-    valid_types = {k for k, _ in ISSUE_TYPES}
-    label_by_type = dict(ISSUE_TYPES)
-    raw_types = (request.args.get("types") or "").strip()
-    if raw_types:
-        requested = [t.strip() for t in raw_types.split(",") if t.strip()]
-        types = [t for t in requested if t in valid_types]
-    else:
-        types = [k for k, _ in ISSUE_TYPES]
-    if not types:
-        return jsonify({"companyId": cid, "date": date, "types": [], "total": 0})
-
-    # Counts come from the pre-processing endpoint (E) — the SAME source the
-    # Painel grid uses (`_preproc_counts`), so the apontamento summary and the
-    # grid can never drift. Replaces the direct `db.issues.aggregate`. One E
-    # call per (company, date); empty/failed → all-zero counts.
-    statuses = beehus_catalog.preprocessing_status_many([cid], date)
-    st = statuses.get(cid)
-    counts = _counts_from_status(st) if st else {}
-
-    # Preserve the order requested by the caller so the UI can render the
-    # apontamento list deterministically — order in ISSUE_TYPES matches the
-    # left-to-right column order of the Painel de Controle table.
-    items = [
-        {"type": t, "label": label_by_type[t], "count": counts.get(t, 0)}
-        for t in types
-    ]
-    total = sum(it["count"] for it in items)
-    return jsonify({"companyId": cid, "date": date, "types": items, "total": total})
 
 
 # ── Threshold endpoints (shared with conciliação) ─────────────────────────────
@@ -2409,89 +2357,6 @@ def refresh_cache():
         "count": cache.count,
         "date":  cache.loaded_date,
     })
-
-
-@bp.route("/api/controlpanel/parse-complement", methods=["POST"])
-def parse_complement():
-    """Parse a complement file and return a preview of {uid, complement} rows."""
-    file = request.files.get("file")
-    if not file:
-        return jsonify({"ok": False, "error": "Nenhum arquivo enviado."}), 400
-
-    filename = (file.filename or "").lower()
-    ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-    if ext not in ("xlsx", "csv", "json", "txt"):
-        return jsonify({"ok": False, "error": f"Formato não suportado: .{ext}"}), 400
-
-    try:
-        raw = file.read()
-        rows = []  # list of {"uid": str, "complement": str}
-
-        if ext == "xlsx":
-            wb = load_workbook(filename=io.BytesIO(raw), read_only=True, data_only=True)
-            ws = wb.active
-            first = True
-            for row in ws.iter_rows(values_only=True):
-                if first:
-                    first = False
-                    continue
-                uid = str(row[0]).strip() if row[0] is not None else ""
-                comp = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
-                if uid:
-                    rows.append({"uid": uid, "complement": comp})
-            wb.close()
-
-        elif ext in ("csv", "txt"):
-            text = raw.decode("utf-8-sig", errors="replace")
-            try:
-                dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
-            except csv.Error:
-                dialect = csv.excel
-            reader = csv.reader(io.StringIO(text), dialect)
-            first = True
-            for row in reader:
-                if first:
-                    first = False
-                    continue
-                if not row:
-                    continue
-                uid = row[0].strip() if row[0] else ""
-                comp = row[1].strip() if len(row) > 1 else ""
-                if uid:
-                    rows.append({"uid": uid, "complement": comp})
-
-        elif ext == "json":
-            data = json.loads(raw.decode("utf-8", errors="replace"))
-            if isinstance(data, dict):
-                rows = [
-                    {"uid": str(k).strip(), "complement": str(v).strip()}
-                    for k, v in data.items() if str(k).strip()
-                ]
-            elif isinstance(data, list):
-                for item in data:
-                    if isinstance(item, (list, tuple)) and len(item) >= 2:
-                        uid = str(item[0]).strip()
-                        comp = str(item[1]).strip()
-                    elif isinstance(item, dict):
-                        uid = str(item.get("uid") or item.get("unprocessedId") or "").strip()
-                        comp = str(item.get("complement") or item.get("complemento") or "").strip()
-                    else:
-                        continue
-                    if uid:
-                        rows.append({"uid": uid, "complement": comp})
-
-        return jsonify({
-            "ok":      True,
-            "total":   len(rows),
-            "rows":    rows,
-            "preview": rows[:10],
-        })
-
-    except Exception:
-        import traceback
-        import logging
-        logging.error("parse_complement error: %s", traceback.format_exc())
-        return jsonify({"ok": False, "error": "Erro interno ao processar o arquivo."}), 500
 
 
 @bp.route("/api/controlpanel/export-c3", methods=["POST"])

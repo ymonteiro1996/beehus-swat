@@ -1,9 +1,8 @@
 from flask import Blueprint, render_template, jsonify, request
-from db import (db, load_config, load_config_delays, load_config_methods, load_config_responsible,
-                load_settings, CONFIG_FILE, SETTINGS_FILE, atomic_write_json,
-                get_company_names, get_entity_names)
+from db import (load_config, load_config_delays, load_config_methods, load_config_responsible, load_settings,
+                CONFIG_FILE, SETTINGS_FILE, atomic_write_json, get_company_names,
+                get_entity_names)
 import beehus_catalog
-import os
 
 bp = Blueprint("config", __name__)
 
@@ -76,11 +75,6 @@ def config_save():
 @bp.route("/settings")
 def settings_page():
     return render_template("settings.html")
-
-
-@bp.route("/api/settings/load")
-def settings_load():
-    return jsonify(load_settings())
 
 
 @bp.route("/api/settings/save", methods=["POST"])

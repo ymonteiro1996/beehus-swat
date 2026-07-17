@@ -529,40 +529,6 @@ def company_visible(company_id):
 
 # ── Shared helpers (nav / other pages) ───────────────────────────────────────
 
-def biz_days_elapsed(date_str):
-    """Count business days from date_str up to (and including) today."""
-    try:
-        d = date.fromisoformat(date_str)
-    except ValueError:
-        return 0
-    today = today_in_brt()
-    if d >= today:
-        return 0
-    # Fast formula: count full weeks × 5, then add remaining weekdays
-    delta = (today - d).days  # calendar days between d and today
-    full_weeks, remainder = divmod(delta, 7)
-    count = full_weeks * 5
-    # Count remaining days after full weeks (from d's weekday forward)
-    wd = d.weekday()  # 0=Mon
-    for i in range(1, remainder + 1):
-        if (wd + i) % 7 < 5:
-            count += 1
-    return count
-
-
-def cell_cls(count, total, expected=True):
-    if not expected:
-        return "bg-gray-50 text-gray-300"
-    if count == total:
-        return "bg-green-100 text-green-700"
-    if count > 0:
-        return "bg-yellow-100 text-yellow-700"
-    return "bg-red-100 text-red-600"
-
-
-def wallet_cls(has_value):
-    return "bg-green-50 text-green-700" if has_value else "bg-red-50 text-red-600"
-
 
 def build_wallet_map(settings=None):
     """Returns (wallet_to_pair, pair_total). Cached 5 min.

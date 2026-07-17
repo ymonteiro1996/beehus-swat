@@ -325,28 +325,6 @@ def security_mapping_id(company_id):
     return _idstr(doc.get("_id")) if doc else None
 
 
-def unprocessed_to_security(company_id):
-    """`{from(unprocessedId)_str: to(securityId)_str}` for the company."""
-    doc = security_mappings_doc(company_id) or {}
-    out = {}
-    for m in (doc.get("mappings") or []):
-        f, t = m.get("from"), m.get("to")
-        if f and t:
-            out[str(f)] = str(t)
-    return out
-
-
-def security_to_unprocessed(company_id):
-    """`{to(securityId)_str: [from(unprocessedId), ...]}` for the company."""
-    doc = security_mappings_doc(company_id) or {}
-    out = {}
-    for m in (doc.get("mappings") or []):
-        f, t = m.get("from"), m.get("to")
-        if f and t:
-            out.setdefault(str(t), []).append(f)
-    return out
-
-
 # ── companies / entities (reference data) ────────────────────────────────────
 
 def _names_index(docs):
@@ -592,16 +570,6 @@ def wallet_company_map(wallet_ids):
     return out
 
 
-def wallet_entity_map(wallet_ids):
-    """`{walletId_str: entityId_str}` para uma lista de ids (lookups no índice)."""
-    out = {}
-    for w in (wallet_ids or []):
-        d = wallet_doc(w)
-        if d:
-            out[_idstr(w)] = _idstr(d.get("entityId"))
-    return out
-
-
 def wallet_pairs():
     """`(wallet_to_pair, pair_total)` sobre TODAS as carteiras: cada carteira →
     `(companyId, entityId)` e a contagem por par. Drop-in para o corpo de
@@ -806,32 +774,6 @@ def provisions_active(company_id, date, wallet_ids=None):
         if want is not None and _pwallet(p) not in want:
             continue
         out.append(p)
-    return out
-
-
-def provisions_lifecycle_sids(company_id, date, wallet_ids=None):
-    """`{walletId_str: set(securityId_str)}` para provisões cujo início OU
-    liquidação cai exatamente em `date` (e securityId != None). Drop-in para
-    `find({$or:[{initialDate:D},{liquidationDate:D}], securityId:{$ne:null}})`."""
-    if not date:
-        return {}
-    d = str(date)[:10]
-    wids = _norm_wids(wallet_ids)
-    want = set(wids) if wids else None
-    cid = _resolve_company(company_id, wids)
-    out = {}
-    for p in _fetch_provisions(cid, "2000-01-01", d, wids):
-        if p.get("trashed"):
-            continue
-        sid = _idstr(p.get("securityId"))
-        if not sid:
-            continue
-        if d not in (_pdate(p.get("initialDate")), _pdate(p.get("liquidationDate"))):
-            continue
-        w = _pwallet(p)
-        if want is not None and w not in want:
-            continue
-        out.setdefault(w, set()).add(sid)
     return out
 
 
@@ -1100,24 +1042,6 @@ def unprocessed_existing_wallets(company_id, date, wallet_ids=None):
             if w and str(d.get("positionDate"))[:10] == dd and (want is None or w in want):
                 out.add(w)
         return out
-    return set()
-
-
-def unprocessed_dates_for_wallet(wallet_id, company_id=None):
-    """Set de positionDate (YYYY-MM-DD) com posição bruta da carteira. Drop-in
-    para `distinct('positionDate', {walletId})`. Via B: 1 fetch de janela larga
-    (2000-01-01..hoje) + distinct no cliente."""
-    wid = _idstr(wallet_id)
-    if not wid:
-        return set()
-    cid = company_id or _company_of_wallet(wid)
-    # Janela ABERTA dos dois lados (2000..2999): os positionDate podem estar no
-    # FUTURO (a base usa datas adiante de "hoje"); um limite em _nav_today()
-    # excluiria essas datas. Mongo distinct não tem teto, então espelhamos isso.
-    docs = _fetch_unprocessed(cid, "2000-01-01", "2999-12-31", [wid]) if cid else None
-    if docs is not None:
-        return {str(d.get("positionDate"))[:10] for d in docs
-                if _idstr(d.get("walletId")) == wid and d.get("positionDate")}
     return set()
 
 
@@ -2542,30 +2466,6 @@ def expand_wallets_with_explosion(company_id, wallet_ids):
             if p["walletId"] not in seen:
                 seen.add(p["walletId"])
                 out.append(p["walletId"])
-    return out
-
-
-def provisions_for_processed_date(wallet_id, date, company_id=None):
-    """Provisões da carteira ATIVAS em `date` (`initialDate <= date < liquidationDate`),
-    lidas do bloco `provisions` do envelope de `processed-position` para
-    `(wallet_id, date)`. Esse bloco traz EXATAMENTE o conjunto de ativas-na-data
-    (mesmo shape e mesmos docs que `provisions_active`; inclui provisões longas
-    iniciadas antes da data). Evita o scan da empresa inteira desde 2000-01-01 que
-    o `/beehus/provisions` exige (~5-14s). SEM POSIÇÃO PROCESSADA → [] ("não
-    exibir"). Sempre não-trashed."""
-    wid = _idstr(wallet_id)
-    dd = str(date)[:10]
-    if not wid or not dd:
-        return []
-    cid = company_id or _company_of_wallet(wid)
-    envs = _fetch_processed_envelopes(cid, dd, [wid]) if cid else None
-    out = []
-    for e in (envs or []):
-        if _idstr((e.get("position") or {}).get("walletId")) != wid:
-            continue
-        for p in (e.get("provisions") or []):
-            if isinstance(p, dict) and not p.get("trashed"):
-                out.append(p)
     return out
 
 

@@ -1,0 +1,19 @@
+/* Estilos da tela Conciliação (Mov.). Extraído para static/ (CLAUDE.md). */
+  {% include 'partials/_repetir_styles.html' %}
+  {% include 'partials/_strip_styles.html' %}
+  .table-wrap     { overflow: auto; max-height: calc(100vh - 200px); }
+  .wallet-loader  { display: inline-flex; align-items: center; gap: 8px; color: #6b7280; }
+  .wallet-loader .spin { width: 16px; height: 16px; border: 2px solid #e5e7eb;
+    border-top-color: #3b82f6; border-radius: 9999px; animation: wl-spin .7s linear infinite; }
+  @keyframes wl-spin { to { transform: rotate(360deg); } }
+  .cols-collapsed .col-opt { display: none; }
+  #main-table { font-size: 11px; }
+  #det-body .rp-tbl thead th { position: static; }
+  #det-body .rp-preview-scroll .rp-tbl thead th { position: sticky; top: 0; z-index: 3; }
+  #det-body .rp-tbl { font-size: 11px; }
+  /* Colunas de métricas do detalhe (contrib $, rent PU, rent Contrib, transac, prov) — nascem ocultas */
+  #det-body .det-hide-extra .mov-extra { display: none; }
+  /* Card "Projetada" quando há provisão ignorada (what-if) */
+  #det-proj-card.det-proj-whatif { background: #fffbeb; border-radius: 6px; }
+  /* Linha de provisão ignorada dos cálculos (what-if) — riscada, menos a coluna do botão */
+  #det-body tr.prov-ignored td:not(:last-child) { text-decoration: line-through; opacity: .55; }

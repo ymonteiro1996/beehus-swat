@@ -44,7 +44,11 @@ env/
 
 # Claude Code session logs and config
 *.jsonl
-.claude/
+# Ignora tudo em .claude/ (logs de sessao, settings.local.json pessoal, etc.)
+# EXCETO a config e os hooks compartilhados do time.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # Duplicate subfolder created by OneDrive sync conflicts
 /Controle de cargas/

@@ -53,8 +53,8 @@ import beehus_catalog
 from flask import Blueprint, jsonify, render_template, request, send_file
 from openpyxl import Workbook
 
-from db import (db, get_biz_dates, get_company_filter, company_visible, get_company_names,
-                resolve_wallet, today_in_brt, atomic_write_json)
+from db import (get_biz_dates, get_company_filter, company_visible, get_company_names, resolve_wallet,
+                today_in_brt, atomic_write_json)
 from beehus_api import (create_execution_price, create_provision, create_transaction,
                         BeehusAPIError, BeehusAuthError)
 
@@ -762,40 +762,6 @@ def list_items():
 
 
 # ── Anomaly keys for upstream (which painel rows are already moved) ───────────
-
-@bp.route("/api/correcoes/anomaly-keys")
-def anomaly_keys():
-    """Return the unique sourceAnomalyKey values for a (company, date).
-
-    Upstream pages (e.g. Painel) call this to gray out rows whose corrections
-    already live in the correcoes store.
-    """
-    company_id = request.args.get("companyId", "")
-    date       = request.args.get("date", "")
-    if not company_visible(company_id):
-        return jsonify({"keys": []})
-    try:
-        _safe(company_id); _safe_date(date)
-    except ValueError:
-        return jsonify({"keys": []})
-
-    keys = set()
-    for path in _iter_wallet_files(company_id, date):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                blob = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-        # Every bucket that a Painel/Conciliação accept can write into is
-        # surveyed — otherwise the front-end's `_currentAnomalyKeys` set is
-        # incomplete and the Aceitar button never flips to "✓ Aceito" for
-        # rows that landed in the missing bucket (e.g. executionPrices).
-        for bucket in ("transactions", "provisions", "executionPrices"):
-            for r in blob.get(bucket) or []:
-                k = r.get("sourceAnomalyKey")
-                if k:
-                    keys.add(k)
-    return jsonify({"keys": sorted(keys)})
 
 
 # ── Create / Update / Delete ──────────────────────────────────────────────────

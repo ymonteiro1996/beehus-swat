@@ -1,0 +1,35 @@
+/* Estilos da tela Conciliação (Não Proc.). Extraído para static/ (CLAUDE.md). */
+  {# Design system compartilhado com a Posição Projetada (.rp-*/.fb-chip).
+     É 100% scoped, então não vaza sobre o markup existente — só passa a
+     valer onde aplicamos as classes. #}
+  {% include 'partials/_repetir_styles.html' %}
+
+  /* ── Estilos funcionais próprios da Conciliação (layout das seções e
+       loaders); o VISUAL de tabelas/botões/inputs/modais segue o design
+       system `.rp-*` incluído acima. ── */
+  /* Cada lista rola dentro da própria caixa (cabeçalho fixa no topo dela) e é
+     dimensionada pelo conteúdo: lista curta encolhe (sem espaço vazio), lista
+     longa limita a altura e rola por dentro. */
+  .table-wrap     { overflow: auto; max-height: calc(100vh - 170px); }
+  .sec-table-wrap { overflow: auto; max-height: 60vh; }
+  /* Loader (spinner) da lista de carteiras */
+  .wallet-loader { display: inline-flex; align-items: center; gap: 8px; color: #6b7280; }
+  .wallet-loader .spin { width: 18px; height: 18px; border: 2px solid #e5e7eb;
+    border-top-color: #3b82f6; border-radius: 9999px; animation: wl-spin .7s linear infinite; }
+  @keyframes wl-spin { to { transform: rotate(360deg); } }
+  .cols-collapsed .col-opt { display: none; }
+  /* As seções (Ativos/Transações/Provisões) são dimensionadas pelo conteúdo —
+     sem altura mínima nem divisão da viewport. (As antigas classes
+     sec-collapsed/sec-grow/sec-min saíram; os toggles JS viraram no-op
+     inofensivo.) */
+  /* `.rp-tbl` é índigo e 11px por padrão; o detalhamento da carteira pede
+     tabelas mais densas (10px). Reduz só nas tabelas do Step 2. */
+  #wm-table, #txn-inline-table, #prov-inline-table { font-size: 10px; }
+  /* Tabelas dentro dos modais (diagnóstico/confirmação): mantêm o cabeçalho
+     índigo do design, mas SEM sticky — senão cada tabela "cola" seu header
+     ao rolar o corpo do modal e eles se empilham. */
+  #diag-body .rp-tbl thead th,
+  #diag-confirm-body .rp-tbl thead th { position: static; }
+  /* Estado desabilitado genérico (o `_repetir_styles` só define p/ o primary;
+     aqui o "Confirmar e enviar" usa rp-btn-success). */
+  .rp-btn:disabled { opacity: 0.5; cursor: not-allowed; }

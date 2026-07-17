@@ -21,8 +21,8 @@ This page is READ-ONLY: it does not mutate transactions/provisions or push
 corrections upstream. See EMR/attention report generated alongside it.
 """
 from flask import Blueprint, render_template, jsonify, request
-from db import (get_biz_dates, get_company_filter, company_visible,
-                get_company_names, get_wallet_names, resolve_wallet)
+from db import (get_company_filter, company_visible, get_company_names,
+                resolve_wallet)
 import beehus_catalog
 import math
 
@@ -30,11 +30,10 @@ from pages.diagnostic_engine import run_funnel, _prov_dates, _fmt_brl
 # Figuras de NAV / gap por carteira vêm de navPackages via API — reusamos os
 # helpers extraídos da conciliação original (sem Mongo) para os números baterem.
 from pages.conciliacao_shared import (
-    _mismatch_query, _diff_threshold_decimal, _recalc_gap_with_corrections,
-    _find_former_nav, _load_thresholds,
+    _diff_threshold_decimal, _recalc_gap_with_corrections, _find_former_nav,
+    _load_thresholds,
 )
-from pages.correcoes_store import (load_all_pending_provisions_by_wallet,
-                                   load_corrections_for_wallet,
+from pages.correcoes_store import (load_corrections_for_wallet,
                                    load_all_pending_provisions)
 
 import logging
@@ -361,20 +360,6 @@ def index():
     if cf:
         companies = [c for c in companies if c["id"] in cf]
     return render_template("conciliacao_unprocessed.html", companies=companies)
-
-
-@bp.route("/api/conciliacao-unprocessed/dates")
-def get_dates():
-    """Apenas a lista de datas para seleção — SEM contadores por data (mesma
-    simplificação da Conciliação principal). A grade carrega só a data escolhida
-    via /results. Default: últimos _NUM_DATES dias úteis até hoje (ou `endDate`).
-    """
-    company_id = request.args.get("companyId", "")
-    end_date = request.args.get("endDate") or None
-    if not company_id or not company_visible(company_id):
-        return jsonify({"cards": []})
-    dates = get_biz_dates(_NUM_DATES, end_date)
-    return jsonify({"cards": [{"date": d} for d in dates]})
 
 
 @bp.route("/api/conciliacao-unprocessed/rows")
@@ -1362,30 +1347,6 @@ def get_transactions():
             "description": t.get("description", "") or "",
         })
     return jsonify(_sanitize({"transactions": txns, "date": date}))
-
-
-@bp.route("/api/conciliacao-unprocessed/provisions")
-def get_provisions():
-    """Active provisions for the wallet on `date` (display-only)."""
-    wallet_id = request.args.get("walletId", "")
-    date = request.args.get("date", "")
-    if not wallet_id or not date:
-        return jsonify({"provisions": [], "total": 0})
-    wallet = resolve_wallet(wallet_id, {"companyId": 1},
-                            company_id=request.args.get("companyId") or None)
-    company_id = str(wallet["companyId"]) if wallet else ""
-    if not company_id or not company_visible(company_id):
-        return jsonify({"error": "acesso negado"}), 403
-
-    raw = beehus_catalog.provisions_for_processed_date(wallet_id, date, company_id)
-    # Rota isolada (sem posição/transações em mão) → todos os nomes vêm do
-    # catálogo; se frio, aquece em background e sinaliza (mesma política do
-    # wallet-detail).
-    sids = {str(p.get("securityId") or "") for p in raw if p.get("securityId")}
-    names, catalog_warming = _resolve_provision_names(sids, {})
-    provisions, total = _format_provisions(raw, names)
-    return jsonify(_sanitize({"provisions": provisions, "total": total,
-                              "catalogWarming": catalog_warming}))
 
 
 @bp.route("/api/conciliacao-unprocessed/catalog-status")

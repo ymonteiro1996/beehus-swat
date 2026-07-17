@@ -797,7 +797,6 @@ _STRONG_FEATURE_KEYS = (
 )
 
 
-
 def _extract_generic_codes(uid, features):
     """Extract up to 3 generic alphanumeric codes from `uid` that were not
     captured by any other feature, for comparison against mainId.
