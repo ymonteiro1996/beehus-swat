@@ -1,0 +1,1349 @@
+<title>Conciliação (mov.) — Descritivo</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ground: #F4F6F5;
+    --surface: #FFFFFF;
+    --surface-2: #EEF2F0;
+    --ink: #12201E;
+    --ink-soft: #33423F;
+    --muted: #5E6E6B;
+    --faint: #8A9A96;
+    --hairline: #DDE4E1;
+    --hairline-strong: #C7D1CD;
+    --accent: #0E6E64;
+    --accent-soft: #0E6E6414;
+    --accent-ink: #0A4A43;
+    --good: #1F8A54;
+    --good-bg: #1F8A5416;
+    --warn: #B8791A;
+    --warn-bg: #B8791A18;
+    --crit: #C0402F;
+    --crit-bg: #C0402F14;
+    --shadow: 0 1px 2px rgba(18,32,30,.04), 0 6px 20px rgba(18,32,30,.06);
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "Cascadia Code", "SF Mono", "JetBrains Mono", "Consolas", ui-monospace, monospace;
+
+    --maxw: 88ch;
+    --r: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0D1412;
+      --surface: #141E1B;
+      --surface-2: #1B2723;
+      --ink: #E7EEEB;
+      --ink-soft: #C4D0CC;
+      --muted: #93A29E;
+      --faint: #6C7C78;
+      --hairline: #263531;
+      --hairline-strong: #33453F;
+      --accent: #39C6B3;
+      --accent-soft: #39C6B31A;
+      --accent-ink: #7FE0D2;
+      --good: #4FBE80;
+      --good-bg: #4FBE8018;
+      --warn: #D69A3E;
+      --warn-bg: #D69A3E1C;
+      --crit: #E0705F;
+      --crit-bg: #E0705F18;
+      --shadow: 0 1px 2px rgba(0,0,0,.30), 0 8px 26px rgba(0,0,0,.36);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ground: #F4F6F5; --surface: #FFFFFF; --surface-2: #EEF2F0;
+    --ink: #12201E; --ink-soft: #33423F; --muted: #5E6E6B; --faint: #8A9A96;
+    --hairline: #DDE4E1; --hairline-strong: #C7D1CD;
+    --accent: #0E6E64; --accent-soft: #0E6E6414; --accent-ink: #0A4A43;
+    --good: #1F8A54; --good-bg: #1F8A5416; --warn: #B8791A; --warn-bg: #B8791A18;
+    --crit: #C0402F; --crit-bg: #C0402F14;
+    --shadow: 0 1px 2px rgba(18,32,30,.04), 0 6px 20px rgba(18,32,30,.06);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0D1412; --surface: #141E1B; --surface-2: #1B2723;
+    --ink: #E7EEEB; --ink-soft: #C4D0CC; --muted: #93A29E; --faint: #6C7C78;
+    --hairline: #263531; --hairline-strong: #33453F;
+    --accent: #39C6B3; --accent-soft: #39C6B31A; --accent-ink: #7FE0D2;
+    --good: #4FBE80; --good-bg: #4FBE8018; --warn: #D69A3E; --warn-bg: #D69A3E1C;
+    --crit: #E0705F; --crit-bg: #E0705F18;
+    --shadow: 0 1px 2px rgba(0,0,0,.30), 0 8px 26px rgba(0,0,0,.36);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--accent-soft); }
+
+  .wrap {
+    display: grid;
+    grid-template-columns: 1fr;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 0 clamp(18px, 4vw, 64px);
+  }
+  @media (min-width: 1000px) {
+    .wrap { grid-template-columns: 240px minmax(0, 1fr); gap: 64px; }
+  }
+
+  /* ---------- side nav ---------- */
+  nav.toc {
+    display: none;
+  }
+  @media (min-width: 1000px) {
+    nav.toc {
+      display: block;
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 56px 0 40px;
+    }
+  }
+  nav.toc .brand {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 22px;
+  }
+  nav.toc a {
+    display: block;
+    padding: 5px 0;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 14px;
+    border-left: 2px solid transparent;
+    padding-left: 12px;
+    margin-left: -2px;
+    transition: color .15s, border-color .15s;
+  }
+  nav.toc a:hover { color: var(--ink); }
+  nav.toc a.sub { padding-left: 26px; font-size: 13px; color: var(--faint); }
+  nav.toc a:focus-visible,
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 3px;
+  }
+
+  main { padding-bottom: 96px; min-width: 0; }
+
+  /* ---------- hero ---------- */
+  header.hero {
+    padding: clamp(48px, 9vw, 104px) 0 40px;
+    border-bottom: 1px solid var(--hairline);
+    margin-bottom: 56px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .eyebrow::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: linear-gradient(90deg, var(--hairline-strong), transparent);
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2.6rem, 6vw, 4.1rem);
+    line-height: 1.02;
+    letter-spacing: -.015em;
+    margin: 0 0 .35em;
+    text-wrap: balance;
+  }
+  h1 .mov { color: var(--accent); font-style: italic; }
+  .lede {
+    font-size: clamp(1.08rem, 2.2vw, 1.32rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .hero-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    margin-top: 30px;
+  }
+  .tag {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .02em;
+    padding: 5px 11px;
+    border-radius: 100px;
+    border: 1px solid var(--hairline-strong);
+    color: var(--muted);
+    background: var(--surface);
+  }
+  .tag b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- sections ---------- */
+  section { margin-bottom: 68px; scroll-margin-top: 24px; }
+  .sec-head { margin-bottom: 26px; }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .12em;
+    color: var(--accent);
+  }
+  h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(1.7rem, 3.6vw, 2.3rem);
+    line-height: 1.12;
+    letter-spacing: -.01em;
+    margin: .18em 0 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-weight: 650;
+    font-size: 1.06rem;
+    letter-spacing: -.005em;
+    margin: 0 0 6px;
+  }
+  p { max-width: var(--maxw); margin: 0 0 1.05em; color: var(--ink-soft); }
+  p.intro { color: var(--ink); font-size: 1.06rem; }
+  strong { color: var(--ink); font-weight: 640; }
+  em.term { font-style: normal; color: var(--accent-ink); font-weight: 600; }
+  code {
+    font-family: var(--mono);
+    font-size: .84em;
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    padding: .08em .4em;
+    border-radius: 5px;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  a.inline { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--hairline-strong); }
+  a.inline:hover { text-decoration-color: var(--accent); }
+
+  /* ---------- concept cards ---------- */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin: 8px 0 4px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r);
+    padding: 20px 20px 18px;
+    box-shadow: var(--shadow);
+  }
+  .card .k {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .card h3 { margin-bottom: 6px; }
+  .card p { font-size: .92rem; margin: 0; color: var(--muted); }
+
+  /* ---------- formula block ---------- */
+  .formula {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r);
+    padding: 18px 20px;
+    margin: 4px 0 20px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  .formula .row { display: flex; align-items: baseline; gap: 12px; padding: 3px 0; }
+  .formula .lhs {
+    font-family: var(--mono);
+    font-size: .92rem;
+    color: var(--accent-ink);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .formula .rhs {
+    font-family: var(--mono);
+    font-size: .88rem;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .formula .note { color: var(--muted); font-family: var(--sans); font-size: .82rem; margin-top: 6px; }
+
+  /* ---------- process / stepper ---------- */
+  ol.flow { list-style: none; counter-reset: step; margin: 0; padding: 0; }
+  ol.flow > li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 26px 60px;
+    margin: 0;
+  }
+  ol.flow > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 38px; height: 38px;
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 50%;
+  }
+  ol.flow > li::after {
+    content: "";
+    position: absolute;
+    left: 18.5px; top: 40px; bottom: 4px;
+    width: 1px;
+    background: var(--hairline-strong);
+  }
+  ol.flow > li:last-child::after { display: none; }
+  ol.flow h3 { margin-bottom: 3px; padding-top: 7px; }
+  ol.flow p { margin: 0; font-size: .95rem; color: var(--muted); }
+  ol.flow .btnref { color: var(--accent-ink); font-weight: 600; }
+
+  /* ---------- walkthrough (passo a passo com prints) ---------- */
+  .walk { display: grid; gap: 18px; counter-reset: wstep; }
+  .wstep {
+    counter-increment: wstep;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .wstep .whead {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 14px;
+    align-items: start;
+    padding: 18px 20px 4px;
+  }
+  .wstep .whead::before {
+    content: counter(wstep, decimal-leading-zero);
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    letter-spacing: .02em;
+  }
+  .wstep .wtitle { font-weight: 660; font-size: 1.06rem; letter-spacing: -.005em; padding-top: 9px; }
+  .wstep .wbody { padding: 8px 20px 4px 78px; }
+  .wstep .wbody p { margin: 0 0 .7em; font-size: .95rem; color: var(--ink-soft); max-width: 64ch; }
+  .wstep .wbody p:last-child { margin-bottom: 0; }
+  .wstep .opt {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn);
+    border-radius: 4px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px;
+  }
+  .wstep .btnref { color: var(--accent-ink); font-weight: 640; }
+  /* image slot — replace .shot-ph with <img> when the print is ready */
+  .shot { margin: 14px 20px 20px 78px; }
+  @media (max-width: 640px) { .wstep .wbody { padding-left: 20px; } .shot { margin-left: 20px; } }
+  .shot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 8px;
+  }
+  .shot-ph {
+    aspect-ratio: 16 / 9;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; text-align: center; padding: 20px;
+    border: 1.5px dashed var(--hairline-strong);
+    border-radius: 8px;
+    background: repeating-linear-gradient(-45deg, transparent, transparent 11px, var(--surface-2) 11px, var(--surface-2) 12px);
+    color: var(--muted);
+  }
+  .shot-ph .shot-ic { font-size: 1.7rem; color: var(--faint); line-height: 1; }
+  .shot-ph .shot-hint { font-family: var(--sans); font-size: .9rem; max-width: 46ch; }
+  .shot-ph .shot-hint b { color: var(--ink-soft); font-weight: 640; }
+  .shot-ph .shot-tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .shot figcaption { font-size: .82rem; color: var(--muted); margin-top: 8px; font-style: italic; }
+
+  /* ---------- blocks list (detail screen) ---------- */
+  .blocks { display: grid; gap: 12px; }
+  .block {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .block .ic {
+    font-family: var(--serif);
+    font-size: 1.5rem;
+    color: var(--accent);
+    line-height: 1;
+    padding-top: 2px;
+  }
+  .block h3 { margin-bottom: 4px; }
+  .block p { margin: 0; font-size: .92rem; color: var(--muted); max-width: 62ch; }
+
+  /* ---------- state legend / chips ---------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 18px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding: 6px 12px 6px 10px;
+    border-radius: 100px;
+    border: 1px solid var(--hairline-strong);
+    background: var(--surface);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.good { background: var(--good); }
+  .dot.warn { background: var(--warn); }
+  .dot.crit { background: var(--crit); }
+  .state-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px,1fr)); gap: 12px; }
+  .state {
+    border: 1px solid var(--hairline);
+    border-left-width: 3px;
+    border-radius: var(--r);
+    padding: 14px 16px;
+    background: var(--surface);
+  }
+  .state.good { border-left-color: var(--good); }
+  .state.warn { border-left-color: var(--warn); }
+  .state.crit { border-left-color: var(--crit); }
+  .state .lbl { font-weight: 650; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
+  .state.good .lbl { color: var(--good); }
+  .state.warn .lbl { color: var(--warn); }
+  .state.crit .lbl { color: var(--crit); }
+  .state p { font-size: .87rem; margin: 6px 0 0; color: var(--muted); }
+
+  /* ---------- engine stages ---------- */
+  .stages { display: grid; gap: 2px; border: 1px solid var(--hairline); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
+  .stage {
+    display: grid;
+    grid-template-columns: 46px 150px 1fr;
+    gap: 16px;
+    align-items: baseline;
+    background: var(--surface);
+    padding: 15px 18px;
+  }
+  .stage + .stage { border-top: 1px solid var(--hairline); }
+  .stage .n { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 600; }
+  .stage .t { font-weight: 640; font-size: .95rem; }
+  .stage .d { color: var(--muted); font-size: .9rem; }
+  @media (max-width: 640px) {
+    .stage { grid-template-columns: 40px 1fr; }
+    .stage .d { grid-column: 2; }
+  }
+
+  /* ---------- calc breakdown (fórmulas colapsáveis) ---------- */
+  .calc-list { display: grid; gap: 14px; }
+  .calc {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .calc-head { padding: 18px 20px 4px; }
+  .calc-head h3 { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .calc-head .cidx { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; }
+  .calc-head p { margin: 0 0 14px; font-size: .93rem; color: var(--muted); max-width: 66ch; }
+  details.calc-src { border-top: 1px solid var(--hairline); }
+  details.calc-src > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 12px 20px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: .02em;
+    color: var(--accent-ink);
+    background: var(--surface-2);
+    display: flex; align-items: center; gap: 10px;
+    user-select: none;
+  }
+  details.calc-src > summary::-webkit-details-marker { display: none; }
+  details.calc-src > summary .mk {
+    display: inline-block; transition: transform .18s ease;
+    color: var(--accent); font-size: 11px;
+  }
+  details.calc-src[open] > summary .mk { transform: rotate(90deg); }
+  details.calc-src > summary:hover { color: var(--accent); }
+  .calc-src-body { padding: 16px 20px 20px; display: grid; gap: 16px; }
+  pre.src-formula {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: .82rem;
+    line-height: 1.7;
+    color: var(--ink-soft);
+    background: var(--ground);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    white-space: pre;
+    tab-size: 2;
+    font-variant-numeric: tabular-nums;
+  }
+  pre.src-formula .cm { color: var(--faint); font-style: italic; }
+  pre.src-formula .hl { color: var(--accent-ink); font-weight: 600; }
+  dl.src-vars {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 18px;
+    align-items: baseline;
+  }
+  dl.src-vars dt { font-family: var(--mono); font-size: .78rem; color: var(--accent-ink); white-space: nowrap; }
+  dl.src-vars dd { margin: 0; font-size: .86rem; color: var(--muted); }
+  @media (max-width: 560px) { dl.src-vars { grid-template-columns: 1fr; gap: 2px 0; } dl.src-vars dd { margin-bottom: 8px; } }
+  .src-ref { margin: 0; font-size: .8rem; color: var(--faint); }
+  .src-ref code { font-size: .76rem; background: transparent; border: none; padding: 0; color: var(--accent-ink); }
+  .calc-phase { margin: 26px 0 2px; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); display: flex; align-items: baseline; gap: 8px 14px; flex-wrap: wrap; }
+  .calc-phase:first-child { margin-top: 2px; }
+  .calc-phase .pl { font-family: var(--mono); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .calc-phase .pt { font-family: var(--serif); font-size: 1.18rem; font-weight: 600; color: var(--ink); letter-spacing: -.01em; }
+  .calc-phase .pd { font-size: .84rem; color: var(--muted); flex: 1 1 auto; min-width: 180px; }
+
+  /* ---------- routes table ---------- */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--hairline); border-radius: var(--r); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; background: var(--surface); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.route { font-family: var(--mono); font-size: .8rem; color: var(--accent-ink); white-space: nowrap; }
+  td .verb { color: var(--muted); }
+  td.desc { color: var(--muted); font-size: .9rem; }
+  .destr {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
+    color: var(--crit); background: var(--crit-bg);
+    border: 1px solid var(--crit); border-radius: 4px;
+    padding: 1px 5px; margin-left: 6px; white-space: nowrap;
+  }
+
+  /* ---------- callout ---------- */
+  .callout {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: var(--r);
+    padding: 16px 20px;
+    margin: 6px 0 20px;
+  }
+  .callout p { color: var(--ink-soft); margin: 0; max-width: none; font-size: .95rem; }
+  .callout .k { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-ink); font-weight: 700; display:block; margin-bottom: 4px; }
+
+  /* ---------- footer ---------- */
+  footer {
+    border-top: 1px solid var(--hairline);
+    padding-top: 26px;
+    color: var(--muted);
+    font-size: .86rem;
+  }
+  footer .files { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  footer code { font-size: .8rem; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; scroll-behavior: auto !important; }
+  }
+  html { scroll-behavior: smooth; }
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Índice">
+    <div class="brand">Conciliação · mov.</div>
+    <a href="#proposito">O que é</a>
+    <a href="#conceitos">Conceitos-chave</a>
+    <a href="#fluxo">Fluxo de operação</a>
+    <a href="#passo-a-passo">Passo a passo guiado</a>
+    <a href="#detalhe">Tela de detalhamento</a>
+    <a href="#detalhe" class="sub">Os quatro blocos</a>
+    <a href="#detalhe" class="sub">Ações do detalhe</a>
+    <a href="#estados">Estados &amp; sinais</a>
+    <a href="#motor">Motor de projeção</a>
+    <a href="#calculos">Detalhamento dos cálculos</a>
+    <a href="#implementar">Implementar</a>
+    <a href="#rotas">Rotas (API)</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">Validações · Beehus</div>
+      <h1>Conciliação <span class="mov">(mov.)</span></h1>
+      <p class="lede">Projeta a posição de uma carteira de uma data-origem para uma data-alvo, calcula NAV, cota e GAP <em>simulados</em> — e deixa o operador reconciliar e efetivar o que faltou, antes de gravar no sistema.</p>
+      <div class="hero-meta">
+        <span class="tag">projeta <b>origem → alvo</b></span>
+        <span class="tag">alvo padrão = <b>D+1 dia útil</b></span>
+        <span class="tag">cálculo <b>100% local</b></span>
+        <span class="tag">grava só <b>após aceite</b></span>
+      </div>
+    </header>
+
+    <!-- ========== PROPÓSITO ========== -->
+    <section id="proposito">
+      <div class="sec-head">
+        <span class="sec-num">01</span>
+        <h2>O que a tela resolve</h2>
+      </div>
+      <p class="intro">Todo dia útil a posição de uma carteira precisa “andar” de uma data para a seguinte: entram e saem ativos, liquidam provisões, vencem papéis, cai IRRF de resgate. A <strong>Conciliação (mov.)</strong> reconstrói essa passagem <strong>por conta própria</strong> — a partir da posição não-processada da origem, das transações e dos eventos da janela — e compara o resultado com o que o sistema efetivamente registrou na data-alvo.</p>
+      <p>O objetivo é responder, carteira a carteira, a uma pergunta só: <strong>o retorno da cota bate com a contribuição dos ativos?</strong> Quando não bate, a tela mostra <em>onde</em> a diferença nasce (uma quantidade divergente, um preço de execução ausente, uma provisão que não liquidou, um IRRF não lançado) e oferece a correção — que o operador revisa e só então envia ao Beehus.</p>
+      <div class="callout">
+        <p><span class="k">Princípio</span>Nada é calculado no sistema de origem e nada é gravado sem confirmação. A projeção vive inteira neste app; cada envio (provisão, transação, IRRF, preço de execução, upload) é uma ação destrutiva explícita, com <code>confirm()</code>.</p>
+      </div>
+    </section>
+
+    <!-- ========== CONCEITOS ========== -->
+    <section id="conceitos">
+      <div class="sec-head">
+        <span class="sec-num">02</span>
+        <h2>Conceitos-chave</h2>
+      </div>
+      <p>Três medidas simuladas governam a tela. Todas são recalculadas localmente para a data-alvo e confrontadas com o <em>navPackage</em> real do sistema.</p>
+      <div class="cards">
+        <div class="card">
+          <div class="k">NAV simulado</div>
+          <h3>Patrimônio projetado</h3>
+          <p>Σ saldos + caixa + provisões − fluxos de capital. O valor da carteira que a projeção deriva para o alvo.</p>
+        </div>
+        <div class="card">
+          <div class="k">navPerShare</div>
+          <h3>Cota</h3>
+          <p>NAV dividido pelo número de cotas da origem. A rentabilidade da cota é <code>cota_sim ÷ cota_origem − 1</code>.</p>
+        </div>
+        <div class="card">
+          <div class="k">GAP</div>
+          <h3>A diferença que importa</h3>
+          <p>O quanto o retorno da cota se afasta da contribuição somada dos ativos. GAP ≈ 0 = carteira conciliada.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:32px">Como o GAP é medido</h3>
+      <div class="formula" role="img" aria-label="Fórmulas de GAP">
+        <div class="row"><span class="lhs">GAP %</span><span class="rhs">= returnNavPerShare − returnContribution</span></div>
+        <div class="row"><span class="lhs">GAP $</span><span class="rhs">= financialValueReturnDifference</span></div>
+        <div class="row"><span class="lhs">identidade</span><span class="rhs">GAP$ = simNav − inflows − formerNav − contribuição</span></div>
+        <p class="note">A identidade é linear no NAV simulado — por isso o preview decompõe o GAP <b>por etapa</b> (mov · amDiff · caixa) para localizar exatamente de onde o resíduo vem.</p>
+      </div>
+      <p>A grade inicial mostra <strong>todas</strong> as carteiras projetáveis, inclusive as com GAP = 0 (servem de validação). O campo de limiar apenas <strong>destaca em vermelho</strong> o GAP % acima do valor escolhido — não esconde nada.</p>
+    </section>
+
+    <!-- ========== FLUXO ========== -->
+    <section id="fluxo">
+      <div class="sec-head">
+        <span class="sec-num">03</span>
+        <h2>Fluxo de operação</h2>
+      </div>
+      <p>A grade não abre sozinha: escolher empresa e datas apenas prepara os filtros. O operador conduz em quatro movimentos.</p>
+      <ol class="flow">
+        <li>
+          <h3>Listar carteiras</h3>
+          <p>O botão <span class="btnref">Listar carteiras</span> carrega as carteiras com posição não-processada na origem, cruzadas com o NAV do sistema no alvo — colunas NAV · Cota · GAP&nbsp;$ · GAP&nbsp;%. O botão <span class="btnref">Atualizar</span> ao lado recalcula o NAV fresco (invalida só o cache desta empresa) e limpa a simulada, mantendo o filtro. Um seletor opcional de <em>groupings / carteiras</em> restringe o escopo.</p>
+        </li>
+        <li>
+          <h3>Movimentar a seleção</h3>
+          <p>Selecionadas uma ou mais carteiras (clique · Ctrl · Shift), <span class="btnref">Movimentar</span> projeta o lote numa única requisição e revela as colunas <strong>NAV sim. · Cota sim. · GAP&nbsp;$ sim. · GAP&nbsp;%&nbsp;sim.</strong>, além de um botão 🔍 por linha.</p>
+        </li>
+        <li>
+          <h3>Detalhar (🔍)</h3>
+          <p>A lupa abre a <em>aba de detalhamento</em> da carteira — o raio-x completo da projeção: prévia de NAV, tabela de ativos, provisões, transações e preços de execução. É onde a divergência é diagnosticada e a correção, revisada.</p>
+        </li>
+        <li>
+          <h3>Implementar</h3>
+          <p><span class="btnref">Implementar</span> abre o modal de efetivação: cada artefato calculado (preços, IRRF, transações, provisões, upload) é um checkbox independente. O operador sobe só o que quer — inclusive uma etapa só — para data única ou encadeado por um período.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ========== PASSO A PASSO ========== -->
+    <section id="passo-a-passo">
+      <div class="sec-head">
+        <span class="sec-num">04</span>
+        <h2>Passo a passo guiado</h2>
+      </div>
+      <p>O roteiro completo de uma conciliação, do menu ao envio. Cada etapa reserva um espaço para a tela correspondente do sistema — as imagens serão inseridas depois.</p>
+
+      <div class="walk">
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Abrir a tela</div></div>
+          <div class="wbody">
+            <p>No menu lateral, entre em <span class="btnref">Validações → Conciliação (mov.)</span>. A tela abre com os filtros vazios e a grade fechada.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="1"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>menu Validações com o item “Conciliação (mov.)”</b> e a tela recém-aberta</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 1 · acesso à tela.</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Escolher empresa e datas</div></div>
+          <div class="wbody">
+            <p>Selecione a <strong>empresa</strong>, a data de <strong>Origem</strong> e a data <strong>Alvo</strong> (já vem preenchida com D+1 dia útil, ajustável). Escolher a empresa carrega o seletor de escopo em segundo plano.</p>
+            <p><span class="opt">opcional</span> Ligue <span class="btnref">⚡ Pré-aquecer</span> se for analisar muitas carteiras — antecipa o carregamento dos índices.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="2"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>barra de filtros</b> com empresa, Origem e Alvo preenchidos</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 2 · empresa e período origem→alvo.</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Definir o escopo</div></div>
+          <div class="wbody">
+            <p><span class="opt">opcional</span> Clique em <span class="btnref">Groupings / carteiras</span> para restringir a análise. É possível selecionar groupings (que filtram as carteiras), escolher carteiras específicas ou subir um Excel de IDs. Vazio = todas as carteiras da empresa.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="3"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>painel de Groupings / carteiras</b> aberto, com uma seleção</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 3 · escopo de carteiras (opcional).</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Listar carteiras</div></div>
+          <div class="wbody">
+            <p>Clique em <span class="btnref">Listar carteiras</span>. A grade carrega as carteiras projetáveis com o NAV do sistema no alvo — colunas <strong>NAV · Cota · GAP&nbsp;$ · GAP&nbsp;%</strong>. Ajuste o campo de <strong>limiar</strong> para destacar em vermelho os GAP&nbsp;% acima do valor; use <span class="btnref">Atualizar</span> para recalcular o NAV fresco.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="4"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>grade de carteiras</b> com as colunas de NAV/Cota/GAP e o limiar aplicado</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 4 · leitura da grade e destaque por limiar.</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Movimentar a seleção</div></div>
+          <div class="wbody">
+            <p>Marque as carteiras (clique · Ctrl · Shift) e clique em <span class="btnref">Movimentar</span>. Surgem as colunas <strong>NAV sim. · Cota sim. · GAP&nbsp;$ sim. · GAP&nbsp;% sim.</strong> e um botão 🔍 por linha. Compare o simulado com o real para achar as carteiras que não conciliam.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="5"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>grade após Movimentar</b>, com as colunas simuladas e o ícone 🔍</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 5 · projeção do lote (colunas simuladas).</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Abrir o detalhamento</div></div>
+          <div class="wbody">
+            <p>Clique na <span class="btnref">🔍</span> da carteira. A grade dá lugar ao detalhe, que abre pela <strong>prévia de NAV</strong>: três snapshots lado a lado — <em>Anterior (origem)</em>, <em>Atual (alvo real)</em> e <em>Projetada (sim.)</em> — mais o card <em>GAPs por etapa</em>, que localiza de onde o resíduo vem (mov · amDiff · caixa).</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="6"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>prévia de NAV</b> com os 3 snapshots e o card “GAPs por etapa”</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 6 · prévia de NAV do detalhamento.</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Ler a tabela de ativos</div></div>
+          <div class="wbody">
+            <p>Logo abaixo, a tabela de securities compara <strong>anterior → alvo → projetada</strong>, com <strong>Δ Qtd</strong> e <strong>Diff vs alvo</strong>. As linhas divergentes ganham borda vermelha; o funil <span class="btnref">Filtrar</span> mostra só ativos com atividade real e o botão <span class="btnref">Métricas</span> revela colunas por ativo (contribuição, rentabilidade, transações, provisões).</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="7"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>tabela de ativos</b> com uma linha divergente destacada</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 7 · tabela de ativos e diferenças.</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Revisar os blocos</div></div>
+          <div class="wbody">
+            <p>Abra os blocos <strong>Provisões</strong>, <strong>Transações</strong> e <strong>Preços de execução</strong>. Confira os estados de caixa das provisões (🟢 casado · 🟡 provável · 🔴 sem caixa), as transações “a gerar” (resgate no vencimento, IRRF) e os execPrices a criar/atualizar. Nas provisões, o botão <span class="btnref">ignorar / considerar</span> recalcula o GAP ao vivo, sem gravar.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="8"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>blocos Provisões / Transações / Preços de execução</b> expandidos</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 8 · diagnóstico nos quatro blocos.</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Ajustes do detalhe</div></div>
+          <div class="wbody">
+            <p><span class="opt">opcional</span> Use <span class="btnref">Calcular NAV</span> para recalcular o NAV desta carteira no alvo, ou <span class="btnref">Forçar execPrice</span> para gerar o preço de execução de todos os ativos com trade — cada um com um checkbox para você escolher quais implementar. São ações de sessão: não gravam até o Implementar.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="9"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>“Forçar execPrice” ligado</b>, com os checkboxes por ativo no bloco de preços</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 9 · Calcular NAV / Forçar execPrice (opcional).</figcaption>
+          </figure>
+        </div>
+
+        <div class="wstep">
+          <div class="whead"><div class="wtitle">Implementar</div></div>
+          <div class="wbody">
+            <p>Clique em <span class="btnref">Implementar</span> e escolha <strong>Data única</strong> ou <strong>Período (encadeado)</strong>. No modal, cada etapa é um <strong>checkbox independente</strong> (preços de execução · IRRF · transações de ajuste · provisões · upload). Desmarque o que não quer subir — dá para aplicar uma etapa só — e confirme. Cada envio pede <code>confirm()</code>.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-ph" data-shot="10"><span class="shot-ic">▣</span><span class="shot-hint">Print: <b>modal Implementar</b> com os checkboxes de cada etapa</span><span class="shot-tag">imagem a inserir</span></div>
+            <figcaption>Etapa 10 · efetivação com etapas selecionáveis.</figcaption>
+          </figure>
+        </div>
+      </div>
+
+      <div class="callout" style="margin-top:24px">
+        <p><span class="k">Como inserir os prints</span>Cada espaço tracejado é um <code>&lt;figure class="shot"&gt;</code> numerado (<code>data-shot="1…10"</code>). Para publicar com imagem, troque o bloco <code>&lt;div class="shot-ph"&gt;</code> por <code>&lt;img src="data:image/png;base64,…" alt="…"&gt;</code> (o artefato precisa ser autocontido — a imagem vai embutida, não por link).</p>
+      </div>
+    </section>
+
+    <!-- ========== DETALHE ========== -->
+    <section id="detalhe">
+      <div class="sec-head">
+        <span class="sec-num">05</span>
+        <h2>A tela de detalhamento</h2>
+      </div>
+      <p>Mestre → detalhe: a grade some e entra o raio-x de uma carteira, com duas abas — <strong>Detalhamento</strong> (abaixo) e <strong>Memória de cálculo</strong>, uma auditoria somente-leitura da composição do NAV. O detalhamento abre com uma <em>prévia de NAV</em> comparando três momentos lado a lado:</p>
+      <div class="chips" aria-label="Snapshots da prévia">
+        <span class="chip">Anterior <span style="color:var(--faint)">· origem</span></span>
+        <span class="chip">Atual <span style="color:var(--faint)">· alvo real</span></span>
+        <span class="chip">Projetada <span style="color:var(--faint)">· simulada</span></span>
+        <span class="chip">GAPs por etapa</span>
+      </div>
+
+      <h3 style="margin-top:28px">Os quatro blocos</h3>
+      <div class="blocks">
+        <div class="block">
+          <div class="ic">◫</div>
+          <div>
+            <h3>Prévia de NAV &amp; tabela de ativos</h3>
+            <p>Barra compacta com posição · retornos · GAP dos três snapshots, mais o card <em>GAPs por etapa</em> (verde ≈0, âmbar com resíduo). Abaixo, a tabela de securities anterior → alvo → projetada, com Δ Qtd e Diff vs alvo, filtrada por atividade real e com métricas opcionais por ativo.</p>
+          </div>
+        </div>
+        <div class="block">
+          <div class="ic">❈</div>
+          <div>
+            <h3>Provisões</h3>
+            <p>Reúne as provisões já no sistema, as que <em>liquidam na data</em> (cada uma casada com uma liquidação de caixa: 🟢 casado · 🟡 provável · 🔴 sem caixa), as de liquidação futura e as <em>a gerar</em>. Cada linha no NAV tem um botão “ignorar / considerar” que recalcula NAV e GAP ao vivo, sem gravar.</p>
+          </div>
+        </div>
+        <div class="block">
+          <div class="ic">⇄</div>
+          <div>
+            <h3>Transações</h3>
+            <p>As transações da janela — cada uma com chips do que o motor fez com ela (quantidade, cupom, fluxo, contribuição, caixa…) — mais as <em>a gerar</em>: resgate no vencimento e o IRRF a criar. Um IRRF “a gerar” pode ser convertido em preço de execução por linha (toggle de sessão).</p>
+          </div>
+        </div>
+        <div class="block">
+          <div class="ic">§</div>
+          <div>
+            <h3>Preços de execução</h3>
+            <p>Os execPrices capturados da data-alvo. Placeholders (≈PU) e ausentes são recalculados de <code>−Σbalance/Δqty</code> e pintados para alerta (criar / atualizar), com a coluna <em>Δ Contrib. (intraday)</em> mostrando o impacto na contribuição. Só vira sugestão quando a correção muda algo material.</p>
+          </div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:32px">Ações do detalhe</h3>
+      <div class="cards">
+        <div class="card">
+          <div class="k">botão</div>
+          <h3>Calcular NAV</h3>
+          <p>Dispara no Beehus o recálculo de NAV desta carteira na data-alvo e reprojeta o detalhe com o valor fresco.</p>
+        </div>
+        <div class="card">
+          <div class="k">botão · sessão</div>
+          <h3>Forçar execPrice</h3>
+          <p>Força o preço de execução de <strong>todo ativo com trade</strong> — qualquer tipo (inclusive fundo) e qualquer direção. Cada ativo ganha um checkbox; o operador escolhe quais implementar.</p>
+        </div>
+        <div class="card">
+          <div class="k">somente leitura</div>
+          <h3>A aba não grava</h3>
+          <p>O detalhe é diagnóstico. Todo envio passa pelos botões de Implementar/Enviar, sempre com confirmação.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== ESTADOS ========== -->
+    <section id="estados">
+      <div class="sec-head">
+        <span class="sec-num">06</span>
+        <h2>Estados &amp; sinais</h2>
+      </div>
+      <p>A cor carrega significado, separada do acento da página. Duas famílias de estado guiam o olho.</p>
+
+      <h3>GAP da carteira</h3>
+      <div class="state-grid">
+        <div class="state good">
+          <div class="lbl"><span class="dot good"></span>Conciliada</div>
+          <p>GAP % dentro da tolerância. Retorno da cota e contribuição dos ativos batem — nada a corrigir.</p>
+        </div>
+        <div class="state warn">
+          <div class="lbl"><span class="dot warn"></span>Resíduo</div>
+          <p>GAP pequeno e localizado. O card “GAPs por etapa” aponta se vem da projeção (mov), da adoção de qtd (amDiff) ou é só resíduo de caixa informativo.</p>
+        </div>
+        <div class="state crit">
+          <div class="lbl"><span class="dot crit"></span>Divergência</div>
+          <p>GAP % acima do limiar (realce vermelho). Há algo a reconciliar — quantidade, preço de execução, provisão ou IRRF.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:26px">Provisão que liquida na data × caixa</h3>
+      <div class="state-grid">
+        <div class="state good">
+          <div class="lbl"><span class="dot good"></span>caixa casado</div>
+          <p>Existe transação do mesmo ativo com valor ≥ 90% — a provisão liquidou e o caixa a equilibra.</p>
+        </div>
+        <div class="state warn">
+          <div class="lbl"><span class="dot warn"></span>caixa provável</div>
+          <p>Há transação de valor compatível, mas o securityId não bate (ou a carteira não tem o ativo) — indício, não certeza.</p>
+        </div>
+        <div class="state crit">
+          <div class="lbl"><span class="dot crit"></span>sem caixa</div>
+          <p>Nenhuma transação de mesmo sinal dentro dos 90% — pendência real, contada no chip “N sem caixa”.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== MOTOR ========== -->
+    <section id="motor">
+      <div class="sec-head">
+        <span class="sec-num">07</span>
+        <h2>Motor de projeção</h2>
+      </div>
+      <p>A passagem origem → alvo é um pipeline de oito estágios, todo executado neste projeto. É o núcleo que produz o NAV, a cota e o GAP simulados.</p>
+      <div class="stages">
+        <div class="stage"><span class="n">1</span><span class="t">Base</span><span class="d">Posição não-processada da origem, agregada por ativo e unida aos ativos transacionados na janela. Enriquecimento bidirecional origem↔alvo resolve securityId faltante.</span></div>
+        <div class="stage"><span class="n">2</span><span class="t">PU</span><span class="d">Fonte primária = PU oficial da processed-position do alvo. Em forward, cai na cadeia: unprocessed-alvo → securityPrices da data → repetido da origem. Resolvido ANTES da quantidade (que o usa como divisor).</span></div>
+        <div class="stage"><span class="n">3</span><span class="t">Quantidade</span><span class="d">Qtd projetada = qtd da origem + Σ quantidade movimentada (buySell). Regra única para todo ativo, inclusive fundo; cota futura não soma posição.</span></div>
+        <div class="stage"><span class="n">4</span><span class="t">Vencimento</span><span class="d">Papel vencido no período zera qtd/saldo e devolve o principal ao caixa; o payoff entra como contribuição intraday, com execPrice derivado do caixa de resgate.</span></div>
+        <div class="stage"><span class="n">5</span><span class="t">Caixa</span><span class="d">Caixa da origem + Σ transações. Ajustes de contribuição ficam fora do caixa; o principal de vencimento soma só o resíduo não-lançado, sem duplicar.</span></div>
+        <div class="stage"><span class="n">6</span><span class="t">Provisões</span><span class="d">Liquidação futura, IRRF de resgate de fundo, dividendo/JCP de eventos e provisões de ajuste — cada classe entra (ou não) no NAV conforme a regra, com guardrails anti-duplicação.</span></div>
+        <div class="stage"><span class="n">7</span><span class="t">NAV / GAP</span><span class="d">Compõe navPerShare, returnNavPerShare, returnContribution e o GAP. A contribuição por ativo soma diária + intraday + eventos; a de carteira soma P&amp;L e taxas.</span></div>
+        <div class="stage"><span class="n">8</span><span class="t">Diff</span><span class="d">Confronta o calculado com a unprocessed real do alvo (só a quantidade, ao PU em uso) + NAV/cota/GAP real + caixa. É o que classifica cada ativo como conciliado ou divergente.</span></div>
+      </div>
+    </section>
+
+    <!-- ========== DETALHAMENTO DOS CÁLCULOS ========== -->
+    <section id="calculos">
+      <div class="sec-head">
+        <span class="sec-num">08</span>
+        <h2>Detalhamento dos cálculos</h2>
+      </div>
+      <p>Cada medida da projeção, explicada em linguagem clara e — no bloco recolhível — com a <strong>fórmula e as variáveis exatamente como estão no código</strong>. Todos os valores são arredondados como indicado (<code>round(x, n)</code>); os nomes em monoespaçado são os do sistema.</p>
+      <p>Organizados na <strong>ordem de dependência</strong> — cada fase usa apenas o que as anteriores produziram: <em>insumos → posição → caixa e provisões → economia → agregação → conciliação</em>.</p>
+
+      <div class="calc-list">
+
+        <div class="calc-phase"><span class="pl">Fase A</span><span class="pt">Insumos</span><span class="pd">preços e bases — não dependem da projeção</span></div>
+
+        <!-- A1 · PU e saldo anterior -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">01</span>PU (preço unitário) e saldo anterior</h3>
+            <p>O PU usado na projeção é sempre o <strong>oficial da posição processada do alvo</strong>. Só quando o alvo ainda não foi processado (cenário <em>forward</em>) o sistema desce uma cadeia de alternativas. O PU e o saldo da origem também vêm do oficial, para a projeção reconciliar com o retorno do sistema.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">pu</span> — 1ª fonte disponível, nesta ordem:
+  1. PU oficial da processed-position do ALVO   <span class="cm"># fonte primária (rótulo …·proc)</span>
+  2. PU da unprocessed do ALVO                  <span class="cm"># snapshot (cobre C3)</span>
+  3. security_prices_resolved (data-alvo)       <span class="cm"># escopo C3→C2→C1→B2→B1</span>
+  4. PU repetido da ORIGEM                       <span class="cm"># × inverso do fator de split</span>
+
+<span class="hl">former_pu</span> = PU oficial da processed-position da ORIGEM   <span class="cm"># src_proc_pu; senão o da unprocessed-origem</span>
+<span class="hl">formerBalance</span> (exibido) = former_qty × former_pu       <span class="cm"># SEMPRE — reconcilia com Qtd ant. × PU ant.</span></pre>
+              <dl class="src-vars">
+                <dt>tgt_env / src_env</dt><dd>envelope da processed-position (alvo/origem): 1 leitura que serve PU + qtd + caixa + provisões</dd>
+                <dt>historyPrice</dt><dd>curva de preços — casada por data <strong>estrita</strong> (sem carry-forward)</dd>
+                <dt>former_bal</dt><dd>saldo bruto interno da unprocessed-origem (usado no vencimento/filtros; ≠ do <code>formerBalance</code> exibido)</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_pu_by_sid_from_env</code> · <code>_history_pu_on_date</code> · <code>security_prices_resolved</code></p>
+            </div>
+          </details>
+        </div>
+
+        <!-- A2 · Preço de execução -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">02</span>Preço de execução — capturado, derivado, forçado</h3>
+            <p>Resolvido <strong>antes</strong> de quem o consome (a quantidade e a contribuição): usa o preço capturado do sistema quando ele é real; se ausente ou igual ao PU (placeholder), deriva do saldo negociado. Vira sugestão de correção só quando muda algo material. O botão <em>Forçar execPrice</em> aplica a mesma conta a todo ativo com trade, qualquer tipo e direção.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">execPrice</span> = capturado (positionDate == alvo)      <span class="cm"># se real (≠ PU)</span>
+          senão → derivado = round(−netBalance / amountDifference, 8)  <span class="cm"># líquido por cota</span>
+   netBalance = Σ balance dos buySell
+   amountDifference = round(tgt_q − src_q, 6)          <span class="cm"># diferença de POSIÇÃO (pula se ≈ 0)</span>
+
+intradayContribution = round(amountDifference × (PU − execPrice), 2)
+
+vira FIX só se:  |derivado − PU| / PU &gt; _EXECPRICE_REL_TOL
+             E  |intradayContribution| &gt; _BALANCE_ABS_TOL</pre>
+              <dl class="src-vars">
+                <dt>tgt_q / src_q</dt><dd>quantidade na posição do alvo / da origem</dd>
+                <dt>_EXECPRICE_REL_TOL</dt><dd><code>1e-4</code> (0,01%) — derivado quase igual ao PU não vale fix</dd>
+                <dt>_BALANCE_ABS_TOL</dt><dd><code>0.01</code> (R$) — impacto intraday abaixo disso não vira sugestão</dd>
+                <dt>forced</dt><dd>“Forçar execPrice”: mesma fórmula, sem excluir fundo nem filtrar direção; checkbox por ativo</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_project_rows</code> (fix) · <code>_diagnose → forcedExecPrices</code> (forçado). No vencimento, o execPrice vem do <em>payoff</em> (cálculo 04).</p>
+            </div>
+          </details>
+        </div>
+
+        <div class="calc-phase"><span class="pl">Fase B</span><span class="pt">Posição projetada</span><span class="pd">quantidade e baixas, usando os preços da Fase A</span></div>
+
+        <!-- B1 · Quantidade projetada -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">03</span>Quantidade projetada</h3>
+            <p>Parte da quantidade da origem e soma a quantidade movimentada por cada <code>buySell</code> da janela. Como quase nenhuma transação traz a quantidade preenchida, o sistema a deriva do saldo dividindo por um preço — reusando o PU e o execPrice já resolvidos na Fase A.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">qty_proj</span> = former_qty + Σ moved_qty(t)      <span class="cm"># t ∈ buySell da janela (origem, alvo]</span>
+
+moved_qty(t) = − t.balance / divisor          <span class="cm"># balance&lt;0 (compra) aumenta; balance&gt;0 (venda) reduz</span>
+
+divisor — 1ª fonte disponível, nesta ordem:
+  1. t.quantity                 <span class="cm"># se vier preenchida (≈0% desta base)</span>
+  2. execPrice capturado        <span class="cm"># SÓ se ≠ PU (senão é placeholder → ignora)</span>
+  3. PU da posição atual        <span class="cm"># processed-alvo → unprocessed-alvo</span>
+  4. PU do securityPrices(alvo) <span class="cm"># historyPrice na data-alvo</span>
+  5. former_pu                  <span class="cm"># PU da origem</span>
+  6. 1                          <span class="cm"># último recurso (assume PU = 1)</span>
+
+split / inplit: qty_proj ×= factor            <span class="cm"># de securityEvents</span>
+cota FUTURA (navDate &gt; alvo): NÃO soma posição <span class="cm"># vira provisão de subscrição</span></pre>
+              <dl class="src-vars">
+                <dt>former_qty</dt><dd>quantidade do ativo na posição de origem (0 para ativo só transacionado)</dd>
+                <dt>t.balance</dt><dd>saldo financeiro da transação (sinal define compra/venda)</dd>
+                <dt>_QTY_TXN_TYPES</dt><dd><code>{"buySell"}</code> — só esse tipo soma quantidade</dd>
+                <dt>_SPLIT_EVENT_TYPES</dt><dd><code>{split, inplit, grouping, reverseSplit}</code></dd>
+                <dt>navDate</dt><dd><code>operationDate + NAVDays</code> dias úteis — a data em que a cota passa a existir</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_project_rows</code> · <code>_txn_nav_date</code>. O divisor reusa a cadeia de PU do cálculo 01.</p>
+            </div>
+          </details>
+        </div>
+
+        <!-- B2 · Vencimento (payoff intraday) -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">04</span>Vencimento — payoff no intraday</h3>
+            <p>Um papel que vence no período zera quantidade e saldo; o resultado do resgate entra na contribuição como uma “venda” de toda a posição ao preço de execução do dia, derivado do caixa de resgate.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">matured_exec</span> = round(mat_cash / former_qty, 8)
+   mat_cash = Σ balances POSITIVOS de _MATURITY_REDEMPT_TYPES
+              liquidando na data-alvo
+
+intraday = (0 − former_qty) × (PU − matured_exec)
+         = former_qty × (matured_exec − former_pu)   <span class="cm"># PU da linha = former_pu</span></pre>
+              <dl class="src-vars">
+                <dt>former_qty</dt><dd>posição inteira, resgatada no vencimento (o divisor)</dd>
+                <dt>matured_exec</dt><dd>execPrice do resgate — vence o <code>−Σbalance/Δqty</code> do buySell (regra B, jul/2026)</dd>
+                <dt>_MATURITY_REDEMPT_TYPES</dt><dd>inclui <code>buySell</code>, corrigindo o sinal invertido do preço em resgates lançados como trade</dd>
+              </dl>
+              <p class="src-ref">Vira <code>executionPriceFix</code> (action <code>create</code>) quando não há record oficial equivalente</p>
+            </div>
+          </details>
+        </div>
+
+        <div class="calc-phase"><span class="pl">Fase C</span><span class="pt">Caixa &amp; provisões</span><span class="pd">liquidações, impostos e diferimentos</span></div>
+
+        <!-- C1 · Caixa projetado -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">05</span>Caixa projetado</h3>
+            <p>Caixa da origem mais o saldo de todas as transações da janela. Ajustes de contribuição não entram no caixa (o caixa oficial não os reflete), e o principal de um ativo vencido soma só o resíduo ainda não lançado — evitando contar o resgate duas vezes.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">all_cash</span> = caixa(origem)
+         + Σ t.balance                 <span class="cm"># exceto _CASH_EXCLUDED_TYPES e as em omitCashTxnIds</span>
+         + resíduo_de_vencimento
+
+resíduo_de_vencimento (por ativo vencido) =
+   max(0, former_bal − Σ caixa_de_resgate_já_lançado)
+
+caixa_de_resgate = balances POSITIVOS de _MATURITY_REDEMPT_TYPES</pre>
+              <dl class="src-vars">
+                <dt>_CASH_EXCLUDED_TYPES</dt><dd><code>{securityContributionAdjustment, contributionAdjustment}</code> — fora do caixa, entram na contribuição</dd>
+                <dt>_MATURITY_REDEMPT_TYPES</dt><dd><code>{maturity, buySell, amortization, securityTransfer, withdrawalDeposit}</code></dd>
+                <dt>omitCashTxnIds</dt><dd>transações que o operador tirou do caixa (só na sessão) via “desconsiderar”</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_project_rows</code> · <code>_aggregate_window_txns</code></p>
+            </div>
+          </details>
+        </div>
+
+        <!-- C2 · IRRF de resgate de fundo -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">06</span>IRRF de resgate de fundo</h3>
+            <p>O saldo de um resgate de fundo vem líquido de IRRF. O sistema reconstrói o imposto retido comparando o líquido com o bruto (quantidade × PU bruto) e propõe a criação da transação de IRRF quando ela ainda não foi lançada.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">irrf</span> = round(bal_sum + amountDifference × PU_bruto, 2)   <span class="cm"># negativo = imposto</span>
+       <span class="cm"># só para RESGATE (bal_sum &gt; 0); IRRF ≥ 0 nunca é proposto</span>
+
+coberto? |Σ taxes − irrf| ≤ max(_IRRF_ABS_TOL, |irrf| × _IRRF_REL_TOL)</pre>
+              <dl class="src-vars">
+                <dt>bal_sum</dt><dd>Σ saldo (líquido) das transações de resgate do fundo</dd>
+                <dt>amountDifference</dt><dd>qtd_alvo − qtd_origem (da reconciliação)</dd>
+                <dt>PU_bruto</dt><dd>cota do snapshot-alvo (resgate parcial) ou PU resolvido da linha (resgate total)</dd>
+                <dt>_IRRF_ABS_TOL</dt><dd><code>1.0</code> (R$)</dd>
+                <dt>_IRRF_REL_TOL</dt><dd><code>0.01</code> — banda de 1% contra a soma dos taxes lançados</dd>
+              </dl>
+              <p class="src-ref">Rota <code>POST /conciliacao-mov/irrf</code> cria só os <code>not covered</code></p>
+            </div>
+          </details>
+        </div>
+
+        <div class="calc-phase"><span class="pl">Fase D</span><span class="pt">Economia</span><span class="pd">contribuição por ativo e de carteira</span></div>
+
+        <!-- D1 · Contribuição por ativo -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">07</span>Contribuição por ativo</h3>
+            <p>Quanto cada ativo contribuiu para o retorno, em três parcelas: a marcação do dia (<em>daily</em>), o resultado do que foi negociado dentro do dia contra o preço de execução (<em>intraday</em>) e os eventos de cupom/amortização/dividendo.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="cm"># Fórmulas 4–7 — _contribution_parts</span>
+daily    = former_qty × (PU − former_pu)
+intraday = (qty − former_qty) × (PU − execPrice)
+event    = coupon_amort + dividend_ps × former_qty
+
+<span class="hl">contribution</span> = round(daily + intraday + event, 2)</pre>
+              <dl class="src-vars">
+                <dt>PU / former_pu</dt><dd>preço unitário no alvo / na origem (cálculo 01)</dd>
+                <dt>qty / former_qty</dt><dd>quantidade projetada / na origem (cálculo 03)</dd>
+                <dt>execPrice</dt><dd>preço de execução do trade (cálculo 02); o placeholder (≈PU) não carrega P&amp;L intraday</dd>
+                <dt>coupon_amort</dt><dd>saldo de eventos <code>coupon</code>/<code>amortization</code> do ativo</dd>
+                <dt>dividend_ps</dt><dd>valor por cota do dividendo/JCP (<code>securityEvents</code>)</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_contribution_parts</code> · <code>_security_contribution</code></p>
+            </div>
+          </details>
+        </div>
+
+        <!-- D2 · Contribuição nível-carteira -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">08</span>Contribuição de nível-carteira</h3>
+            <p>Resultados e custos que são da carteira, não de um ativo específico — ganhos/despesas, taxas de gestão/consultoria/corretagem e os ajustes de contribuição. Entram no retorno da contribuição sem serem capital (ficam fora dos fluxos).</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">wallet_contrib</span> = Σ t.balance de _WALLET_CONTRIB_TYPES
+               + Σ ajustes de _CASH_EXCLUDED_TYPES</pre>
+              <dl class="src-vars">
+                <dt>_WALLET_CONTRIB_TYPES</dt><dd><code>{gainsExpenses, rebate, managementFee, otherFee, brokerageFee}</code></dd>
+                <dt>_CASH_EXCLUDED_TYPES</dt><dd>ajustes de contribuição — par contábil do P&amp;L de vencimento</dd>
+              </dl>
+              <p class="src-ref">Exposto em <code>walletContribution</code> (+ <code>walletContributionBreakdown</code> por tipo)</p>
+            </div>
+          </details>
+        </div>
+
+        <div class="calc-phase"><span class="pl">Fase E</span><span class="pt">Agregação</span><span class="pd">NAV, cota, retornos e a decomposição do GAP</span></div>
+
+        <!-- E1 · NAV / cota / retornos / GAP -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">09</span>NAV, cota, retornos e GAP</h3>
+            <p>O coração da tela. Do NAV simulado saem a cota e sua rentabilidade; da soma das contribuições sai a rentabilidade da contribuição; o GAP é a diferença entre as duas — em percentual e em reais.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="cm"># _compute_nav_and_gaps</span>
+<span class="hl">sim_nav</span> = round( Σ balance(rows) + new_cash + prov_total
+               + recon_prov_in_nav + official_prov_in_nav , 2)
+
+<span class="hl">sim_nps</span> = round((sim_nav − inflows) / shares, 8)
+ret_nps  = round(sim_nps / former_nps − 1, 8)
+ret_contrib = round(total_contribution / former_nav, 8)
+
+<span class="hl">gap_pct</span>  = round(ret_nps − ret_contrib, 8)
+<span class="hl">gap_cash</span> = round(gap_pct × former_nav, 2)</pre>
+              <dl class="src-vars">
+                <dt>Σ balance(rows)</dt><dd>soma dos saldos projetados de todos os ativos</dd>
+                <dt>new_cash</dt><dd>caixa projetado (cálculo 05)</dd>
+                <dt>prov_total</dt><dd>Σ provisões que entram no NAV (motor + recon + oficiais não-duplicadas)</dd>
+                <dt>inflows</dt><dd><code>inAndOutFlows</code> — aportes/resgates/transferências (capital)</dd>
+                <dt>shares</dt><dd><code>formerAmount</code> — nº de cotas da origem</dd>
+                <dt>former_nav / former_nps</dt><dd>NAV / cota da origem</dd>
+                <dt>total_contribution</dt><dd>Σ contribuição por ativo + <code>wallet_contrib</code> (cálculos 07 e 08)</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_compute_nav_and_gaps</code> · GAP&nbsp;$ = <code>financialValueReturnDifference</code></p>
+            </div>
+          </details>
+        </div>
+
+        <!-- E2 · GAPs por etapa -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">10</span>GAPs por etapa</h3>
+            <p>Como a identidade do GAP é linear no NAV, o sistema mede o GAP em pontos cumulativos para localizar de onde o resíduo vem: da projeção em si (<em>mov</em>), da adoção da quantidade-alvo (<em>amDiff</em>, que deve ser ≈0 por construção) e o resíduo de caixa (<em>cash</em>, informativo).</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="cm"># Identidade: GAP$ = simNav − inflows − formerNav − contribuição</span>
+
+<span class="hl">mov</span>    = gap_cash_for(sim_nav_mov, total_contribution − adoption_intraday)
+         sim_nav_mov = round(base_rows_balance + new_cash
+                             + prov_total + official_prov_in_nav, 2)
+
+<span class="hl">amDiff</span> = round(gap_cash − mov, 2)         <span class="cm"># ≈ 0: NAV e contribuição sobem juntos na adoção</span>
+
+<span class="hl">cash</span>   = cash_residual                   <span class="cm"># caixa PROJETADO − caixa OFICIAL (só informativo)</span></pre>
+              <dl class="src-vars">
+                <dt>base_rows_balance</dt><dd>Σ saldos ANTES da adoção da qtd-alvo</dd>
+                <dt>adoption_intraday</dt><dd>P&amp;L intraday das adoções — subtraído em <em>mov</em> para isolar a etapa</dd>
+                <dt>cash_residual</dt><dd><code>diff.cashResidual</code> — resíduo de caixa, sem verdito de bate/não-bate</dd>
+              </dl>
+              <p class="src-ref">Verde ≈ 0 (etapa auto-contida) · âmbar quando há resíduo</p>
+            </div>
+          </details>
+        </div>
+
+        <div class="calc-phase"><span class="pl">Fase F</span><span class="pt">Conciliação</span><span class="pd">comparação com o alvo real e casamento de caixa</span></div>
+
+        <!-- F1 · Diff vs alvo -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">11</span>Diferença vs alvo (diff)</h3>
+            <p>A comparação com a posição real do alvo é feita <strong>só pela quantidade</strong>, ao PU em uso — o PU bruto da unprocessed não é confrontado (gerava “preço divergente” espúrio). A diferença de saldo é derivada da de quantidade, para ficar sempre consistente com o projetado.</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula"><span class="hl">Δqty</span>        = qty_projetada − qty_alvo
+<span class="hl">balanceDiff</span> = round(PU_em_uso × Δqty, 2)
+realBalance = saldo_projetado − balanceDiff       <span class="cm"># saldo-alvo consistente c/ o projetado</span>
+
+PU-alvo := PU_em_uso                              <span class="cm"># não compara o PU bruto da unprocessed</span></pre>
+              <dl class="src-vars">
+                <dt>PU_em_uso</dt><dd>o <code>pu</code> da projeção (oficial da processed quando processado)</dd>
+                <dt>qty_alvo</dt><dd>quantidade da unprocessed real do alvo (ou processed-position no fallback)</dd>
+                <dt>tolerância</dt><dd><code>_QTY_DIFF_TOL = 1e-6</code> · saldo material <code>_BALANCE_ABS_TOL = 0.01</code></dd>
+              </dl>
+              <p class="src-ref">No código: <code>_build_diff</code> (delegado por <code>_diagnose</code>)</p>
+            </div>
+          </details>
+        </div>
+
+        <!-- 12 · Casamento provisão × caixa -->
+        <div class="calc">
+          <div class="calc-head">
+            <h3><span class="cidx">12</span>Casamento provisão liquidante × caixa</h3>
+            <p>Uma provisão que liquida na data precisa ser equilibrada por uma transação de caixa de mesmo sinal e valor semelhante. O sistema casa 1:1, do par mais próximo ao mais distante, e classifica cada provisão em três estados (casado / provável / sem caixa).</p>
+          </div>
+          <details class="calc-src">
+            <summary><span class="mk">▸</span> ƒ Fórmulas e variáveis usadas no sistema</summary>
+            <div class="calc-src-body">
+<pre class="src-formula">casa quando:  min(|prov|, |txn|) / max(|prov|, |txn|) ≥ _LIQ_MATCH_RATIO
+              E mesmo sinal
+
+🟢 casado   = transação do MESMO securityId, valor ≥ 90%
+🟡 provável = valor ≥ 90% mas securityId não bate (ou carteira sem o ativo)
+🔴 sem caixa = nenhuma transação de mesmo sinal dentro dos 90%</pre>
+              <dl class="src-vars">
+                <dt>_LIQ_MATCH_RATIO</dt><dd><code>0.90</code> — tolerância de ±10% entre provisão e caixa</dd>
+                <dt>casamento</dt><dd>1:1 guloso (melhor proximidade primeiro); a transação casada é consumida</dd>
+                <dt>Liquidação B3</dt><dd>stockETF liquidam consolidadas (Σ provisões × Σ buySell B3), fora do 1:1</dd>
+              </dl>
+              <p class="src-ref">No código: <code>_match_liquidating_provisions</code> → <code>matchStatus</code></p>
+            </div>
+          </details>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ========== IMPLEMENTAR ========== -->
+    <section id="implementar">
+      <div class="sec-head">
+        <span class="sec-num">09</span>
+        <h2>Implementar</h2>
+      </div>
+      <p>A efetivação é granular e reversível na intenção: nada sobe sem estar marcado. O botão abre primeiro a escolha de escopo — <strong>data única</strong> ou <strong>período encadeado</strong>.</p>
+      <p>No modal de data única, cada etapa é um <strong>checkbox independente</strong>, marcado por padrão quando há algo a aplicar. As etapas são aplicadas nesta ordem:</p>
+      <div class="formula">
+        <div class="row"><span class="rhs">preços de execução → IRRF → transações de ajuste → provisões → provisões deslocadas → upload da unprocessed</span></div>
+        <p class="note">O operador pode subir uma etapa só (ex.: apenas o preço de execução, sem o upload). No fluxo de <b>período</b> (roll-forward), o upload é obrigatório — a data seguinte depende da posição carregada da anterior.</p>
+      </div>
+      <p>No <strong>período encadeado</strong>, o app resolve uma lista de datas, encadeia pares consecutivos a partir da origem e executa sequencialmente: cada passo projeta o lote, aplica as rotas escolhidas e materializa a unprocessed do alvo — que vira a origem do passo seguinte. Um passo com falha interrompe a cadeia.</p>
+    </section>
+
+    <!-- ========== ROTAS ========== -->
+    <section id="rotas">
+      <div class="sec-head">
+        <span class="sec-num">10</span>
+        <h2>Rotas (API)</h2>
+      </div>
+      <p>Leituras que alimentam a tela e escritas que efetivam a conciliação. As escritas são todas destrutivas e passam por confirmação.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Rota</th><th>Faz</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="route"><span class="verb">GET</span> /conciliacao-mov/rows</td><td class="desc">Grade: carteiras com unprocessed na origem + navPackage do sistema no alvo. Param <code>refresh=1</code> recalcula o NAV.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/movimentar</td><td class="desc">Projeta uma carteira (rows, caixa, NAV/cota/GAP, provisões, diff).</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/movimentar-batch</td><td class="desc">Projeta várias carteiras numa requisição, com prefetch em lote — o que o Movimentar usa.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/prewarm</td><td class="desc">Pré-aquecimento opt-in dos índices de catálogo caros.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/xlsx</td><td class="desc">Exporta a posição projetada em .xlsx.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/apply<span class="destr">destrutivo</span></td><td class="desc">Envia a unprocessed projetada ao Beehus (upload), preservando lotes separados.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/provisions<span class="destr">destrutivo</span></td><td class="desc">Cria as provisões calculadas e as de ajuste (reconProvisions).</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/irrf<span class="destr">destrutivo</span></td><td class="desc">Cria as transações de IRRF ausente dos resgates de fundo.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/reconcile-txn<span class="destr">destrutivo</span></td><td class="desc">Cria as transações de resgate no vencimento.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/execution-prices<span class="destr">destrutivo</span></td><td class="desc">Corrige os preços de execução (PATCH no record, ou POST quando não há).</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/shift-provisions<span class="destr">destrutivo</span></td><td class="desc">Desloca para a data-alvo, em cópia, as provisões que liquidam na data.</td></tr>
+            <tr><td class="route"><span class="verb">POST</span> /conciliacao-mov/gains-expenses<span class="destr">destrutivo</span></td><td class="desc">Cria o ajuste de contribuição da liquidação stockETF/B3 (cash-neutro).</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>Descritivo funcional da tela <strong>Conciliação (mov.)</strong> — SWAT · Controle de cargas. Referência técnica completa (motor, seams, casos reais) em <code>docs/CONCILIACAO_MOV.md</code>.</p>
+      <div class="files">
+        <span class="tag"><code>pages/conciliacao_mov.py</code></span>
+        <span class="tag"><code>templates/conciliacao_mov.html</code></span>
+      </div>
+    </footer>
+  </main>
+</div>

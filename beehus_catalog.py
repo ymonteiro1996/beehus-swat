@@ -2164,6 +2164,65 @@ def security_price_records(security_ids):
     return recs
 
 
+# Cache por-securityId dos records de preço, para o prefetch EM LOTE da Conciliação
+# (mov.). O `filtered-security-price` é o long-pole do lote (~11-17s p/ ~230 ativos,
+# alta variância) e NÃO aceita filtro de data — devolve TODO o `historyPrice`. Um
+# record de preço de DATA PASSADA é imutável, então cacheá-lo é seguro; o lote re-busca
+# a MESMA união a cada re-execução do mesmo range → o cache elimina o fetch em re-runs.
+# Reusa o store/lock/TTL do catálogo (chaves `secprice::{sid}`) → `invalidate()` e o
+# botão "Atualizar" (refresh()) já limpam. `security_price_records` (live) segue intacto
+# p/ as telas de data corrente (precificação/controlpanel/repetir).
+_SECPRICE_KEY = "secprice::{}"
+
+
+def security_price_records_cached(security_ids):
+    """Como `security_price_records`, mas serve records por-securityId do cache
+    (TTL/SWR) e busca EM LOTE só os ausentes/vencidos, reaproveitando os já quentes
+    (inclusive entre datas — o record é date-agnóstico). Trata a omissão silenciosa de
+    lote grande (re-busca UMA vez os sids sem record) e cacheia inclusive o resultado
+    VAZIO de um ativo (evita re-buscá-lo a cada lote), MAS só quando o fetch teve
+    sucesso: se o fetch inteiro voltar vazio (falha total/429) NÃO cacheia — evita
+    envenenar o cache com preço vazio.
+
+    Uso EXCLUSIVO: prefetch da Conciliação (mov.) p/ DATAS PASSADAS (imutáveis). O
+    chamador decide; data corrente segue no `security_price_records` live."""
+    seen = []
+    src = security_ids if isinstance(security_ids, (list, tuple, set)) else [security_ids]
+    for s in src:
+        s = _idstr(s)
+        if s and s not in seen:
+            seen.append(s)
+    if not seen:
+        return []
+    hits, to_fetch = [], []
+    now = time.monotonic()
+    with _cache_lock:
+        for sid in seen:
+            ent = _cache_store.get(_SECPRICE_KEY.format(sid))
+            if ent is not None and (now - ent[0]) < _CACHE_TTL_SECONDS:
+                hits.extend(ent[1])
+            else:
+                to_fetch.append(sid)
+    if to_fetch:
+        recs = security_price_records(to_fetch)   # chunka+paraleliza internamente
+        have = {r["securityId"] for r in recs}
+        missing = [s for s in to_fetch if s not in have]
+        if missing:   # omissão silenciosa de lote grande → re-busca os faltantes 1×
+            recs = list(recs) + security_price_records(missing)
+        by_sid = {}
+        for r in recs:
+            by_sid.setdefault(r["securityId"], []).append(r)
+        if recs:   # fetch OK (não-vazio) → cacheia por sid, inclusive vazios genuínos
+            ts = time.monotonic()
+            with _cache_lock:
+                for sid in to_fetch:
+                    _cache_store[_SECPRICE_KEY.format(sid)] = (ts, by_sid.get(sid, []))
+        # recs vazio = falha total (ou nenhum ativo tem preço): NÃO cacheia → re-tenta
+        for sid in to_fetch:
+            hits.extend(by_sid.get(sid, []))
+    return hits
+
+
 def resolve_price_record(security_id, records=None, *, company_id=None,
                          entity_id=None, wallet_id=None):
     """Record de preço MAIS ESPECÍFICO p/ `security_id` no contexto dado, na

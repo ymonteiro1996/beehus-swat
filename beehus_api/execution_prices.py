@@ -68,3 +68,14 @@ def update_execution_price(execution_price_id: str, execution_price: float) -> d
         raise ValueError("execution_price_id is required")
     return request("PATCH", f"/beehus/financial/execution-prices/{execution_price_id}",
                    json={"executionPrice": execution_price})
+
+
+def delete_execution_price(execution_price_id: str) -> dict | None:
+    """DELETE /beehus/financial/execution-prices/{id}.
+
+    Returns whatever the API returns (often empty body). Raises BeehusAPIError
+    on non-2xx so callers can surface the failure.
+    """
+    if not execution_price_id:
+        raise ValueError("execution_price_id is required")
+    return request("DELETE", f"/beehus/financial/execution-prices/{execution_price_id}")
