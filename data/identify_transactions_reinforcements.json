@@ -1474,6 +1474,78 @@
       "addedAt": "2026-07-08T22:20:45Z",
       "lastSeenAt": "2026-07-08T22:20:45Z",
       "hits": 1
+    },
+    "AQUISICAO DE COTAS NO FUNDO TESOURO SELIC FI RF": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "09.215.250/0001-13",
+      "lastDescriptionRaw": "AQUISICAO DE COTAS NO FUNDO TESOURO SELIC FI RF",
+      "addedAt": "2026-07-22T12:37:11Z",
+      "lastSeenAt": "2026-07-22T12:37:11Z",
+      "hits": 1
+    },
+    "SOLD|WA INST US TRSY RESERVES LTD 1": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67fee96b56efc7ce227522f3",
+      "securityName": "Western Asset Class 1",
+      "securityMainId": "KYG9554E1035",
+      "lastDescriptionRaw": "Sold|WA INST US TRSY RESERVES LTD 1",
+      "addedAt": "2026-07-22T12:40:29Z",
+      "lastSeenAt": "2026-07-22T12:40:29Z",
+      "hits": 1
+    },
+    "RESGATE DE COTAS NO FUNDO - TESOURO SELIC FI RF - TESOURO SELIC FI RF": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "09.215.250/0001-13",
+      "lastDescriptionRaw": "Resgate de cotas no fundo - TESOURO SELIC FI RF - TESOURO SELIC FI RF",
+      "addedAt": "2026-07-22T12:49:24Z",
+      "lastSeenAt": "2026-07-22T12:49:24Z",
+      "hits": 1
+    },
+    "RESGATE DE COTAS NO FUNDO - TESOURO SELIC FI RF": {
+      "beehusTransactionType": "buySell",
+      "securityId": "67ffbc9756efc7ce2275b27b",
+      "securityName": "Btg Pactual Tesouro Selic FI RF DI",
+      "securityMainId": "09.215.250/0001-13",
+      "lastDescriptionRaw": "Resgate de cotas no fundo - TESOURO SELIC FI RF",
+      "addedAt": "2026-07-22T12:51:04Z",
+      "lastSeenAt": "2026-07-22T12:51:04Z",
+      "hits": 1
+    },
+    "IOF S/CAMBIO - BANCO BTG PACTUAL S A": {
+      "beehusTransactionType": "taxes",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "IOF S/CAMBIO - BANCO BTG PACTUAL S A",
+      "addedAt": "2026-07-22T12:53:58Z",
+      "lastSeenAt": "2026-07-22T12:53:58Z",
+      "hits": 1,
+      "noSecurity": true
+    },
+    "RENDIMENTO - BTG PRIME HOSP FII A - CETIP": {
+      "beehusTransactionType": "coupon",
+      "securityId": "6a31803023a3161b241fda48",
+      "securityName": "BTG Pactual Prime Hospitalidade FII RL",
+      "securityMainId": "65331709000115",
+      "lastDescriptionRaw": "RENDIMENTO - BTG PRIME HOSP FII A - CETIP",
+      "addedAt": "2026-07-22T12:57:50Z",
+      "lastSeenAt": "2026-07-22T12:57:50Z",
+      "hits": 1
+    },
+    "RENTABILIDADE DO ALUGUEL DA ATIVOS": {
+      "beehusTransactionType": "gainsExpenses",
+      "securityId": "",
+      "securityName": "",
+      "securityMainId": "",
+      "lastDescriptionRaw": "Rentabilidade do aluguel da ativos",
+      "addedAt": "2026-07-22T13:07:01Z",
+      "lastSeenAt": "2026-07-22T13:07:01Z",
+      "hits": 1,
+      "noSecurity": true
     }
   }
 }
