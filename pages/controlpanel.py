@@ -2401,6 +2401,7 @@ def warmup():
 @bp.route("/api/controlpanel/refresh-cache", methods=["POST"])
 def refresh_cache():
     """Force-reload the securities cache from MongoDB."""
+    beehus_catalog.invalidate()  # força recarga a frio do securities_index (API)
     cache = get_cache()
     cache.load_from_db(db)
     _reset_matcher()  # force re-init with fresh cache

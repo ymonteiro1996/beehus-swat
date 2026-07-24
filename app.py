@@ -64,6 +64,22 @@ def index():
     return render_template("shell.html")
 
 
+@app.after_request
+def _no_store_html(resp):
+    """Nunca cachear HTML. As páginas rodam dentro de um <iframe> criado por JS
+    (shell.html → `?_frame=1`); como esse iframe é requisitado DEPOIS do load, um
+    Ctrl+Shift+R no shell NÃO invalida o cache dele, e o Chrome servia o iframe do
+    disk cache → rodava JS ANTIGO (ReferenceError `tbl`/TDZ `_scopeState` após uma
+    edição de template). Sem cabeçalho de cache o browser aplicava freshness
+    heurística. App local/single-user → HTML nunca deve ser cacheado. Assets
+    estáticos (mimetype != text/html) seguem cacheáveis pelo handler do Flask."""
+    if resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+
 # Only reachable when this instance uses Mongo; register the handler (and import
 # pymongo.errors) lazily so a Mongo-free instance never loads pymongo. The
 # RuntimeError handler below still covers the "db not initialized" case.

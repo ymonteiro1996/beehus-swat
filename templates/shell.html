@@ -128,6 +128,13 @@
       <div class="space-y-1">
         <div class="nav-section-label px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Validações</div>
 
+        <a href="#conciliacao" data-page="conciliacao" onclick="navigateTo('conciliacao'); return false;"
+           title="Conciliação"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          <span class="nav-text">Conciliação</span>
+        </a>
+
         <a href="#conciliacao_unprocessed" data-page="conciliacao_unprocessed" onclick="navigateTo('conciliacao_unprocessed'); return false;"
            title="Conciliação (Não Processado)"
            class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
@@ -249,6 +256,7 @@
     /* ── Page registry ────────────────────────────────────────────────────────── */
     const PAGES = {
       controlpanel:             '/controlpanel',
+      conciliacao:              '/conciliacao',
       conciliacao_unprocessed:  '/conciliacao-unprocessed',
       conciliacao_mov:          '/conciliacao-mov',
       // `stripping` é o novo entry-point oficial do sidebar (Position

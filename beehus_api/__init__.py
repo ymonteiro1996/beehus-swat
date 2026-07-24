@@ -26,7 +26,7 @@ from .positions import (
 from .provisions import (create_provision, delete_provision, update_provision,
                          list_provisions)
 from .execution_prices import (create_execution_price, list_execution_prices,
-                               update_execution_price)
+                               update_execution_price, delete_execution_price)
 from .consolidation import (
     get_company_variables,
     list_company_variables,
@@ -71,6 +71,7 @@ __all__ = [
     "create_execution_price",
     "list_execution_prices",
     "update_execution_price",
+    "delete_execution_price",
     "get_company_variables",
     "list_company_variables",
     "calculate_nav_wallets",

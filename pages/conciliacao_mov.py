@@ -45,14 +45,19 @@ from pages.diagnostic_engine import _prov_dates
 from beehus_api import (security_events as _api_security_events,
                         upload_unprocessed_security_positions_file as _api_upload_unprocessed,
                         create_provision as _api_create_provision,
+                        delete_provision as _api_delete_provision,
+                        update_provision as _api_update_provision,
                         create_transaction as _api_create_transaction,
+                        update_transaction as _api_update_transaction,
+                        delete_transaction as _api_delete_transaction,
                         create_execution_price as _api_create_execution_price,
                         update_execution_price as _api_update_execution_price,
+                        delete_execution_price as _api_delete_execution_price,
                         BeehusAPIError, BeehusAuthError)
 
 from datetime import date as _date, timedelta
 import concurrent.futures
-import io, math, logging, threading, time, copy
+import io, math, logging, threading, time, copy, os
 
 _log = logging.getLogger(__name__)
 
@@ -60,7 +65,14 @@ bp = Blueprint("conciliacao_mov", __name__)
 
 _NUM_DATES = 10
 _FLOW_TYPES = {"withdrawalDeposit", "withdrawalDepositAdjustment", "securityTransfer", "taxes"}
-_EVENT_TYPES = {"coupon", "amortization"}
+# Transações cujo CAIXA é RENDIMENTO do ativo → entra na contribuição de evento
+# (`_c_event`, somado como TOTAL, não por cota) e no campo de display `couponAmort`.
+# `dividendOnboarding` (dividendo lançado no tombamento) entra AQUI a pedido do usuário
+# (jul/2026): é tratado como `coupon` — seu caixa já está no `all_cash` (não é
+# `_CASH_EXCLUDED_TYPES`), então reconhecê-lo como contribuição PAREIA o caixa → GAP-neutro
+# e classifica o ativo no bucket 6 (dividendo/cupom). NB: `dividend` comum NÃO entra aqui
+# (decisão anterior: sem eventContribution → bucket 1).
+_EVENT_TYPES = {"coupon", "amortization", "dividendOnboarding"}
 _QTY_TXN_TYPES = {"buySell"}                 # somam quantity (aditivo)
 _SPLIT_EVENT_TYPES = {"split", "inplit", "grouping", "reverseSplit"}
 # securityEvents com caixa POR COTA (dividendo/JCP). Alimentam a contribuição
@@ -86,6 +98,12 @@ _WALLET_CONTRIB_TYPES = {"gainsExpenses", "rebate", "managementFee", "otherFee",
 # NÃO retornam principal → não reduzem o resíduo. `maturity` é o tipo DIRETO do resgate no
 # vencimento; sem ele o principal era contado 2× (txn maturity em all_cash + matured_cash).
 _MATURITY_REDEMPT_TYPES = {"maturity", "buySell", "amortization", "securityTransfer", "withdrawalDeposit"}
+# Subconjunto que, LIQUIDANDO na própria data-alvo, JÁ representa o resgate no
+# vencimento — usado p/ NÃO sugerir uma transação de resgate duplicada quando ela já
+# existe (guard do ramo de vencimento em `_diagnose`). Só `maturity`/`amortization`: são
+# os tipos DIRETOS do resgate no vencimento; um buySell/transfer/depósito na data pode
+# ser outra operação, então NÃO suprime a sugestão (regra do usuário, jul/2026).
+_MATURITY_SETTLED_TYPES = {"maturity", "amortization"}
 # Ajustes de contribuição/retorno (não financeiros): entram na CONTRIBUIÇÃO
 # (returnContribution, via wallet_contrib) mas NÃO no caixa projetado (`all_cash`) — o
 # cashAccounts oficial não os reflete. São o PAR contábil do P&L de vencimento que entra
@@ -95,6 +113,11 @@ _CASH_EXCLUDED_TYPES = {"securityContributionAdjustment", "contributionAdjustmen
 # Security sintética da B3 p/ a liquidação CONSOLIDADA de stockETF: a B3 junta todas
 # as operações de stockETF que liquidam na mesma data numa única transação buySell.
 _B3_LIQ_SECURITY = "6a3fd49986ea629551686213"
+# Id SINTÉTICO da transação de ajuste de CAIXA (withdrawalDepositAdjustment sugerida pela
+# divergência de caixa). Não é um `_id` do Beehus — serve p/ o toggle de IGNORAR reusar o
+# mesmo caminho `omitTxnIds` das transações da janela (o front chama toggleOmitTxn com este
+# id; o orquestrador vê o id em `_omit` e NÃO dobra o ajuste no caixa projetado).
+_CASH_ADJ_OMIT_ID = "__cash_adj__"
 
 # ── Tolerâncias do diagnóstico (centralizadas) ───────────────────────────────────
 # (O caixa-âncora foi ELIMINADO — não há mais tolerância de "caixa bate". O resíduo de
@@ -209,17 +232,29 @@ def _next_biz_day(d_iso):
     return cur.isoformat()
 
 
-def _security_contribution(fq, fp, q, p, coupon_amort=0.0, dividend_ps=0.0, exec_price=None):
-    """Fórmulas 4–7 de docs/CONCILIACAO_RECALCULO.md:
+def _contribution_parts(fq, fp, q, p, coupon_amort=0.0, dividend_ps=0.0, exec_price=None):
+    """Parcelas (NÃO arredondadas) da contribuição por ativo — Fórmulas 4–7 de
+    docs/CONCILIACAO_RECALCULO.md:
         daily    = formerQty × (PU − formerPU)
         intraday = (qty − formerQty) × (PU − execPrice)
         event    = couponAmort + dividendPS × formerQty
+
+    O `execPrice` do intraday reconcilia o caixa da posição LÍQUIDA quando = −Σbalance/Δqty
+    (preço efetivo do net). Para round-trip (≥2 buySell a preços diferentes) o `_resolve_exec`
+    já resolve `execPrice := derivado` (e propõe um executionPriceFix p/ o sistema base), de
+    modo que esta fórmula com Δqty líquida capta o P&L realizado das cotas revendidas.
     """
     fq = _num(fq); fp = _num(fp); q = _num(q); p = _num(p)
     ep = _num(exec_price) if exec_price is not None else p
     daily = fq * (p - fp)
     intraday = (q - fq) * (p - ep)
     event = _num(coupon_amort) + _num(dividend_ps) * fq
+    return daily, intraday, event
+
+
+def _security_contribution(fq, fp, q, p, coupon_amort=0.0, dividend_ps=0.0, exec_price=None):
+    """Soma das parcelas (daily + intraday + event), arredondada a 2 casas."""
+    daily, intraday, event = _contribution_parts(fq, fp, q, p, coupon_amort, dividend_ps, exec_price)
     return round(daily + intraday + event, 2)
 
 
@@ -487,18 +522,92 @@ def _txn_effects(t):
     return eff
 
 
+def _resolve_exec(sid, sec_name, *, captured, cap, exec_price, pu_final,
+                  bs_balance, bs_delta, matured_exec, is_fund, former_qty, qty,
+                  target_date, multi_txn=False):
+    """Passo 3 do refactor — resolve o execPrice EM EFEITO na contribuição intraday E monta a
+    entry da visão de preços de execução. PURA. Retorna `(contrib_exec, view_entry)`;
+    `view_entry` = None quando o ativo não entra na visão (sem sid, fundo, ou sem captured nem
+    derivado). NÃO cobre o divisor da quantidade — este compara o captured contra `_pu_atual`
+    (proc/snapshot), referência de PU DIFERENTE.
+
+    `multi_txn` = há ≥2 buySell position-effective na janela (round-trip). Nesse caso um ÚNICO
+    execPrice capturado NÃO reconcilia o caixa (a Δqty líquida perde o P&L das cotas compradas e
+    revendidas). O DERIVADO `−Σbalance/Δqty` é o preço efetivo do net que reconcilia → usa-o na
+    contribuição E propõe um executionPriceFix p/ o sistema BASE (Beehus) recalcular o
+    intradayContribution certo (o base usa Δqty líquida × execPrice único por security/data)."""
+    # PRIMÁRIO = capturado do sistema (endpoint execution-prices); senão o execPrice embutido
+    # na transação. placeholder = sem info intraday real: capturado AUSENTE ou ≈ PU.
+    contrib_exec = captured if captured is not None else exec_price
+    placeholder = (contrib_exec is None or _pu_close(contrib_exec, pu_final))
+    derived = round(-bs_balance / bs_delta, 8) if abs(bs_delta) > 1e-9 else None
+    # Vencimento (regra B): ativo VENCIDO usa o execPrice do resgate ÷ formerQty (sinal correto),
+    # vencendo o −Σbalance/Δqty do buySell. `matured_exec` só != None no vencido → não afeta o
+    # não-vencido. Vem ANTES da reatribuição de `contrib_exec` abaixo (ordem importa).
+    if matured_exec is not None:
+        derived = matured_exec
+    # ROUND-TRIP: ≥2 buySell e o capturado NÃO reconcilia o net (≠ derivado) → o único preço
+    # capturado é insuficiente; o derivado (−Σbalance/Δqty) é o preço EFETIVO do net. Vale p/
+    # TODO ativo, INCLUSIVE fundo (jul/2026, a pedido): fundo com vários buySell a preços/cotas
+    # diferentes (ex.: resgate parcelado no mês) tinha o intraday calculado com o `price` da 1ª
+    # ordem (via `_exec_price`) — que não representa o conjunto e abre GAP. O derivado reconcilia
+    # o caixa líquido; para fundo, o resíduo contra o PU embutido nesse preço é o IRRF do resgate.
+    # (Trade único limpo: captured == derived → reconciles=True → não mexe.)
+    reconciles = derived is None or contrib_exec is None or _pu_close(_num(contrib_exec), derived)
+    roundtrip = bool(multi_txn and derived is not None and not reconciles)
+    # Placeholder (capturado ausente/≈PU) segue restrito a NÃO-fundo (fundo sem execPrice real
+    # cai no `daily`+IRRF); o ROUND-TRIP acima vale também p/ fundo.
+    use_derived = derived is not None and ((not is_fund and placeholder) or roundtrip)
+    if use_derived:
+        contrib_exec = derived
+    view_entry = None
+    # Visão de preços de execução — TODO ativo com record capturado OU trade derivável (não só
+    # os placeholder). FUNDO ENTRA na visão (display), mas NUNCA como FIX (`isFix=False`): o
+    # resíduo do fundo é IRRF, não preço p/ empurrar ao base. `isFund` sinaliza p/ a UI.
+    if sid and (captured is not None or derived is not None):
+        # Impacto na CONTRIBUIÇÃO (termo intraday): (qty − formerQty) × (PU − execUsado), com o
+        # `contrib_exec` JÁ finalizado acima.
+        intraday_contrib = round((_num(qty) - _num(former_qty)) * (_num(pu_final) - _num(contrib_exec)), 2)
+        # FIX só quando a correção MUDA algo material: (a) o derivado difere do PU acima da
+        # tolerância relativa (protege execPrice real ≈ PU e overwrite inócuo) E (b) o intraday
+        # acrescentado é > R$ 0,01 (senão é só arredondamento — regra do usuário jul/2026). Inclui
+        # o caso ROUND-TRIP (capturado real ≠ derivado): propõe criar/atualizar o execPrice no base.
+        # FUNDO nunca é fix (não empurra preço ao base) — só exibe o derivado usado no intraday.
+        is_fix = bool(not is_fund and use_derived and derived is not None
+                      and abs(derived - pu_final) > max(abs(pu_final), abs(derived)) * _EXECPRICE_REL_TOL
+                      and abs(intraday_contrib) > _BALANCE_ABS_TOL)
+        view_entry = {
+            "securityId": sid, "securityName": sec_name,
+            "recordId": cap.get("id"),     # PATCH se existir record; senão criar
+            "positionDate": cap.get("positionDate") or target_date,
+            "capturedPrice": _safe_num(captured),   # ==PU (placeholder), real, ou None (ausente)
+            "pu": _safe_num(pu_final),
+            "calculatedPrice": _safe_num(derived),
+            "intradayContribution": _safe_num(intraday_contrib),
+            "status": ("round-trip" if roundtrip
+                       else "placeholder" if (captured is not None and placeholder)
+                       else "ausente" if captured is None else "ok"),
+            "action": (("update" if cap.get("id") else "create") if is_fix else None),
+            "isFix": is_fix,
+            "isFund": bool(is_fund),
+        }
+    return contrib_exec, view_entry
+
+
 def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
                   coupon_amort_by_sid, split_by_sid, dividend_by_sid, dividend_events_by_sid,
                   price_hp, exec_price_by_sid,
                   tgt_pricing, tgt_pu, tgt_proc_pu, tgt_proc_qty, tgt_rows,
                   src_proc_pu, sec_meta, name_hints,
-                  src_lots_by_sid, tgt_lots_by_sid, target_date):
+                  src_lots_by_sid, target_date):
     """B1b — PROJEÇÃO por ativo (Passos 2–4, 6, 6.5 + adoção do alvo + sort). Puro.
 
     Constrói as linhas projetadas da carteira na data-alvo a partir da posição-origem
     agregada + transações da janela + preços/eventos, e as provisões DERIVADAS
-    (liquidação futura do Passo 6; dividendo/JCP do Passo 6.5). Inclui a adoção de
-    ativos presentes SÓ no alvo (confirmados na processed-alvo — `adoptedFromTarget`).
+    (liquidação futura do Passo 6; dividendo/JCP do Passo 6.5). Ativos presentes SÓ no
+    alvo (confirmados na processed-alvo) entram como linha ZERADA (`newFromTarget`,
+    former=0/quantity=0) p/ divergirem (0 → qtd-alvo) e gerarem PROVISÃO de ajuste — o
+    MESMO caminho de um ativo existente com divergência de qtd (NÃO mais adoção NAV-neutra).
     Todos os insumos chegam prontos (sem I/O). Retorna
     `(rows, provisions, exec_prices_view, total_contribution, matured_cash)`."""
     # ── Passos 2–4 + 6: construir linhas projetadas + provisões ─────────────────
@@ -559,22 +668,6 @@ def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
         # a regra da Repetir Posições; mantém ativos NOVOS (só transacionados).
         if abs(former_qty) < 1e-9 and abs(former_bal) < 0.005 and not has_qty_txn:
             continue
-        # Filtro de ALVO: posição OFICIALMENTE FECHADA na data-alvo. O ativo SUMIU da
-        # unprocessed-alvo, NÃO há transação de quantidade na janela que o movesse, NÃO
-        # está vencido (vencimento tem passo próprio) E a processed-position do alvo
-        # (autoritativa) o lista com qtd ≈ 0 → a posição foi encerrada pelo sistema.
-        # Projetar a qtd da ORIGEM aqui fabricaria um `onlyCalc` falso (ex.: futuro
-        # liquidado/ajustado sem `buySell` na janela). Só dropa COM confirmação oficial
-        # (processed-alvo lista o ativo a 0); em forward (sem processed-alvo) mantém +
-        # sinaliza a divergência normalmente. Caso real: "Futuro Mini Dólar - Jun/2026"
-        # (69d6a0da…) origem −30 → some do alvo, processed-alvo qtd 0, 26→27/mai.
-        _mat = str(meta.get("maturityDate") or "")[:10]
-        _tpq = tgt_proc_qty or {}
-        if (sid and sid not in tgt_rows and not has_qty_txn
-                and not (_mat and _mat <= target_date)
-                and sid in _tpq and abs(_num(_tpq.get(sid))) < 1e-9):
-            continue
-
         coupon_amort = coupon_amort_by_sid.get(sid, 0.0) if sid else 0.0
         div_ps = dividend_by_sid.get(sid, 0.0) if sid else 0.0
         exec_price = _exec_price(txn_by_sid.get(sid, [])) if sid else None
@@ -586,43 +679,100 @@ def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
         # "qtd-do-alvo" nem `amountDifference` no cálculo da quantidade; o amountDifference
         # só cria PROVISÃO quando não há transação associada). Quantidade movimentada de
         # cada transação, por PRIORIDADE:
-        #   1. `quantity` da transação (quando vier preenchida)
+        #   1. `quantity` da transação (quando vier preenchida) — MAGNITUDE apenas
         #   2. −balance / executionPrice CAPTURADO — SÓ quando difere do PU (= o usuário
-        #      inputou um execPrice real; quando ≈ PU é placeholder → ignora, cai no 3)
+        #      inputou um execPrice real; quando ≈ PU é placeholder → ignora, cai no 2b)
+        #   2b. −balance / execPrice SUGERIDO (regra do usuário jul/2026): sempre que houver
+        #      buySell E amountDifference (qtd-ALVO − qtd-ORIGEM) ≠ 0, o execPrice sugerido =
+        #      −Σbalance / amountDifference (o MESMO do `forcedExecPrices`); usá-lo como divisor
+        #      faz `bs_delta = amountDifference` → PROJETADO = qtd-ALVO, e a diferença PU−execPrice
+        #      cai na contribuição INTRADAY (P&L real do trade), não num resíduo/manual review.
+        #      Só entra com execPrice > 0 (dados coerentes); sinal contraditório → cai no 3.
         #   3. −balance / PU da POSIÇÃO ATUAL (processed-alvo → unprocessed-alvo)
         #   4. −balance / PU do securityPrices na data-alvo (se houver securityId)
         #   5. −balance / former_pu (PU da origem)
         #   6. −balance / 1 (assume PU = 1) — último recurso
         # Sinal: balance<0 (compra/aplicação) → qtd↑; balance>0 (venda/resgate) → qtd↓.
+        # O SINAL vem SEMPRE do `balance` (o único campo que codifica compra vs. venda
+        # nesta base — `beehusTransactionType` é o genérico "buySell"). A MAGNITUDE, quando
+        # a transação traz `quantity` preenchida (ex.: renda fixa/bond), vem de `abs(quantity)`
+        # (mais preciso que a derivação −balance/PU). ATENÇÃO: nesta base `quantity` é
+        # SEM sinal (a venda de 125 cotas vem com quantity=+125 e balance>0), então usá-la
+        # crua SOMAVA a venda em vez de subtrair (bug: venda total 125 → 250 em vez de 0).
         # Em brazilianFund o divisor (PU) sobre o balance LÍQUIDO de IRRF deixa um resíduo =
         # IRRF na quantidade (esperado; o bloco de IRRF o explica).
         _cap_ep = (exec_price_by_sid.get(sid) or {}).get("price") if sid else None
         _pu_atual = (tgt_proc_pu.get(sid) if sid else None) or (tgt_pu.get(sid) if sid else None)
-        _pu_sp = _history_pu_on_date(price_hp.get(sid), target_date) if sid else None
         # execPrice capturado só vale se INPUTADO (difere do PU); ≈ PU = placeholder → ignora.
         _cap_real = None
         if _cap_ep and (not _pu_atual or not _pu_close(_cap_ep, _pu_atual)):
             _cap_real = _num(_cap_ep)
-        qty_div = (_cap_real                                       # 2 (execPrice ≠ PU)
-                   or (_num(_pu_atual) if _pu_atual else None)     # 3
-                   or (_num(_pu_sp) if _pu_sp else None)           # 4
-                   or (former_pu if former_pu else None)           # 5
-                   or 1.0)                                         # 6
+        # PU do divisor = MESMA cadeia de marcação (proc → snapshot → securityPrices → former),
+        # via _mark_price_chain (Passo 2 do refactor — de-duplica a cadeia reescrita à mão).
+        # `zero_history_as_absent=True` preserva a semântica ANTIGA do divisor: cota 0,0 do
+        # securityPrices conta como AUSENTE (cai no former). `split_factor=None`: o divisor NÃO
+        # inverte split. execPrice real (≠PU) tem prioridade; 1.0 é o último recurso.
+        _mark_pu, _ = _mark_price_chain(
+            tgt_pricing.get(sid) if sid else None,
+            tgt_pu.get(sid) if sid else None,
+            price_hp.get(sid) if sid else None,
+            target_date, former_pu, None,
+            tgt_proc_pu.get(sid) if sid else None,
+            zero_history_as_absent=True)
+        # (2b) execPrice SUGERIDO = −Σbalance(buySell POSITION-EFFECTIVE) / amountDifference,
+        # amountDifference = qtd-ALVO − qtd-ORIGEM (alvo ausente → 0). Espelha `forcedExecPrices`.
+        # Divisor da qtd para os legs SEM `quantity` → `bs_delta = amountDifference` → projetado
+        # = qtd-alvo. Só com dado coerente (execPrice > 0); contraditório (sinais iguais → preço
+        # ≤ 0) cai na cadeia de PU. `quantity` explícito no leg tem prioridade (não usa divisor).
+        _sugg_ep = None
+        if sid and bs_pos:
+            _tgt_q = _num((tgt_rows.get(sid) or {}).get("quantity")) if sid in tgt_rows else 0.0
+            _amt_diff = _tgt_q - former_qty
+            _bs_bal_pre = sum(_num(t.get("balance")) for t in bs_pos)
+            if abs(_amt_diff) > 1e-9 and abs(_bs_bal_pre) > 1e-9:
+                _cand = -_bs_bal_pre / _amt_diff
+                if _cand > 0:
+                    _sugg_ep = _cand
+        qty_div = _cap_real or _sugg_ep or _mark_pu or 1.0         # execPrice(cap/sugerido)≠PU → cadeia → 1.0
         bs_delta = bs_balance = 0.0   # Δqty e Σbalance do buySell POSITION-EFFECTIVE (deriva o execPrice da contribuição)
         for t in bs_pos:
             b = _num(t.get("balance"))
             bs_balance += b
             q = t.get("quantity")
-            bs_delta += _num(q) if q is not None else (-b / qty_div)   # 1 senão 2-6
+            # sinal SEMPRE do balance (b>0 venda → qtd↓; b<0 compra → qtd↑); magnitude de
+            # `abs(quantity)` quando preenchida (mais precisa), senão −balance/execPrice|PU (2b-6).
+            bs_delta += -math.copysign(abs(_num(q)), b) if q is not None else (-b / qty_div)
         qty = former_qty + bs_delta
         # Passo 2b — split/inplit via factor de securityEvents (multiplicativo).
         split_factor = split_by_sid.get(sid) if sid else None
         if split_factor:
             qty *= split_factor
 
+        # Filtro de ALVO: posição OFICIALMENTE FECHADA na data-alvo. O ativo SUMIU da
+        # unprocessed-alvo, NÃO há transação de quantidade na janela que o movesse, NÃO
+        # está vencido (vencimento tem passo próprio) E a processed-position do alvo
+        # (autoritativa) o lista com qtd ≈ 0 → a posição foi encerrada pelo sistema.
+        # Projetar a qtd da ORIGEM aqui fabricaria um `onlyCalc` falso (ex.: futuro
+        # liquidado/ajustado sem `buySell` na janela). Só dropa COM confirmação oficial
+        # (processed-alvo lista o ativo a 0); em forward (sem processed-alvo) mantém +
+        # sinaliza a divergência normalmente. Caso real: "Futuro Mini Dólar - Jun/2026"
+        # (69d6a0da…) origem −30 → some do alvo, processed-alvo qtd 0, 26→27/mai.
+        # NÃO cobre o ativo COM `buySell` que zerou a posição (renda fixa vendida por
+        # completo): esse PERMANECE como linha qtd-0 (o P&L intraday da venda precisa ficar
+        # no NAV, como no vencimento) — o ruído de `onlyCalc`/revisão é suprimido no
+        # `_build_diff` (linha qtd≈0 confirmada a 0 no alvo → tratada como fechada).
+        _mat = str(meta.get("maturityDate") or "")[:10]
+        _tpq = tgt_proc_qty or {}
+        if (sid and sid not in tgt_rows and not has_qty_txn
+                and not (_mat and _mat <= target_date)
+                and sid in _tpq and abs(_num(_tpq.get(sid))) < 1e-9):
+            continue
+
         # Passo 3 — vencimento (maturityDate <= alvo).
         maturity = str(meta.get("maturityDate") or "")[:10] or None
         matured = bool(maturity) and maturity <= target_date
+        matured_exec = None   # execPrice derivado do resgate no vencimento (sem buySell p/ derivar)
+        _row_matured_cash = 0.0   # resíduo de principal de vencimento DESTE ativo (p/ bucket 3 da memória 2)
         if matured:
             pu_final = exec_price if (exec_price and exec_price != 0) else former_pu
             qty = 0.0
@@ -634,7 +784,29 @@ def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
             # resgate lançado por QUALQUER desses tipos NÃO duplica; amortização
             # PARCIAL devolve o resto; cupom/taxes/dividendo (não-principal) não reduzem.
             if sid:
-                matured_cash += max(0.0, former_bal - redempt_cash_by_sid.get(sid, 0.0))
+                _row_matured_cash = max(0.0, former_bal - redempt_cash_by_sid.get(sid, 0.0))
+                matured_cash += _row_matured_cash
+            # execPrice do RESGATE no vencimento (regra B, jul 15/2026): deriva-se do CAIXA
+            # de resgate ÷ `formerQuantity` (toda a posição é resgatada no vencimento) — sinal
+            # SEMPRE correto por construção (caixa POSITIVO ÷ qtd POSITIVA). Caixa = TODOS os
+            # tipos de resgate de principal (`_MATURITY_REDEMPT_TYPES` — inclui `buySell`)
+            # LIQUIDANDO na data-alvo, com saldo positivo. ANTES somava só `maturity`/
+            # `amortization` (`_MATURITY_SETTLED_TYPES`): quando o resgate do vencido vinha
+            # lançado como `buySell` (op no vencimento, liq na data-alvo), o `matured_exec`
+            # ficava None e o execPrice caía no −Σbalance/Δqty do buySell — que, se a `quantity`
+            # do resgate está com o MESMO sinal do caixa (dado upstream), INVERTE o sinal do
+            # preço (ex.: −1.484,66) e explode o intraday (−67 × 2·PU). Incluir o buySell aqui
+            # resolve pela raiz. Alimenta o intraday (P&L do payoff quando `pu_final`=`former_pu`);
+            # quando `pu_final` já é o preço de resgate, o par cancela (intraday 0) e o P&L fica
+            # no `daily`. NÃO altera `pu_final`/qtd/caixa — só a contribuição.
+            if sid and abs(former_qty) > 1e-9:
+                _mat_cash = sum(
+                    _num(t.get("balance")) for t in (txn_by_sid.get(sid) or [])
+                    if (t.get("beehusTransactionType") or "") in _MATURITY_REDEMPT_TYPES
+                    and str(t.get("liquidationDate") or "")[:10] == target_date
+                    and _num(t.get("balance")) > 0)
+                if _mat_cash > 0:
+                    matured_exec = round(_mat_cash / former_qty, 8)
         else:
             # PU resolvido pela cadeia normal (processed-position → snapshot → securityPrices
             # → repete origem). O fundo TOTALMENTE resgatado (qty 0) também passa por aqui: a
@@ -652,49 +824,23 @@ def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
         # (endpoint execution-prices); quando ausente OU == PU (placeholder, sem
         # informação intraday) deriva-se de -Σbalance/Δqty (se houver buySell) e
         # registra-se um FIX p/ subir o preço calculado ao sistema (PATCH/criar).
+        # Preço de execução p/ a contribuição INTRADAY + visão de preços de execução — Passo 3
+        # do refactor: extraído p/ `_resolve_exec` (era ~53 linhas inline aqui). O único valor
+        # que cruza p/ baixo é `contrib_exec` (alimenta `_contribution_parts`); `view_entry` é
+        # a linha da visão (ou None). Vale p/ o trade comum E o vencimento (via `matured_exec`).
         cap = (exec_price_by_sid.get(sid) or {}) if sid else {}
         captured = cap.get("price")
-        contrib_exec = captured if captured is not None else exec_price
-        # placeholder = sem informação intraday real: capturado AUSENTE ou ≈ PU
-        # (apenas repetiu o PU). Nesse caso deriva-se o execPrice de -Σbalance/Δqty.
-        placeholder = (contrib_exec is None or _pu_close(contrib_exec, pu_final))
-        derived = round(-bs_balance / bs_delta, 8) if abs(bs_delta) > 1e-9 else None
-        # Fundo (brazilianFund) NÃO tem execPrice → nunca deriva/usa preço de execução: o
-        # resgate líquido vira `daily` (cota) + IRRF (passo de IRRF), não intraday.
-        if placeholder and derived is not None and not is_fund:
-            contrib_exec = derived
-        # Visão de preços de execução — TODO ativo com record capturado OU trade na
-        # janela (não só os placeholder). Os a corrigir (placeholder/ausente
-        # deriváveis) recebem isFix=True; os reais (execPrice != PU) ficam "ok".
-        # FUNDO é EXCLUÍDO da visão: não tem execPrice (o resíduo é IRRF, não preço).
-        if sid and not is_fund and (captured is not None or derived is not None):
-            # só é FIX se o execPrice DERIVADO difere MATERIALMENTE do PU — senão
-            # não há informação intraday a acrescentar (overwrite inócuo) e protege um
-            # execPrice REAL que por acaso ≈ PU (aí o derivado também ≈ PU → não marca).
-            is_fix = bool(placeholder and derived is not None
-                          and abs(derived - pu_final) > max(abs(pu_final), abs(derived)) * _EXECPRICE_REL_TOL)
-            # Impacto na CONTRIBUIÇÃO (termo intraday): (qty − formerQty) × (PU − execUsado).
-            # `contrib_exec` é o preço EM EFEITO (derivado nos placeholder/ausente com fix;
-            # capturado real nos "ok"). Num placeholder ≈PU o intraday era ~0 → este valor é
-            # exatamente o que a correção do execPrice ACRESCENTA ao returnContribution (já
-            # refletido no `simReturnContribution`, pois o derivado já entra em `contribution`).
-            intraday_contrib = round((_num(qty) - _num(former_qty)) * (_num(pu_final) - _num(contrib_exec)), 2)
-            exec_prices_view.append({
-                "securityId": sid, "securityName": sec_name,
-                "recordId": cap.get("id"),     # PATCH se existir record; senão criar
-                "positionDate": cap.get("positionDate") or target_date,
-                "capturedPrice": _safe_num(captured),   # ==PU (placeholder), real, ou None (ausente)
-                "pu": _safe_num(pu_final),
-                "calculatedPrice": _safe_num(derived),
-                "intradayContribution": _safe_num(intraday_contrib),
-                "status": ("placeholder" if (captured is not None and placeholder)
-                           else "ausente" if captured is None else "ok"),
-                "action": (("update" if cap.get("id") else "create") if is_fix else None),
-                "isFix": is_fix,
-            })
+        contrib_exec, _view_entry = _resolve_exec(
+            sid, sec_name, captured=captured, cap=cap, exec_price=exec_price,
+            pu_final=pu_final, bs_balance=bs_balance, bs_delta=bs_delta,
+            matured_exec=matured_exec, is_fund=is_fund, former_qty=former_qty,
+            qty=qty, target_date=target_date, multi_txn=len(bs_pos) >= 2)
+        if _view_entry is not None:
+            exec_prices_view.append(_view_entry)
 
-        contribution = _security_contribution(
+        _c_daily, _c_intra, _c_event = _contribution_parts(
             former_qty, former_pu, qty, pu_final, coupon_amort, div_ps, contrib_exec)
+        contribution = round(_c_daily + _c_intra + _c_event, 2)   # == _security_contribution(...)
         total_contribution += contribution
 
         # Passo 6 — provisão de LIQUIDAÇÃO FUTURA p/ buySell cujo caixa settla DEPOIS do alvo.
@@ -757,13 +903,27 @@ def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
             "pricingType": pricing_used,
             "formerQuantity": _safe_num(round(former_qty, 6)),
             "formerPu": _safe_num(round(former_pu, 6)),
-            "formerBalance": _safe_num(round(former_bal, 2)),
+            # DISPLAY "Saldo anterior" (Detalhamento + Memória de cálculo) = SEMPRE
+            # `qtd anterior × PU anterior` (regra do usuário). NÃO usa o `former_bal`
+            # (snapshot bruto da unprocessed-origem), que segue intacto para o principal de
+            # vencimento (`matured_cash`), o filtro de posição-zerada e o diff. Assim o saldo
+            # exibido reconcilia sempre com as colunas Qtd anterior × PU anterior ao lado
+            # (inclusive quando o PU oficial da processed-origem sobrepõe o PU bruto).
+            "formerBalance": _safe_num(round(former_qty * former_pu, 2)),
+            # Resíduo de principal de vencimento DESTE ativo somado ao caixa projetado (= parcela do
+            # `matured_cash` atribuível a este securityId = max(0, former_bal BRUTO − resgate já
+            # lançado); 0 quando não vencido ou já resgatado). Consumido pela "Memória de cálculo (2)"
+            # p/ o caixa do bucket de vencimentos (bucket 3).
+            "maturedCash": _safe_num(round(_row_matured_cash, 2)),
             "quantity": _safe_num(round(qty, 6)),
             "pu": _safe_num(round(pu_final, 6)),
             "balance": _safe_num(round(balance, 2)),
             "matured": matured,
             "couponAmort": _safe_num(round(coupon_amort, 2)) if coupon_amort else None,
             "contribution": _safe_num(contribution),
+            "contributionDaily": _safe_num(round(_c_daily, 2)),
+            "contributionIntraday": _safe_num(round(_c_intra, 2)),
+            "contributionEvent": _safe_num(round(_c_event, 2)),
         }
         if _row_lots:
             _row["lots"] = _row_lots
@@ -801,40 +961,46 @@ def _project_rows(*, src_rows, txn_by_sid, redempt_cash_by_sid,
                 "description": f"Compra {_snm} (cota após o alvo — navDays)",
             })
 
-    # ── Adoção de ativos OFICIALMENTE PRESENTES no alvo, AUSENTES da projeção ──────
-    # Espelho INVERTIDO do filtro de posição fechada: a processed-position do alvo
-    # (autoritativa) confirma o ativo com **qtd ≠ 0** (POSITIVA ou NEGATIVA — futuros/
-    # vendidos a descoberto têm qtd<0), mas ele NÃO veio da origem nem de transação da
-    # janela (entrou por securityTransfer/reestruturação que o motor não deriva). Copia a
-    # posição do ALVO p/ a projeção — senão sumia (onlyReal) e o /apply a perderia. Regra
-    # de qtd UNIFICADA com o filtro de fechamento: só fica de fora quando a qtd oficial é
-    # 0; qualquer qtd ≠ 0 é adotada. Forward (sem processed-alvo) → não adota → segue
-    # onlyReal p/ revisão. Adotado = SEM P&L (contribuição 0; entrou por transferência);
-    # entra no sim_nav pelo saldo. Caso real 69b99c5a 12→13/mai: Investo ETF (200) e
-    # CDB BS2 (50) só no alvo, confirmados na processed-alvo.
+    # ── Ativos presentes SÓ no alvo, AUSENTES da projeção: projeção com QTD ZERO ──────
+    # A processed-position do alvo (autoritativa) confirma o ativo com **qtd ≠ 0**, mas ele
+    # NÃO veio da origem nem de transação da janela. A quantidade PROJETADA (carregada da
+    # origem + movimentos) é, portanto, 0 — como QUALQUER ativo cujo saldo carregado é zero.
+    #
+    # Antes o motor ADOTAVA a posição do alvo (`adoptedFromTarget`, contribuição 0),
+    # ASSUMINDO uma transferência NAV-neutra (securityTransfer/reestruturação). Isso
+    # ESCONDIA a entrada: como não havia divergência de qtd nem provisão, o ativo entrava no
+    # sim_nav pelo saldo mas sem lastro, e a inconsistência só vazava no GAP agregado. Por
+    # decisão de projeto (jul/2026), a lógica de ativo NOVO passa a ser a MESMA de um ativo
+    # EXISTENTE com divergência de quantidade: semeamos uma linha ZERADA (former=0,
+    # quantity=0) para que `_build_diff` a veja como DIVERGÊNCIA (0 → qtd-alvo) e o
+    # diagnóstico gere a PROVISÃO de ajuste (−execPrice×Δqty). A adoção da qtd-alvo
+    # (`_adopt_target_qty`) traz a linha de volta à qtd do alvo e a provisão entra no
+    # sim_nav → o GAP zera por construção quando a entrada é uma aquisição a liquidar.
+    #
+    # Mantém o gate de CONFIRMAÇÃO oficial (qtd ≠ 0 na processed-alvo): sem processed-alvo
+    # (forward) ou qtd oficial 0, o ativo NÃO é semeado e segue em `onlyReal` (revisão
+    # manual), como antes — preserva a rede de segurança p/ posições de origem não mapeadas.
     _proj_sids = {r.get("securityId") for r in rows if r.get("securityId")}
     for _sid, _tr in (tgt_rows or {}).items():
         if not _sid or _sid in _proj_sids:
             continue
         _pq = (tgt_proc_qty or {}).get(_sid)
         if _pq is None or abs(_num(_pq)) < 1e-9:
-            continue   # sem confirmação oficial OU qtd oficial 0 → não adota
-        _aq = _num(_tr.get("quantity"))
+            continue   # sem confirmação oficial OU qtd oficial 0 → não semeia (segue onlyReal)
+        # PU-alvo p/ a linha zerada: dá a `_build_diff` o PU EM USO (db = PU × Δqty) e ao
+        # diagnóstico o preço de ajuste (fallback quando não há executionPrice capturado).
         _apu = _num(_tr.get("pu")) or _num((tgt_proc_pu or {}).get(_sid))
-        _abal = _num(_tr.get("balance")) if _tr.get("balance") is not None else round(_apu * _aq, 2)
-        _adopt_lots = _project_lots(tgt_lots_by_sid.get(_sid), _aq, _apu, round(_abal, 2))
-        _arow = {
+        rows.append({
             "securityId": _sid, "unprocessedId": ", ".join(_tr.get("unprocessedIds") or []),
             "securityName": name_hints.get(_sid, _sid), "mapped": True,
-            "pricingType": tgt_pricing.get(_sid) or "ALVO", "adoptedFromTarget": True,
+            "pricingType": tgt_pricing.get(_sid) or "ALVO", "newFromTarget": True,
             "formerQuantity": 0.0, "formerPu": 0.0, "formerBalance": 0.0,
-            "quantity": _safe_num(round(_aq, 6)), "pu": _safe_num(round(_apu, 6)),
-            "balance": _safe_num(round(_abal, 2)), "matured": False,
+            "maturedCash": 0.0,
+            "quantity": 0.0, "pu": _safe_num(round(_apu, 6)),
+            "balance": 0.0, "matured": False,
             "couponAmort": None, "contribution": 0.0,
-        }
-        if _adopt_lots:
-            _arow["lots"] = _adopt_lots
-        rows.append(_arow)
+            "contributionDaily": 0.0, "contributionIntraday": 0.0, "contributionEvent": 0.0,
+        })
         _proj_sids.add(_sid)
 
     rows.sort(key=lambda x: (0 if not x["mapped"] else 1, x["securityName"] or ""))
@@ -1031,7 +1197,8 @@ def _compute_nav_and_gaps(*, rows, new_cash, prov_total, recon_prov_in_nav,
 
 def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
                                use_cache=False,
-                               shared_price_records=None, shared_events=None):
+                               shared_price_records=None, shared_events=None,
+                               omit_txn_ids=None):
     """Projeta a posição da carteira de `source_date` para `target_date`.
 
     ORQUESTRADOR: concentra TODO o I/O (unprocessed, txns, preços, eventos,
@@ -1093,6 +1260,14 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
                           wallet_ids=[wallet_id]))
     txns = [t for t in _raw_txns
             if not t.get("trashed") and str(t.get("liquidationDate") or "")[:10] > source_date]
+    # Transações IGNORADAS pelo operador (what-if de SESSÃO, vem da rota /movimentar do
+    # detalhe): saem do CÁLCULO (agregação/projeção/diagnóstico/caixa), mas continuam
+    # VISÍVEIS na tabela (flag `omitted`) p/ o operador reverter. `_txns_all` preserva a
+    # lista completa só p/ reinjetar as omitidas na VISÃO ao final.
+    _omit = {str(i) for i in (omit_txn_ids or [])}
+    _txns_all = txns
+    if _omit:
+        txns = [t for t in txns if beehus_catalog.id_str(t.get("_id")) not in _omit]
 
     sids = {r["securityId"] for r in src_rows.values() if r["securityId"]}
     sids |= {str(t.get("securityId") or "") for t in txns if t.get("securityId")}
@@ -1102,7 +1277,6 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
     # unprocessed do ALVO já buscada no Passo 0 (reuso) — pricingType / C3 e diff.
     tgt_pricing = _pricing_from_unproc(tgt_doc)
     tgt_rows = _aggregate_positions((tgt_doc or {}).get("securities", []) or []) if tgt_doc else {}
-    tgt_lots_by_sid = _lots_by_sid((tgt_doc or {}).get("securities", []) or []) if tgt_doc else {}
     # PU por securityId derivado das próprias linhas agregadas do alvo (sem reagregar o doc).
     tgt_pu = {r["securityId"]: r.get("pu") for r in tgt_rows.values() if r.get("securityId")}
     # Nomes de ativos NOVOS (só transacionados na janela) vêm da unprocessed-alvo
@@ -1208,7 +1382,7 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
         tgt_pricing=tgt_pricing, tgt_pu=tgt_pu, tgt_proc_pu=tgt_proc_pu,
         tgt_proc_qty=tgt_proc_qty, tgt_rows=tgt_rows,
         src_proc_pu=src_proc_pu, sec_meta=sec_meta, name_hints=name_hints,
-        src_lots_by_sid=src_lots_by_sid, tgt_lots_by_sid=tgt_lots_by_sid,
+        src_lots_by_sid=src_lots_by_sid,
         target_date=target_date)
 
     # Contribuição em NÍVEL DE CARTEIRA (gainsExpenses/rebate): P&L que mexe o caixa
@@ -1313,6 +1487,64 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
     wallet_contribution_breakdown = [{"type": k, "balance": v}
                                      for k, v in _wc_by_type.items() if abs(v) >= 0.005]
 
+    # ── B5-pre2: sugestões que IMPACTAM o CAIXA PROJETADO (preview) ────────────────
+    # O caixa projetado passa a CONSIDERAR as transações sugeridas NÃO ignoradas, na mesma
+    # ordem/efeito da re-projeção pós-criação. IGNORAR (what-if): TODA reconTransaction carrega
+    # um `id` sintético; se está em `_omit` nasce `omitted` (linha cinza + "↩ considerar") e a
+    # rota /reconcile-txn a PULA (não cria) nem impacta o caixa.
+    for _rt in diag["reconTransactions"]:
+        if _rt.get("id"):
+            _rt["omitted"] = _rt["id"] in _omit
+    # (a) SUGESTÕES ESPECÍFICAS de vencimento sem transação (`maturity`): fold = min(0, balance),
+    # com `balance` = `formerBalance` de DISPLAY da sugestão. Só a parte NÃO contabilizada pelo
+    # `matured_cash` (que somou `max(0, former_bal BRUTO − resgate já lançado)`). Posição VENDIDA
+    # (balance<0) → entra no caixa aqui; COMPRADA (balance>0) → 0 (a redenção já está no matured_cash).
+    # NB: comprado usa former_bal BRUTO (matured_cash) e vendido usa formerBalance de DISPLAY (esta
+    # sugestão) — bases diferentes só divergem se o PU oficial da origem ≠ PU do snapshot (raro).
+    # maturity ∉ _FLOW_TYPES → NÃO mexe em inflows
+    # (é liquidação/P&L, não capital): desfaz o "ganho fantasma" de zerar a posição vendida.
+    for _rt in diag["reconTransactions"]:
+        if _rt.get("beehusTransactionType") == "maturity" and not _rt.get("omitted"):
+            _mf = round(min(0.0, _num(_rt.get("balance"))), 2)
+            if _mf:
+                new_cash = round(new_cash + _mf, 2)
+    # O caixa projetado (`cash.new`) e o resíduo do `diff` passam a refletir as sugestões
+    # ESPECÍFICAS já aplicadas (o Relatório/linha Caixa mostram o resíduo QUE O AJUSTE DE
+    # CAIXA cobre, não o bruto) — mantém Relatório e linha Caixa consistentes.
+    if official_cash is not None:
+        diag["diff"]["movedCash"] = _safe_num(new_cash)
+        diag["diff"]["cashResidual"] = _safe_num(round(new_cash - _num(official_cash), 2))
+    # (b) AJUSTE DE CAIXA catch-all (`withdrawalDepositAdjustment`): cobre o resíduo QUE SOBRA
+    # após (a). Gerado AQUI (não em _diagnose) porque seu valor depende de quais sugestões
+    # específicas estão ativas. Fluxo de capital (∈ _FLOW_TYPES) → entra no caixa E nos inflows
+    # → o caixa projetado bate o oficial e o retorno POR COTA não muda.
+    eff_cash_residual = None
+    if official_cash is not None:
+        _resid_after = round(new_cash - _num(official_cash), 2)
+        eff_cash_residual = _resid_after
+        if abs(_resid_after) >= 0.01:
+            _cadj = round(-_resid_after, 2)
+            _cadj_omitted = _CASH_ADJ_OMIT_ID in _omit
+            diag["reconTransactions"].append({
+                "id": _CASH_ADJ_OMIT_ID, "securityId": None, "securityName": "Caixa",
+                "beehusTransactionType": "withdrawalDepositAdjustment",
+                "direction": "deposit" if _cadj > 0 else "withdrawal",
+                "quantity": None, "price": None, "balance": _cadj,
+                "operationDate": target_date, "liquidationDate": target_date,
+                "confidence": "high", "cashAdjustment": True, "omitted": _cadj_omitted,
+                "because": (f"Divergência de caixa: projetado {round(_num(new_cash), 2)} × oficial "
+                            f"{round(_num(official_cash), 2)} (resíduo {_resid_after}, já líquido das "
+                            "demais sugestões). Ajuste withdrawalDepositAdjustment com valor invertido "
+                            "reconcilia o caixa; é fluxo de capital (neutro no retorno por cota)."),
+                "description": ("Ajuste de caixa (withdrawalDepositAdjustment) — divergência entre "
+                                "caixa projetado e oficial"),
+            })
+            diag["reconTransactionsTotal"] = round(_num(diag.get("reconTransactionsTotal")) + _cadj, 2)
+            if not _cadj_omitted:
+                new_cash = round(new_cash + _cadj, 2)
+                inflows = round(inflows + _cadj, 2)
+                eff_cash_residual = round(new_cash - _num(official_cash), 2)   # → ~0
+
     # ── B5a: provisões oficiais pendentes que entram no NAV (puro) ────────────────
     official_prov_in_nav = _official_prov_in_nav_total(
         provisions, off_provs, diag["diff"].get("diverged", []))
@@ -1324,10 +1556,33 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
         inflows=inflows, total_contribution=total_contribution,
         former_nav=former_nav, former_nps=former_nps, shares=shares,
         base_rows_balance=base_rows_balance, adoption_intraday=adoption_intraday,
-        cash_residual=diag["diff"].get("cashResidual"))
+        cash_residual=eff_cash_residual)
     sim_nav, sim_nps = _nav["sim_nav"], _nav["sim_nps"]
     ret_nps, ret_contrib = _nav["ret_nps"], _nav["ret_contrib"]
     gap_pct, gap_cash, gap_stages = _nav["gap_pct"], _nav["gap_cash"], _nav["gap_stages"]
+
+    # Reinjeta as transações IGNORADAS na VISÃO (não no cálculo) com flag `omitted=True` —
+    # a linha continua na tabela p/ o operador clicar "↩ considerar". As efetivas ganham
+    # `omitted=False`. (O cálculo acima já excluiu as omitidas via `txns`.)
+    _txn_view = diag["transactions"]
+    for _e in _txn_view:
+        _e["omitted"] = False
+    if _omit:
+        for _t in _txns_all:
+            if beehus_catalog.id_str(_t.get("_id")) not in _omit:
+                continue
+            _osid = str(_t.get("securityId") or "")
+            _txn_view.append({
+                "id": beehus_catalog.id_str(_t.get("_id")), "securityId": _osid,
+                "securityName": name_hints.get(_osid, _t.get("securityBeehusName") or "Caixa/sem ativo"),
+                "type": _t.get("beehusTransactionType") or "",
+                "operationDate": str(_t.get("operationDate") or "")[:10],
+                "liquidationDate": str(_t.get("liquidationDate") or "")[:10],
+                "balance": _safe_num(round(_num(_t.get("balance")), 2)),
+                "quantity": _safe_num(_t.get("quantity")), "price": _safe_num(_t.get("price")),
+                "description": _t.get("description") or "", "effects": [], "omitted": True,
+            })
+        _txn_view.sort(key=lambda x: str(x.get("liquidationDate") or ""))
 
     return _sanitize({
         "walletId": wallet_id, "walletName": wallet_name,
@@ -1343,6 +1598,7 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
         "adoptionIntradayContribution": _safe_num(adoption_intraday),
         "provisions": provisions, "provisionsTotal": prov_total,
         "officialProvisions": diag["officialProvisions"],
+        "formerProvisions": diag["formerProvisions"],
         "officialProvisionsInNav": _safe_num(official_prov_in_nav),
         "liquidatingProvisions": diag["liquidatingProvisions"],
         "stockEtfLiquidation": diag["stockEtfLiquidation"],
@@ -1351,6 +1607,7 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
         "irrf": diag["irrf"], "irrfMissingTotal": diag["irrfMissingTotal"],
         "executionPrices": exec_prices_view,
         "executionPriceFixes": [e for e in exec_prices_view if e.get("isFix")],
+        "forcedExecPrices": diag.get("forcedExecPrices", []),   # candidatos do "Forçar execPrice"
         "formerNav": _safe_num(former_nav), "formerNavPerShare": _safe_num(former_nps),
         "shares": _safe_num(shares),
         "simNav": _safe_num(sim_nav), "simNavPerShare": _safe_num(sim_nps),
@@ -1359,6 +1616,11 @@ def _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
         "gapStages": gap_stages,
         "diff": diag["diff"],
         "targetSource": target_source,
+        # Há processed-position na DATA-ALVO? (envelope processado do alvo existe → modo
+        # RECONCILIAÇÃO; forward/alvo não processado → None). Gate da Seção 2 (amountDifference)
+        # da Memória de cálculo: a adoção da qtd-alvo / reconProvisions só fazem sentido contra
+        # um alvo processado.
+        "targetProcessed": bool(tgt_env),
     })
 
 
@@ -1418,7 +1680,20 @@ def _txn_nav_date(txn):
 
 def _resolve_pu(pricing_type, tgt_pu, history_price, target_date, former_pu, split_factor,
                 proc_pu=None):
-    """Resolve o PU da data-alvo. Retorna `(pu, pricing_used)`.
+    """Resolve o PU (marcação) da data-alvo. Retorna `(pu, pricing_used)`.
+
+    Wrapper fino de `_mark_price_chain` — a CADEIA de fontes de preço de marcação
+    (processed → snapshot → securityPrices → repete-origem). Mantido como nome público
+    p/ os call sites (`_project_rows`). O refactor jul/2026 extraiu a cadeia p/ um único
+    ponto (Passo 1 de docs/REFACTOR_PU_EXECPRICE.md) — futuramente reusável pelo divisor
+    da quantidade; a saída é IDÊNTICA à anterior (função pura, validada por matriz)."""
+    return _mark_price_chain(pricing_type, tgt_pu, history_price, target_date,
+                             former_pu, split_factor, proc_pu)
+
+
+def _mark_price_chain(pricing_type, tgt_pu, history_price, target_date, former_pu,
+                      split_factor, proc_pu=None, zero_history_as_absent=False):
+    """Cadeia ÚNICA de PU de MARCAÇÃO da data-alvo. Retorna `(pu, pricing_used)`.
 
     FONTE PRIMÁRIA: o **PU OFICIAL da processed-position do ALVO** (`proc_pu`), quando o
     alvo já está processado — é o preço autoritativo (a unprocessed-alvo NÃO carrega o PU
@@ -1426,7 +1701,12 @@ def _resolve_pu(pricing_type, tgt_pu, history_price, target_date, former_pu, spl
     sistema segue para as alternativas, nesta ordem:
       1. PU da **unprocessed da data-alvo** (snapshot — cobre o C3);
       2. pricingType B1/B2/C1/C2 → securityPrices (historyPrice na data-alvo);
-      3. repetir o PU da origem (ajustado pelo fator de split/inplit, p/ preservar o saldo)."""
+      3. repetir o PU da origem (ajustado pelo fator de split/inplit, p/ preservar o saldo).
+
+    `zero_history_as_absent` (Passo 2 do refactor): quando True, uma cota do securityPrices
+    igual a **0,0** é tratada como AUSENTE (cai no tier seguinte) — semântica do DIVISOR da
+    quantidade, que nunca aceitou PU 0. No caminho de MARCAÇÃO (default False) o 0,0 é aceito
+    como antes. Só muda o tier 2; os demais já ignoram 0,0 (via truthiness)."""
     pt = (pricing_type or "").upper()
     # 0) MAIS AUTORITATIVO — PU da processed-position do ALVO. Vazio no forward → cai abaixo.
     pp = _num(proc_pu)
@@ -1443,7 +1723,7 @@ def _resolve_pu(pricing_type, tgt_pu, history_price, target_date, former_pu, spl
     #    Vem DEPOIS da processed-position (tier 0): regra "processed primeiro; securityPrices
     #    só sem processed". Casamento ESTRITO por data → só dispara com cota EXATA na data.
     pu = _history_pu_on_date(history_price, target_date)
-    if pu is not None:
+    if pu is not None and (not zero_history_as_absent or pu):
         # Rótulo EXPLÍCITO p/ o operador ver a procedência do PU: "<pricing> · securityPrices
         # dd/mm" (ex.: "B1 · securityPrices 30/06"). Deixa claro que o PU veio da COTA da
         # curva capturada NA data-alvo — não é repetição da origem nem oficial do processado.
@@ -1653,6 +1933,16 @@ def _diagnose(rows, provisions, txns, txn_by_sid, src_rows, tgt_rows, tgt_doc,
         bs = [t for t in ts if (t.get("beehusTransactionType") or "") in _QTY_TXN_TYPES]
         if not bs:
             continue
+        # COMPRA + VENDA na mesma janela (múltiplas operações de sentidos opostos): o IRRF
+        # incide SÓ na perna de VENDA (resgate), então o `bal_sum` LÍQUIDO (aplicações −
+        # resgates) NÃO isola o valor tributável e o IRRF agregado deixa de fazer sentido.
+        # Diretriz do usuário (jul/2026): NÃO calcular/propor IRRF nesse caso. (Nesse cenário
+        # o intraday já usa o execPrice derivado `−Σbalance/Δqty`, que reconcilia o net — o
+        # resíduo tributário embutido não é decomposto por perna aqui.)
+        _has_buy = any(_num(t.get("balance")) < -1e-9 for t in bs)
+        _has_sell = any(_num(t.get("balance")) > 1e-9 for t in bs)
+        if _has_buy and _has_sell:
+            continue
         # PU BRUTO da cota na data-alvo + qtd-alvo, conforme o tipo de resgate:
         #   • PARCIAL (fundo SEGUE na unprocessed-alvo): cota do snapshot-alvo, qtd-alvo real.
         #   • TOTAL (fundo SAIU do alvo): cota = PU RESOLVIDO da linha (securityPrices na
@@ -1774,6 +2064,11 @@ def _diagnose(rows, provisions, txns, txn_by_sid, src_rows, tgt_rows, tgt_doc,
     liquidating_provisions = [_prov_entry(p) for p in (src_provs or [])
                               if str(p.get("liquidationDate") or "")[:10] == target_date]
 
+    # Provisões vigentes na DATA ANTERIOR (origem) — TODO o envelope da origem (não só as
+    # que liquidam no alvo). Contexto p/ a coluna "PROVISÕES ANT." do Passo 1 da memória de
+    # cálculo (projeção sem transações). Só exibição; NÃO entram em nenhum cálculo de NAV.
+    former_provisions = [_prov_entry(p) for p in (src_provs or [])]
+
     # (Item 2) Resumo stockETF liquidando na data × liquidação CONSOLIDADA da B3:
     # Σ provisões stockETF que liquidam vs Σ buySell da security "Liquidação B3".
     etf_liq_total = round(sum(_num(p["balance"]) for p in liquidating_provisions if p["isStockEtf"]), 2)
@@ -1890,6 +2185,27 @@ def _diagnose(rows, provisions, txns, txn_by_sid, src_rows, tgt_rows, tgt_doc,
                 continue
             sec_name = dvg.get("securityName") or sid
             if bool(dvg.get("matured")):
+                # Guardrail (jul/2026): o resgate no vencimento pode JÁ estar lançado. Se há
+                # transação `maturity`/`amortization` (`_MATURITY_SETTLED_TYPES`) LIQUIDANDO na
+                # própria data-alvo p/ este ativo, o resgate NÃO está ausente — o alvo apenas
+                # ainda carrega o ativo vencido na data-limite (a posição só o baixa em D+1). A
+                # projeção já o zerou e o caixa do resgate já entrou (dedup de `matured_cash`).
+                # Sugerir uma transação AQUI duplicaria o resgate no Beehus. Checa PRESENÇA (não
+                # valor): o payoff de um COE pode vir acima/abaixo da marcação (par). Marca a
+                # divergência como coberta, corrige o `because` e NÃO gera recon.
+                already_settled = any(
+                    (t.get("beehusTransactionType") or "") in _MATURITY_SETTLED_TYPES
+                    and str(t.get("liquidationDate") or "")[:10] == target_date
+                    for t in (txn_by_sid.get(sid) or []))
+                if already_settled:
+                    dvg["maturityRedemptionPresent"] = True
+                    dvg["suggestedAction"] = None
+                    dvg["because"] = ("Ativo VENCIDO com resgate JÁ lançado (transação de "
+                                      "maturity/amortização liquidando na data-alvo) — o resgate "
+                                      "no vencimento NÃO está ausente. A projeção zerou o ativo; o "
+                                      "alvo ainda o carrega na data-limite (a posição só o baixa em "
+                                      "D+1). Nenhuma transação é sugerida (evita duplicar o resgate).")
+                    continue
                 # VENCIMENTO → TRANSAÇÃO de resgate (regra), verificado ANTES dos guardrails de
                 # provisão: uma provisão oficial / do Passo 6 NÃO substitui o resgate ausente (o
                 # ALVO ainda carrega o ativo vencido; a projeção já o zerou). Por isso o vencimento
@@ -1899,6 +2215,7 @@ def _diagnose(rows, provisions, txns, txn_by_sid, src_rows, tgt_rows, tgt_doc,
                 # resgate); senão a regra "alvo>proj = compra perdida" daria o sinal trocado.
                 t_delta = -delta
                 recon_txns.append({
+                    "id": f"__redeem__{sid}",   # id sintético → toggle de ignorar (omitTxnIds)
                     "securityId": sid, "securityName": sec_name,
                     "beehusTransactionType": "buySell",
                     "direction": "subscription" if t_delta > 0 else "redemption",
@@ -2002,6 +2319,51 @@ def _diagnose(rows, provisions, txns, txn_by_sid, src_rows, tgt_rows, tgt_doc,
         if _off_counts.get(_ck, 0) > 0:
             _cp["duplicatesOfficial"] = True
             _off_counts[_ck] -= 1
+    # ── VENCIMENTO sem transação de resgate → transação `maturity` sugerida ──────────
+    # Ativo com `maturityDate ≤ alvo` que a projeção ZEROU (linha `matured`), mas que NÃO está
+    # em `diverged` (o alvo já não o carrega → não passou pelo ramo de resgate do laço acima)
+    # E NÃO tem transação de resgate (`_MATURITY_REDEMPT_TYPES` liquidando na data-alvo). É o
+    # caso de uma posição vencida cuja LIQUIDAÇÃO nunca foi lançada (típico de posição VENDIDA:
+    # `former_bal` NEGATIVO, que o `matured_cash` descarta via `max(0, …)`). Sugere uma
+    # transação `maturity` com **o balance que está vencendo** (= `formerBalance` da posição)
+    # p/ registrar o resgate ausente. Write-only (fora do sim_nav, como as demais de vencimento);
+    # criada pela rota /reconcile-txn. Só no Tipo A (há alvo p/ confirmar o fechamento).
+    if diff.get("hasTarget"):
+        _diverged_sids = {d.get("securityId") for d in diff.get("diverged", [])}
+        for _mr in rows:
+            _msid = _mr.get("securityId")
+            if not _mr.get("matured") or not _msid or _msid in _diverged_sids:
+                continue
+            # `txn_by_sid` já é só a JANELA (origem, alvo] → qualquer transação de resgate de
+            # principal (`_MATURITY_REDEMPT_TYPES`) para o ativo indica que a liquidação foi
+            # lançada (em qualquer forma/data da janela) → não sugerir.
+            _has_settle = any(
+                (t.get("beehusTransactionType") or "") in _MATURITY_REDEMPT_TYPES
+                for t in (txn_by_sid.get(_msid) or []))
+            if _has_settle:
+                continue
+            _mat_bal = round(_num(_mr.get("formerBalance")), 2)
+            if abs(_mat_bal) < 0.005:
+                continue
+            _mnm = _mr.get("securityName") or _msid
+            recon_txns.append({
+                "id": f"__maturity__{_msid}",   # id sintético → toggle de ignorar (omitTxnIds)
+                "securityId": _msid, "securityName": _mnm,
+                "beehusTransactionType": "maturity",
+                "direction": "redemption", "matured": True,
+                "quantity": None, "price": None, "balance": _mat_bal,
+                "operationDate": target_date, "liquidationDate": target_date,
+                "confidence": "high",
+                "because": (f"Ativo VENCIDO (maturityDate ≤ {target_date}) sem transação de resgate "
+                            f"lançada — a posição foi encerrada no alvo mas a liquidação não consta. "
+                            f"Sugere transação `maturity` com o balance que está vencendo ({_mat_bal})."),
+                "description": f"Transação de vencimento (maturity) do ativo {_mnm}",
+            })
+
+    # NB: a transação de AJUSTE DE CAIXA (withdrawalDepositAdjustment) NÃO é gerada aqui —
+    # ela é o catch-all do resíduo que SOBRA depois de aplicar as sugestões específicas
+    # (vencimento) no caixa projetado, e seu valor depende de quais estão ativas (what-if de
+    # ignorar). Por isso é montada no ORQUESTRADOR (B5-pre2), após os folds e com `_omit`.
     recon_prov_total = round(sum(_num(p["balance"]) for p in recon_provisions), 2)
     recon_txn_total = round(sum(_num(t["balance"]) for t in recon_txns), 2)
 
@@ -2016,18 +2378,60 @@ def _diagnose(rows, provisions, txns, txn_by_sid, src_rows, tgt_rows, tgt_doc,
         "liquidationDate": str(t.get("liquidationDate") or "")[:10],
         "balance": _safe_num(round(_num(t.get("balance")), 2)),
         "quantity": _safe_num(t.get("quantity")),
+        "price": _safe_num(t.get("price")),   # PU unitário — p/ pré-preencher a edição
         "description": t.get("description") or "",
         "effects": _txn_effects(t),   # o que o motor fez com esta transação (badges na UI)
     } for t in sorted(txns, key=lambda x: str(x.get("liquidationDate") or ""))]
 
+    # ── Preços de execução FORÇADOS (botão "Forçar execPrice" do detalhe) ─────────
+    # Para TODO ativo com trade (`buySell`) na janela E `amountDifference` (tgt − src) ≠ 0:
+    # execPrice = −netBalance / amountDifference (líquido por unidade negociada). Regra do
+    # usuário (jul/2026): INDEPENDE do tipo do ativo (inclui fundo — que o fluxo normal
+    # exclui) e da direção (compra E venda: o sinal fecha nos dois). Usa a DIFERENÇA DE
+    # POSIÇÃO (tgt−src), não o Δqty inferido do buySell — assim NÃO colapsa ao PU quando a
+    # `quantity` da txn é nula. PULA `amountDifference` nulo. São CANDIDATOS (isFix): o toggle
+    # do detalhe preenche o bloco "Preços de execução" p/ confirmação posterior (Implementar).
+    _epbs = exec_price_by_sid or {}
+    forced_exec_prices = []
+    for _sid, _ts in txn_by_sid.items():
+        _bs = [t for t in _ts if (t.get("beehusTransactionType") or "") in _QTY_TXN_TYPES]
+        if not _sid or not _bs:
+            continue
+        _tgt_q = _num((tgt_rows.get(_sid) or {}).get("quantity")) if _sid in tgt_rows else 0.0
+        _amt = round(_tgt_q - _num((src_rows.get(_sid) or {}).get("quantity") or 0.0), 6)
+        if abs(_amt) < 1e-9:
+            continue   # amountDifference nulo → pula (sem base p/ derivar)
+        _netbal = round(sum(_num(t.get("balance")) for t in _bs), 2)
+        _price = round(-_netbal / _amt, 8)
+        _cap = _epbs.get(_sid) or {}
+        _row = rows_by_sid.get(_sid) or {}
+        _pu = _num(_row.get("pu")) or _num(tgt_pu.get(_sid))
+        forced_exec_prices.append({
+            "securityId": _sid,
+            "securityName": _row.get("securityName") or name_hints.get(_sid, _sid),
+            "recordId": _cap.get("id"),
+            "positionDate": _cap.get("positionDate") or target_date,
+            "capturedPrice": _safe_num(_cap.get("price")),
+            "pu": _safe_num(round(_pu, 6)),
+            "calculatedPrice": _safe_num(_price),
+            "amountDifference": _safe_num(_amt),
+            "netBalance": _safe_num(_netbal),
+            "intradayContribution": _safe_num(round(_amt * (_pu - _price), 2)),
+            "status": ("ok" if _cap.get("price") is not None else "ausente"),
+            "action": ("update" if _cap.get("id") else "create"),
+            "isFix": True, "forced": True,
+        })
+
     return {
         "irrf": irrf_entries, "irrfMissingTotal": irrf_missing_total,
         "officialProvisions": official_provisions,
+        "formerProvisions": former_provisions,
         "liquidatingProvisions": liquidating_provisions,
         "stockEtfLiquidation": stocketf_liquidation,
         "reconProvisions": recon_provisions, "reconProvisionsTotal": recon_prov_total,
         "reconTransactions": recon_txns, "reconTransactionsTotal": recon_txn_total,
         "transactions": txn_view,
+        "forcedExecPrices": forced_exec_prices,
         "diff": diff,
     }
 
@@ -2063,6 +2467,15 @@ def _build_diff(rows, tgt_rows, tgt_doc, sim_cash, official_cash=None, name_hint
     for sid, c in calc_by_sid.items():
         real = real_by_sid.get(sid)
         if not real:
+            # Posição projetada ENCERRADA (qtd≈0 E saldo≈0) ausente do alvo: NÃO é
+            # divergência — ambos os lados concordam que não há posição. Caso típico:
+            # renda fixa vendida por completo na janela (a linha permanece qtd-0 para
+            # manter o P&L intraday da venda no NAV, como no vencimento) — não deve virar
+            # `onlyCalc`/revisão. (Se a projeção zerasse por ERRO um ativo que o alvo tem,
+            # ele estaria em `real_by_sid` → cairia em `diverged`, não aqui.)
+            if (abs(_num(c.get("quantity"))) < _QTY_DIFF_TOL
+                    and abs(_num(c.get("balance"))) < _BALANCE_ABS_TOL):
+                continue
             # Ativo na MOVIMENTADA, ausente no alvo. Classificação FLAG-ONLY:
             # hipótese + confiança BAIXA + revisão manual; NÃO gera recon (este caso
             # nunca entra no laço de recon — só `diverged` entra) e precisa validação
@@ -2209,6 +2622,35 @@ def index():
     return render_template("conciliacao_mov.html", companies=companies)
 
 
+# Caminho do descritivo (mesmo arquivo publicado como artefato) — fonte ÚNICA de conteúdo.
+_DESCRITIVO_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "docs", "conciliacao_mov_descritivo.html",
+)
+
+
+@bp.route("/conciliacao-mov/descritivo")
+def descritivo():
+    """Serve o descritivo funcional como documento HTML completo (para carregar num
+    iframe dentro da própria tela — isola o CSS do descritivo do CSS do app). Lê o
+    MESMO arquivo publicado como artefato (docs/conciliacao_mov_descritivo.html), que
+    já traz <title>/<style>; aqui só embrulhamos no esqueleto do documento."""
+    try:
+        with open(_DESCRITIVO_PATH, encoding="utf-8") as fh:
+            body = fh.read()
+    except OSError:
+        body = ("<p style='font-family:system-ui;padding:40px'>Descritivo indisponível "
+                "(arquivo <code>docs/conciliacao_mov_descritivo.html</code> não encontrado).</p>")
+    html = (
+        "<!doctype html><html lang=\"pt-BR\" data-theme=\"light\"><head>"
+        "<meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<style>*{box-sizing:border-box}html,body{margin:0}img{max-width:100%}</style>"
+        "</head><body>" + body + "</body></html>"
+    )
+    return Response(html, mimetype="text/html")
+
+
 @bp.route("/api/conciliacao-mov/dates")
 def get_dates():
     company_id = request.args.get("companyId", "")
@@ -2228,8 +2670,14 @@ def get_rows():
         company_id = request.args.get("companyId", "")
         date = request.args.get("date", "")            # origem (projetável)
         target_date = request.args.get("targetDate", "")  # alvo (navPackage do sistema)
+        # refresh=1 (botão "Atualizar"): invalida SÓ o cache de NAV desta empresa (o catálogo
+        # de referência — securities/carteiras — fica intacto, sem re-warm caro) → o
+        # nav_results abaixo re-busca do backend. A "simulada" é limpa no cliente.
+        refresh = request.args.get("refresh", "") in ("1", "true", "True")
         if not company_id or not company_visible(company_id) or not date:
             return jsonify({"rows": [], "date": date})
+        if refresh:
+            beehus_catalog.invalidate_nav(company_id)
         wallets = beehus_catalog.wallets_for_company(company_id)
         wallet_ids = list(wallets.keys())
         if not wallet_ids:
@@ -2544,7 +2992,14 @@ def _prefetch_batch(company_id, wallet_ids, source_date, target_date):
     if union:
         ul = sorted(union)
 
+        # Data-alvo PASSADA → records de preço imutáveis → serve do cache por-sid
+        # (elimina o long-pole de ~11-17s em re-runs do mesmo range). Data corrente/
+        # futura → fetch LIVE (preço ainda pode mudar). O cached já trata a omissão.
+        _target_is_past = bool(target_date) and target_date < _date.today().isoformat()
+
         def _fetch_prices():
+            if _target_is_past:
+                return beehus_catalog.security_price_records_cached(ul)
             recs = beehus_catalog.security_price_records(ul) or []
             have = {beehus_catalog.id_str(r.get("securityId")) for r in recs}
             missing = [s for s in ul if s not in have]
@@ -2600,7 +3055,8 @@ def movimentar():
         # que faltou e surfaceia o erro aqui, como antes (auth falha já no prewarm).
         _prewarm_single(company_id, wallet_id, source_date, target_date)
         result = _build_movement_for_wallet(company_id, wallet_id, source_date, target_date,
-                                            use_cache=True)
+                                            use_cache=True,
+                                            omit_txn_ids=data.get("omitTxnIds") or [])
     except (BeehusAuthError, BeehusAPIError) as e:
         return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
     except Exception:
@@ -2847,11 +3303,35 @@ def send_provisions():
     company_id, _sd, _td, results, err = _projection_batch(data)
     if err:
         return err
+    # securityIds cuja provisão de AJUSTE (reconProvision, amountDifference) o operador
+    # optou por criar como `securityTransfer` em vez de provisão (rota /security-transfers).
+    # {walletId: [securityId,...]} — essas reconProvisions são PULADAS aqui p/ não duplicar.
+    skip_recon = {str(w): {str(s) for s in (sids or [])}
+                  for w, sids in (data.get("skipReconSids") or {}).items()}
+    # Chaves de provisão que o operador NÃO selecionou (envio por bucket na "Memória de
+    # cálculo (2)"): {walletId:[key,...]}, key = sid|type|initialDate|liqDate|balance2
+    # (ver _prov_key; estável entre reprojeções pois a projeção é determinística). Vazio no
+    # Implementar (manda tudo).
+    skip_prov = {str(w): {str(k) for k in (keys or [])}
+                 for w, keys in (data.get("skipProvKeys") or {}).items()}
+
+    def _prov_key(p):
+        return "|".join([
+            str(p.get("securityId") or ""), str(p.get("provisionType") or ""),
+            str(p.get("initialDate") or "")[:10], str(p.get("liquidationDate") or "")[:10],
+            f"{_num(p.get('balance')):.2f}"])
+
     created, failed, skipped, errors = 0, 0, 0, []
     for res in results:
         wid = res.get("walletId")
         currency_id = res.get("currencyId") or "BRL"
-        for p in (res.get("provisions", []) + res.get("reconProvisions", [])):
+        _skip_sids = skip_recon.get(str(wid), set())
+        _skip_pv = skip_prov.get(str(wid), set())
+        _recon = [p for p in res.get("reconProvisions", [])
+                  if str(p.get("securityId") or "") not in _skip_sids]
+        for p in (res.get("provisions", []) + _recon):
+            if _skip_pv and _prov_key(p) in _skip_pv:
+                continue   # não selecionado (envio por bucket) → pula (não conta como skipped)
             # Guardrail anti-duplicação: provisão de dividendo/JCP (Passo 6.5) já
             # coberta por uma provisão OFICIAL do sistema NÃO é reenviada (duplicaria);
             # ela segue só no NAV simulado (diagnóstico).
@@ -2962,19 +3442,30 @@ def shift_provisions():
 
 @bp.route("/api/conciliacao-mov/reconcile-txn", methods=["POST"])
 def send_recon_txns():
-    """Cria no Beehus as TRANSAÇÕES de ajuste (buySell) sugeridas pela regra
-    caixa-âncora quando o caixa NÃO bate (transação ausente/errada). AÇÃO
+    """Cria no Beehus as TRANSAÇÕES de ajuste sugeridas: resgate no VENCIMENTO
+    (`buySell`, com ativo) e AJUSTE DE CAIXA (`withdrawalDepositAdjustment`, sem
+    ativo — divergência caixa projetado × oficial, valor invertido). AÇÃO
     DESTRUTIVA — o front pede confirmação."""
     data = request.get_json() or {}
     company_id, _sd, _td, results, err = _projection_batch(data)
     if err:
         return err
+    # ids de reconTransactions que o operador NÃO selecionou (envio por bucket na "Memória
+    # de cálculo (2)"): {walletId:[id,...]} — pulados. Vazio no Implementar (manda tudo).
+    skip_recon_txn = {str(w): {str(i) for i in (ids or [])}
+                      for w, ids in (data.get("skipReconTxnIds") or {}).items()}
     created, failed, errors = 0, 0, []
     for res in results:
         wid = res.get("walletId")
         currency_id = res.get("currencyId") or "BRL"
         entity_id = res.get("entityId") or None   # transação de carteira exige entityId (senão 502)
+        _skip_rt = skip_recon_txn.get(str(wid), set())
         for t in res.get("reconTransactions", []):
+            if t.get("omitted"):
+                continue   # sugestão IGNORADA pelo operador (what-if) → não cria
+            if str(t.get("id") or "") in _skip_rt:
+                continue   # não selecionado (envio por bucket) → pula
+            _sid = t.get("securityId") or None
             try:
                 _api_create_transaction(
                     company_id=company_id, wallet_id=wid, entity_id=entity_id,
@@ -2982,8 +3473,12 @@ def send_recon_txns():
                     operation_date=t.get("operationDate"), liquidation_date=t.get("liquidationDate"),
                     transaction_type=t.get("beehusTransactionType") or "buySell",
                     currency_id=currency_id, description=t.get("description") or "",
-                    security_id=t.get("securityId") or None,
-                    quantity=_num(t.get("quantity")), price=_num(t.get("price")))
+                    security_id=_sid,
+                    # Envia qtd/preço só quando a sugestão os CARREGA (buySell de resgate).
+                    # Ajuste de caixa e `maturity` balance-only vêm com quantity/price None →
+                    # não são enviados (fluxo/liquidação sem qtd·preço).
+                    quantity=(_num(t.get("quantity")) if t.get("quantity") is not None else None),
+                    price=(_num(t.get("price")) if t.get("price") is not None else None))
                 created += 1
             except (BeehusAuthError, BeehusAPIError) as e:
                 failed += 1
@@ -3001,14 +3496,31 @@ def send_irrf():
     company_id, _sd, target_date, results, err = _projection_batch(data)
     if err:
         return err
+    # Conversão "IRRF ↦ preço de execução" (toggle de sessão do detalhe): {walletId:[sids]}.
+    # Para esses ativos o resíduo do resgate é lançado como PREÇO DE EXECUÇÃO (rota
+    # /execution-prices) em vez de `taxes` → aqui o IRRF é PULADO. O mesmo vale p/ os sids
+    # SELECIONADOS em "Forçar execPrice" (`forceExec`) — o resíduo do fundo forçado vira
+    # execPrice. Ver docs/CONCILIACAO_MOV.md.
+    irrf_as_exec = data.get("irrfAsExec") or {}
+    force_exec = data.get("forceExec") or {}
+    # securityIds cujo IRRF o operador NÃO selecionou (envio por bucket na "Memória de
+    # cálculo (2)"): {walletId:[securityId,...]} — pulados. Vazio no Implementar (manda tudo).
+    skip_irrf = {str(w): {str(s) for s in (sids or [])}
+                 for w, sids in (data.get("skipIrrfSids") or {}).items()}
     created, failed, errors = 0, 0, []
     for res in results:
         wid = res.get("walletId")
         currency_id = res.get("currencyId") or "BRL"
         entity_id = res.get("entityId") or None   # transação de carteira exige entityId (senão 502)
+        _conv = set(irrf_as_exec.get(wid) or []) | {str(s) for s in (force_exec.get(wid) or [])}
+        _skip_ir = skip_irrf.get(str(wid), set())
         for e in res.get("irrf", []):
             if e.get("covered"):
                 continue   # já existe taxes/bzFundTaxes cobrindo — não duplicar
+            if str(e.get("securityId") or "") in _conv:
+                continue   # convertido p/ preço de execução → não cria o IRRF
+            if str(e.get("securityId") or "") in _skip_ir:
+                continue   # não selecionado (envio por bucket) → pula
             # Defesa: IRRF é débito (< 0). Nunca criar um `taxes` ≥ 0 (seria
             # "restituição"); valor não-negativo só aparece por agregação inconsistente.
             if _num(e.get("irrf")) >= 0:
@@ -3040,10 +3552,50 @@ def send_execution_prices():
     company_id, _sd, target_date, results, err = _projection_batch(data)
     if err:
         return err
+    # Conversão "IRRF ↦ preço de execução" (toggle de sessão do detalhe): {walletId:[sids]}.
+    # Para esses ativos cria-se um execPrice = líquido por cota (−netBalance/amountDifference)
+    # na data de liquidação do resgate, e o IRRF correspondente é PULADO na rota /irrf.
+    irrf_as_exec = data.get("irrfAsExec") or {}
+    # "Forçar execPrice" (toggle de sessão do detalhe): {walletId: [securityIds SELECIONADOS]}.
+    # Para os sids escolhidos, o execPrice de TODO ativo com trade (qualquer tipo/direção) é
+    # forçado = res["forcedExecPrices"] (−netBalance/amountDifference). SOBRESCREVE (update no
+    # record, senão create) — o usuário já confirmou. Nessas carteiras os forçados SELECIONADOS
+    # VÊM NO LUGAR dos fixes normais (o restante do exec da carteira é ignorado); o /irrf pula
+    # esses mesmos sids (o resíduo do fundo forçado vira execPrice, não `taxes`).
+    force_exec = data.get("forceExec") or {}
+    # securityIds cujo FIX de execPrice o operador IGNOROU no detalhe (botão ⊘ ignorar do
+    # bloco "Preços de execução"): {walletId: [securityId,...]} — pulados no envio.
+    skip_exec = {str(w): {str(s) for s in (sids or [])}
+                 for w, sids in (data.get("skipExecSids") or {}).items()}
     updated, created, failed, errors = 0, 0, 0, []
     for res in results:
         wid = res.get("walletId")
+        _skip_ep = skip_exec.get(str(wid), set())
+        if wid in force_exec:
+            _sel = {str(s) for s in (force_exec.get(wid) or [])}
+            for f in res.get("forcedExecPrices", []):
+                if str(f.get("securityId")) not in _sel:
+                    continue   # só os SELECIONADOS pelo usuário
+                price = _num(f.get("calculatedPrice"))
+                try:
+                    if f.get("recordId"):
+                        _api_update_execution_price(f["recordId"], price)
+                        updated += 1
+                    else:
+                        _api_create_execution_price(
+                            company_id=company_id, wallet_id=wid,
+                            security_id=f.get("securityId"),
+                            position_date=f.get("positionDate") or target_date,
+                            execution_price=price)
+                        created += 1
+                except (BeehusAuthError, BeehusAPIError) as e:
+                    failed += 1
+                    if len(errors) < 5:
+                        errors.append(str(e))
+            continue   # carteira forçada: NÃO processa fixes normais/IRRF-conv (usa os forçados)
         for f in res.get("executionPriceFixes", []):
+            if str(f.get("securityId") or "") in _skip_ep:
+                continue   # fix ignorado pelo operador (⊘ ignorar)
             price = _num(f.get("calculatedPrice"))
             try:
                 if f.get("recordId"):
@@ -3060,6 +3612,26 @@ def send_execution_prices():
                 failed += 1
                 if len(errors) < 5:
                     errors.append(str(e))
+        # IRRF convertido → preço de execução (create; fundo não tem record p/ PATCH).
+        _conv = set(irrf_as_exec.get(wid) or [])
+        for e in res.get("irrf", []):
+            sid = str(e.get("securityId") or "")
+            if e.get("covered") or sid not in _conv:
+                continue
+            amt = _num(e.get("amountDifference"))
+            if abs(amt) <= 1e-9:
+                continue
+            price = round(-_num(e.get("netBalance")) / amt, 8)   # líquido por cota
+            try:
+                _api_create_execution_price(
+                    company_id=company_id, wallet_id=wid, security_id=sid,
+                    position_date=e.get("liquidationDate") or target_date,
+                    execution_price=price)
+                created += 1
+            except (BeehusAuthError, BeehusAPIError) as ex:
+                failed += 1
+                if len(errors) < 5:
+                    errors.append(str(ex))
     return jsonify({"ok": failed == 0, "updated": updated, "created": created,
                     "failed": failed, "errors": errors})
 
@@ -3104,3 +3676,334 @@ def create_gains_expenses():
         return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
     created_id = beehus_catalog.id_str((created or {}).get("_id")) if isinstance(created, dict) else ""
     return jsonify({"ok": True, "transactionId": created_id})
+
+
+# beehusTransactionType ACEITOS ao criar/editar uma transação pela tela (enum do Beehus,
+# ver docs/API_COLLECTIONS.md). Fora desta lista → 400 (evita typo virar 502 do upstream).
+_TXN_TYPES = {
+    "amortization", "brokerageFee", "buySell", "bzFundTaxes", "contributionAdjustment",
+    "coupon", "dividend", "dividendOnboarding", "gainsExpenses", "interestOnEquity",
+    "managementFee", "maturity", "other", "otherFee", "performanceFee", "rebate",
+    "securityContributionAdjustment", "securityTransfer", "taxes", "withdrawalDeposit",
+    "withdrawalDepositAdjustment",
+}
+
+
+def _txn_write_guard(data):
+    """Guard comum das rotas de CRUD de transação: valida empresa VISÍVEL. Retorna
+    `(company_id, None)` ou `(None, resposta_de_erro)`."""
+    company_id = str(data.get("companyId") or "")
+    if not company_id or not company_visible(company_id):
+        return None, (jsonify({"error": "acesso negado"}), 403)
+    return company_id, None
+
+
+@bp.route("/api/conciliacao-mov/txn-create", methods=["POST"])
+def txn_create():
+    """Cria UMA transação de carteira (inclusão manual pela tela de diagnóstico).
+    Resolve `entityId`/`currencyId` server-side (transação de carteira exige entityId,
+    senão o upstream dá 502). `beehusTransactionType` validado contra o enum. AÇÃO
+    DESTRUTIVA — o front pede confirmação. Devolve `transactionId`."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    wallet_id = str(data.get("walletId") or "")
+    if not wallet_id:
+        return jsonify({"error": "walletId obrigatório"}), 400
+    ttype = str(data.get("beehusTransactionType") or "").strip()
+    if ttype not in _TXN_TYPES:
+        return jsonify({"error": f"beehusTransactionType inválido: {ttype or '(vazio)'}"}), 400
+    op_date = str(data.get("operationDate") or "")[:10]
+    liq_date = str(data.get("liquidationDate") or "")[:10] or op_date
+    if not op_date:
+        return jsonify({"error": "operationDate obrigatória"}), 400
+    _w = resolve_wallet(wallet_id, {"entityId": 1, "currencyId": 1}, company_id=company_id) or {}
+    entity_id = str(_w.get("entityId") or "")
+    currency_id = data.get("currencyId") or str(_w.get("currencyId") or "") or "BRL"
+    if not entity_id:
+        return jsonify({"error": "entityId da carteira não resolvido"}), 400
+    # quantity/price só entram no payload quando informados (None = campo omitido).
+    _q = data.get("quantity")
+    _p = data.get("price")
+    try:
+        created = _api_create_transaction(
+            company_id=company_id, wallet_id=wallet_id, entity_id=entity_id,
+            balance=_num(data.get("balance")),
+            operation_date=op_date, liquidation_date=liq_date,
+            transaction_type=ttype, currency_id=currency_id,
+            description=data.get("description") or "",
+            security_id=(str(data.get("securityId")) if data.get("securityId") else None),
+            quantity=(_num(_q) if _q is not None and _q != "" else None),
+            price=(_num(_p) if _p is not None and _p != "" else None))
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    created_id = beehus_catalog.id_str((created or {}).get("_id")) if isinstance(created, dict) else ""
+    return jsonify({"ok": True, "transactionId": created_id})
+
+
+@bp.route("/api/conciliacao-mov/txn-update", methods=["POST"])
+def txn_update():
+    """Edita UMA transação existente (PATCH parcial). Body: `transactionId` + `patch`
+    (dict com campos de `_PATCHABLE_FIELDS` — a camada da API descarta chaves fora).
+    AÇÃO DESTRUTIVA — confirm() no front."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    txn_id = str(data.get("transactionId") or "")
+    if not txn_id:
+        return jsonify({"error": "transactionId obrigatório"}), 400
+    patch = data.get("patch") or {}
+    if not isinstance(patch, dict) or not patch:
+        return jsonify({"error": "patch vazio"}), 400
+    # Se o tipo estiver sendo alterado, validar contra o enum (evita 502 do upstream).
+    if patch.get("beehusTransactionType") and patch["beehusTransactionType"] not in _TXN_TYPES:
+        return jsonify({"error": f"beehusTransactionType inválido: {patch['beehusTransactionType']}"}), 400
+    try:
+        _api_update_transaction(txn_id, patch)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    except ValueError as e:   # patch sem campos patcháveis
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/conciliacao-mov/txn-delete", methods=["POST"])
+def txn_delete():
+    """Exclui (soft-delete) UMA transação. Body: `transactionId`. AÇÃO DESTRUTIVA —
+    confirm() no front."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    txn_id = str(data.get("transactionId") or "")
+    if not txn_id:
+        return jsonify({"error": "transactionId obrigatório"}), 400
+    try:
+        _api_delete_transaction(txn_id)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/conciliacao-mov/provision-create", methods=["POST"])
+def provision_create():
+    """Cria UMA provisão de carteira (inclusão manual pela tela de diagnóstico).
+    Provisão é wallet-scoped (SEM entityId). `provisionType` usa os MESMOS códigos de
+    `beehusTransactionType` (valida contra `_TXN_TYPES`); `provisionSource` é normalizado
+    p/ um valor aceito pela API (`_valid_prov_source`). AÇÃO DESTRUTIVA — confirm() no front.
+    Devolve `provisionId`."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    wallet_id = str(data.get("walletId") or "")
+    if not wallet_id:
+        return jsonify({"error": "walletId obrigatório"}), 400
+    ptype = str(data.get("provisionType") or "").strip()
+    if ptype not in _TXN_TYPES:
+        return jsonify({"error": f"provisionType inválido: {ptype or '(vazio)'}"}), 400
+    init_d = str(data.get("initialDate") or "")[:10]
+    liq_d = str(data.get("liquidationDate") or "")[:10] or init_d
+    if not init_d:
+        return jsonify({"error": "initialDate obrigatória"}), 400
+    _w = resolve_wallet(wallet_id, {"currencyId": 1}, company_id=company_id) or {}
+    currency_id = data.get("currencyId") or str(_w.get("currencyId") or "") or "BRL"
+    try:
+        created = _api_create_provision(
+            company_id=company_id, wallet_id=wallet_id,
+            balance=_num(data.get("balance")),
+            initial_date=init_d, liquidation_date=liq_d,
+            provision_type=ptype,
+            provision_source=_valid_prov_source(data.get("provisionSource")),
+            currency_id=currency_id,
+            description=data.get("description") or "",
+            security_id=(str(data.get("securityId")) if data.get("securityId") else None))
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    created_id = beehus_catalog.id_str((created or {}).get("_id")) if isinstance(created, dict) else ""
+    return jsonify({"ok": True, "provisionId": created_id})
+
+
+@bp.route("/api/conciliacao-mov/execution-price-create", methods=["POST"])
+def execution_price_create():
+    """Cria UM preço de execução avulso (inclusão manual pela tela de detalhe).
+    Body: `walletId, securityId, positionDate, executionPrice`. Não exige entityId
+    (execution-price é wallet+security+data). AÇÃO DESTRUTIVA — confirm() no front.
+    Devolve `executionPriceId`."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    wallet_id = str(data.get("walletId") or "")
+    security_id = str(data.get("securityId") or "")
+    pos_date = str(data.get("positionDate") or "")[:10]
+    if not wallet_id or not security_id:
+        return jsonify({"error": "walletId e securityId obrigatórios"}), 400
+    if not pos_date:
+        return jsonify({"error": "positionDate obrigatória"}), 400
+    price = data.get("executionPrice")
+    if price is None or price == "":
+        return jsonify({"error": "executionPrice obrigatório"}), 400
+    try:
+        created = _api_create_execution_price(
+            company_id=company_id, wallet_id=wallet_id, security_id=security_id,
+            position_date=pos_date, execution_price=_num(price))
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    created_id = beehus_catalog.id_str((created or {}).get("_id")) if isinstance(created, dict) else ""
+    return jsonify({"ok": True, "executionPriceId": created_id})
+
+
+@bp.route("/api/conciliacao-mov/provision-update", methods=["POST"])
+def provision_update():
+    """Atualiza (PATCH) UMA provisão de carteira. Body: `provisionId, patch`. Só campos
+    patchable (o cliente filtra); `provisionType` validado, `provisionSource` normalizado,
+    datas cortadas a YYYY-MM-DD. AÇÃO DESTRUTIVA — confirm() no front."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    prov_id = str(data.get("provisionId") or "")
+    patch = data.get("patch") or {}
+    if not prov_id:
+        return jsonify({"error": "provisionId obrigatório"}), 400
+    if not isinstance(patch, dict) or not patch:
+        return jsonify({"error": "patch vazio"}), 400
+    if "provisionType" in patch and str(patch["provisionType"]) not in _TXN_TYPES:
+        return jsonify({"error": f"provisionType inválido: {patch['provisionType']}"}), 400
+    if "provisionSource" in patch:
+        patch["provisionSource"] = _valid_prov_source(patch.get("provisionSource"))
+    for _k in ("initialDate", "liquidationDate"):
+        if patch.get(_k):
+            patch[_k] = str(patch[_k])[:10]
+    if "balance" in patch:
+        patch["balance"] = _num(patch["balance"])
+    try:
+        _api_update_provision(prov_id, patch)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/conciliacao-mov/provision-delete", methods=["POST"])
+def provision_delete():
+    """Exclui UMA provisão de carteira. Body: `provisionId`. AÇÃO DESTRUTIVA — confirm()."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    prov_id = str(data.get("provisionId") or "")
+    if not prov_id:
+        return jsonify({"error": "provisionId obrigatório"}), 400
+    try:
+        _api_delete_provision(prov_id)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/conciliacao-mov/execution-price-update", methods=["POST"])
+def execution_price_update():
+    """Atualiza (PATCH) o `executionPrice` de UM record. Body: `executionPriceId,
+    executionPrice`. AÇÃO DESTRUTIVA — confirm() no front."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    ep_id = str(data.get("executionPriceId") or "")
+    price = data.get("executionPrice")
+    if not ep_id:
+        return jsonify({"error": "executionPriceId obrigatório"}), 400
+    if price is None or price == "":
+        return jsonify({"error": "executionPrice obrigatório"}), 400
+    try:
+        _api_update_execution_price(ep_id, _num(price))
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/conciliacao-mov/execution-price-delete", methods=["POST"])
+def execution_price_delete():
+    """Exclui UM preço de execução. Body: `executionPriceId`. AÇÃO DESTRUTIVA — confirm()."""
+    data = request.get_json() or {}
+    company_id, err = _txn_write_guard(data)
+    if err:
+        return err
+    ep_id = str(data.get("executionPriceId") or "")
+    if not ep_id:
+        return jsonify({"error": "executionPriceId obrigatório"}), 400
+    try:
+        _api_delete_execution_price(ep_id)
+    except (BeehusAuthError, BeehusAPIError) as e:
+        return jsonify({"error": str(e), "upstream_status": getattr(e, "status", None)}), 502
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/conciliacao-mov/security-transfers", methods=["POST"])
+def send_security_transfers():
+    """Cria transações `securityTransfer` (BALANCE-ONLY) em vez de provisões, para os
+    itens que o operador selecionou no modal Implementar:
+      • `selected[wid]["recon"]` — securityIds cuja provisão de AJUSTE (amountDifference)
+        vira securityTransfer com `balance = −execPrice×Δqty` (o próprio `balance` da
+        reconProvision); a provisão NÃO é criada (a rota /provisions a pula via skipReconSids).
+        LIQUIDAÇÃO SEMPRE na DATA-ALVO (op == liq == alvo, regra do usuário jul/2026 — a
+        provisão liquidaria em target+offset) e a `description` = `securityTransfer — <ativo>`
+        (SEM o trecho "(em vez de provisão de ajuste)");
+      • `selected[wid]["liq"]`   — `id`s de provisões OFICIAIS que LIQUIDAM na data-alvo,
+        cada uma vira securityTransfer com o `balance` da própria provisão.
+    Sem `quantity`/`price`/`correspondingWallet` (decisão do produto). Re-projeta
+    server-side (não confia nos valores do corpo). AÇÃO DESTRUTIVA — confirm() no front."""
+    data = request.get_json() or {}
+    company_id, _sd, target_date, results, err = _projection_batch(data)
+    if err:
+        return err
+    selected = data.get("selected") or {}
+    created, failed, errors = 0, 0, []
+
+    def _mk(wid, entity_id, currency_id, sid, balance, op_d, liq_d, desc):
+        nonlocal created, failed
+        try:
+            _api_create_transaction(
+                company_id=company_id, wallet_id=wid, entity_id=entity_id,
+                # SINAL INVERTIDO (regra do usuário, jul/2026): a securityTransfer que SUBSTITUI a
+                # provisão entra com o balance de sinal oposto ao da provisão — a provisão de ajuste
+                # (−execPrice×Δqty) vira um FLUXO de capital com a direção correta (subscrição = +
+                # entra ativo; resgate = − sai ativo). Vale p/ recon E liquidando.
+                balance=round(-_num(balance), 2),
+                operation_date=op_d, liquidation_date=liq_d,
+                transaction_type="securityTransfer", currency_id=currency_id,
+                description=desc, security_id=sid or None)
+            created += 1
+        except (BeehusAuthError, BeehusAPIError) as e:
+            failed += 1
+            if len(errors) < 5:
+                errors.append(str(e))
+
+    for res in results:
+        wid = res.get("walletId")
+        currency_id = res.get("currencyId") or "BRL"
+        entity_id = res.get("entityId") or None   # transação de carteira exige entityId (senão 502)
+        sel = selected.get(str(wid)) or {}
+        recon_sids = {str(s) for s in (sel.get("recon") or [])}
+        liq_ids = {str(i) for i in (sel.get("liq") or [])}
+        if recon_sids:
+            for p in res.get("reconProvisions", []):
+                if str(p.get("securityId") or "") not in recon_sids:
+                    continue
+                # liquidação SEMPRE na data-alvo (regra do usuário, jul/2026): a provisão de
+                # ajuste liquida em `target+offset`, mas a securityTransfer que a substitui deve
+                # settlar na própria data-alvo. operationDate = initialDate (= target) → op == liq.
+                _mk(wid, entity_id, currency_id, p.get("securityId"), p.get("balance"),
+                    p.get("initialDate") or target_date, target_date,
+                    f"securityTransfer — {p.get('securityName') or ''}".strip())
+        if liq_ids:
+            for p in res.get("liquidatingProvisions", []) or []:
+                if str(p.get("id") or "") not in liq_ids:
+                    continue
+                _mk(wid, entity_id, currency_id, p.get("securityId"), p.get("balance"),
+                    p.get("initialDate") or target_date, p.get("liquidationDate") or target_date,
+                    f"securityTransfer (provisão vencendo {p.get('liquidationDate') or target_date}) — {p.get('securityName') or ''}".strip())
+    return jsonify({"ok": failed == 0, "created": created, "failed": failed, "errors": errors})
