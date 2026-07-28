@@ -1069,6 +1069,7 @@ try {
     </div>
     <!-- body -->
     <div class="px-5 py-4 flex flex-col gap-4 overflow-y-auto">
+      <div id="complement-upload-section" class="flex flex-col gap-4">
       <!-- format description -->
       <div class="text-xs text-gray-600 bg-gray-50 rounded-lg p-3 space-y-1">
         <p class="font-semibold text-gray-700">Formato do arquivo</p>
@@ -1092,6 +1093,21 @@ try {
         <span id="complement-filename" class="text-xs font-semibold text-slate-700 hidden"></span>
         <input id="complement-file-input" type="file" accept=".xlsx,.csv,.json,.txt" class="hidden">
       </label>
+      </div><!-- /complement-upload-section -->
+      <!-- preview section (shown after parse) -->
+      <div id="complement-preview-section" class="hidden flex flex-col gap-2">
+        <p id="complement-preview-count" class="text-xs text-gray-500"></p>
+        <div class="overflow-x-auto border border-gray-200 rounded">
+          <table class="w-full text-xs border-collapse">
+            <thead><tr class="bg-gray-50">
+              <th class="text-left px-2 py-1.5 font-semibold text-gray-600 border-b border-gray-200">unprocessedId</th>
+              <th class="text-left px-2 py-1.5 font-semibold text-gray-600 border-b border-gray-200">Complemento</th>
+            </tr></thead>
+            <tbody id="complement-preview-rows"></tbody>
+          </table>
+        </div>
+        <p id="complement-parse-error" class="text-xs text-red-600 hidden"></p>
+      </div>
       <!-- merge priority -->
       <div>
         <p class="text-xs font-semibold text-gray-700 mb-2">Prioridade ao mesclar</p>
@@ -1108,12 +1124,15 @@ try {
       </div>
     </div>
     <!-- footer -->
-    <div class="flex items-center justify-end gap-2 px-5 py-3 border-t flex-shrink-0">
-      <button onclick="_closeComplementModal()" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Cancelar</button>
-      <button id="complement-confirm-btn" disabled
-        class="px-3 py-1.5 text-xs font-semibold text-white bg-slate-500 rounded hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
-        Carregar e Reprocessar
-      </button>
+    <div class="flex items-center px-5 py-3 border-t flex-shrink-0 gap-2">
+      <button id="complement-back-btn" onclick="_complementBack()" class="hidden px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">← Voltar</button>
+      <div class="flex items-center gap-2 ml-auto">
+        <button onclick="_closeComplementModal()" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Cancelar</button>
+        <button id="complement-confirm-btn" onclick="_complementConfirm()" disabled
+          class="px-3 py-1.5 text-xs font-semibold text-white bg-slate-500 rounded hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
+          Carregar e Pré-visualizar
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -2606,7 +2625,7 @@ try {
         const companyList = Object.entries(r.companies).map(([id, name]) => ({ id, name }));
         return { externalId: r.externalId, unprocessedSecurityId: r.unprocessedSecurityId, walletCount: walletList.length, wallets: walletList, companies: companyList };
       })
-      .sort((a, b) => b.walletCount - a.walletCount);
+      .sort((a, b) => (a.unprocessedSecurityId || "").localeCompare(b.unprocessedSecurityId || ""));
   }
 
   // Stored per-uid wallet data for the sub-modal
@@ -4826,6 +4845,9 @@ try {
       brazilianRepo:          [['ISIN',        'isin'],
                                ['Emissor',     'issuer'],
                                ['Nome',        'name']],
+      sovereignBonds:         [['Emissor',     'issuer'],
+                               ['ISIN',        'isin'],
+                               ['Vencimento',  'maturity_date', fmtIso]],
     };
 
     const lines = [r.unprocessedSecurityId, '', 'Tipo: ' + (t || '—') + conf];
@@ -4938,6 +4960,95 @@ try {
     card.appendChild(ov);
   }
 
+  // Shared fetch + result-merge used by both the initial load (_renderMapeamento)
+  // and the complement reprocess (_complementReprocess). extraBody is merged into
+  // the POST body — pass {} for a normal load, {complements, complement_priority}
+  // for a complement reprocess.
+  function _runMatchFetch(items, extraBody) {
+    const tbody = document.getElementById("modal-tbody");
+    const msg   = document.getElementById("modal-msg");
+    _mappingLoader(true);
+    const body = Object.assign(
+      { items, companyId: _currentCompanyId, date: _currentDate },
+      extraBody
+    );
+    fetch("/api/controlpanel/match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(r => r.json()).then(({ results }) => {
+      const byId = {};
+      (results || []).forEach(r => byId[r.unprocessedId] = r);
+
+      _mappingRows.forEach(row => {
+        const m = byId[row.unprocessedSecurityId];
+        if (!m) return;
+        row.type           = m.predicted_type || "";
+        row.typeConfidence = m.type_confidence || 0;
+        row.pu             = m.pu ?? null;
+        row.extracted      = m.extracted || {};
+        const isManual = row.candidate && row.candidate.score === "manual";
+        if (!isManual) {
+          row.candidate = m.candidate || null;
+          row.lastPrice = m.lastPrice ?? null;
+        }
+      });
+
+      _mappingRows.sort((a, b) => {
+        const sa = a.candidate?.score === "manual" ? Infinity : (a.candidate?.score || 0);
+        const sb = b.candidate?.score === "manual" ? Infinity : (b.candidate?.score || 0);
+        return sb - sa;
+      });
+
+      // Update existing filter bar or create a new one.
+      const tableParent = tbody.closest(".overflow-y-auto");
+      if (tableParent) {
+        const existing = document.getElementById("mapping-filters");
+        if (!existing) {
+          const bar = document.createElement("div");
+          bar.id = "mapping-filters";
+          bar.innerHTML = _buildFilterBar(_mappingRows);
+          tableParent.parentElement.insertBefore(bar, tableParent);
+        } else {
+          existing.innerHTML = _buildFilterBar(_mappingRows);
+        }
+      }
+
+      tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
+      if (msg) msg.style.display = "none";
+      _mappingLoader(false);
+      _updateSelectionCount();
+
+      // Fallback: fetch price individually for candidates whose price was not
+      // resolved in the batch (mirrors the manual-selection flow exactly).
+      const _lpDateParam = _currentDate ? `&date=${encodeURIComponent(_currentDate)}` : "";
+      _mappingRows.forEach(row => {
+        if (!row.candidate || row.candidate.score === "manual") return;
+        if (row.lastPrice && row.lastPrice.value != null) return;
+        const sid = row.candidate.securityId;
+        if (!sid) return;
+        fetch(`/api/controlpanel/last-price?securityId=${encodeURIComponent(sid)}${_lpDateParam}`)
+          .then(r => r.json())
+          .then(({ lastPrice }) => {
+            if (!lastPrice || lastPrice.value == null) return;
+            row.lastPrice = lastPrice;
+            const tr2 = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(row.unprocessedSecurityId)}"]`);
+            if (!tr2) return;
+            const cells2 = tr2.querySelectorAll("td");
+            if (cells2[10]) {
+              cells2[10].title = lastPrice.date || "";
+              cells2[10].innerHTML = _fmtNum(lastPrice.value);
+            }
+          })
+          .catch(() => {});
+      });
+    }).catch(err => {
+      console.error("match error:", err);
+      if (msg) msg.style.display = "none";
+      _mappingLoader(false);
+    });
+  }
+
   function _renderMapeamento(issues) {
     const thead = document.getElementById("modal-thead");
     const tbody = document.getElementById("modal-tbody");
@@ -5004,86 +5115,7 @@ try {
     _mappingLoader(true);
 
     const items = ids.map(id => ({ unprocessedId: id }));
-
-    fetch("/api/controlpanel/match", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, companyId: _currentCompanyId, date: _currentDate })
-    }).then(r => r.json()).then(({ results }) => {
-      const byId = {};
-      (results || []).forEach(r => byId[r.unprocessedId] = r);
-
-      // Merge match results into existing _mappingRows. A row whose
-      // candidate.score === "manual" was picked by the operator while the
-      // matcher was still running — preserve that pick instead of letting
-      // the server suggestion overwrite it.
-      _mappingRows.forEach(row => {
-        const m = byId[row.unprocessedSecurityId];
-        if (!m) return;
-        row.type           = m.predicted_type || "";
-        row.typeConfidence = m.type_confidence || 0;
-        row.pu             = m.pu ?? null;
-        row.extracted      = m.extracted || {};   // isin/ticker/taxId/type for the asset-info line
-        const isManual = row.candidate && row.candidate.score === "manual";
-        if (!isManual) {
-          row.candidate = m.candidate || null;
-          row.lastPrice = m.lastPrice ?? null;
-        }
-      });
-
-      // Manual picks sort to the top — they have no numeric score to
-      // compare against the matcher's 0–100 range.
-      _mappingRows.sort((a, b) => {
-        const sa = a.candidate?.score === "manual" ? Infinity : (a.candidate?.score || 0);
-        const sb = b.candidate?.score === "manual" ? Infinity : (b.candidate?.score || 0);
-        return sb - sa;
-      });
-
-      // Insert filter bar above table (depends on the set of types the
-      // matcher returned, so it has to wait until now).
-      const tableParent = tbody.closest(".overflow-y-auto");
-      if (tableParent) {
-        const bar = document.createElement("div");
-        bar.id = "mapping-filters";
-        bar.innerHTML = _buildFilterBar(_mappingRows);
-        tableParent.parentElement.insertBefore(bar, tableParent);
-      }
-
-      tbody.innerHTML = _mappingRows.map(_buildMappingRowHtml).join("");
-      msg.style.display = "none";
-      _mappingLoader(false);
-      _updateSelectionCount();
-
-      // Fallback: fetch price individually for candidates whose price was not
-      // resolved in the batch (mirrors the manual-selection flow exactly).
-      const _lpDateParam = _currentDate ? `&date=${encodeURIComponent(_currentDate)}` : "";
-      _mappingRows.forEach(row => {
-        if (!row.candidate || row.candidate.score === "manual") return;
-        if (row.lastPrice && row.lastPrice.value != null) return;
-        const sid = row.candidate.securityId;
-        if (!sid) return;
-        fetch(`/api/controlpanel/last-price?securityId=${encodeURIComponent(sid)}${_lpDateParam}`)
-          .then(r => r.json())
-          .then(({ lastPrice }) => {
-            if (!lastPrice || lastPrice.value == null) return;
-            row.lastPrice = lastPrice;
-            const tr2 = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(row.unprocessedSecurityId)}"]`);
-            if (!tr2) return;
-            const cells2 = tr2.querySelectorAll("td");
-            if (cells2[10]) {
-              cells2[10].title = lastPrice.date || "";
-              cells2[10].innerHTML = _fmtNum(lastPrice.value);
-            }
-          })
-          .catch(() => {});
-      });
-    }).catch(err => {
-      console.error("match error:", err);
-      msg.style.display = "none";
-      // Drop the loader so a failed matcher doesn't leave the modal spinning;
-      // skeleton rows stay so the operator can still pick a security manually.
-      _mappingLoader(false);
-    });
+    _runMatchFetch(items, {});
   }
 
   function _renderDefault(issues) {
@@ -5316,8 +5348,18 @@ try {
       <th class="px-3 py-2 text-left">Security ID</th>
       <th class="px-3 py-2 text-left">BeehusName</th>
       ${cross ? `` : `<th class="px-3 py-2 text-left">Carteira</th>`}
-      <th class="px-3 py-2 text-center w-20">C3</th>
-      <th class="px-3 py-2 text-center w-32">Consumo Automático</th>
+      <th class="px-3 py-2 text-center w-20">
+        <div class="flex flex-col items-center gap-0.5">
+          <span>C3</span>
+          <input type="checkbox" title="Selecionar todos C3" onchange="_c3SelectAllC3(this.checked)">
+        </div>
+      </th>
+      <th class="px-3 py-2 text-center w-32">
+        <div class="flex flex-col items-center gap-0.5">
+          <span>Consumo Automático</span>
+          <input type="checkbox" title="Selecionar todos Consumo Automático" onchange="_c3SelectAllAuto(this.checked)">
+        </div>
+      </th>
     </tr>`;
 
     document.getElementById("modal-tbody").innerHTML = _c3Rows.map((r, i) =>
@@ -5346,15 +5388,25 @@ try {
   }
 
   function _c3SelectAll(checked) {
+    document.querySelectorAll("#modal-tbody > tr > td:first-child input").forEach(cb => cb.checked = checked);
+    _c3UpdateCount();
+  }
+
+  function _c3SelectAllC3(checked) {
     _c3Rows.forEach((_, i) => {
       _c3Rows[i].c3 = checked;
-      _c3Rows[i].consumoAuto = checked;
       const cb = document.getElementById(`c3-c3-${i}`);
       if (cb) cb.checked = checked;
-      const auto = document.getElementById(`c3-auto-${i}`);
-      if (auto) auto.checked = checked;
     });
-    document.querySelectorAll("#modal-tbody > tr > td:first-child input").forEach(cb => cb.checked = checked);
+    _c3UpdateCount();
+  }
+
+  function _c3SelectAllAuto(checked) {
+    _c3Rows.forEach((_, i) => {
+      _c3Rows[i].consumoAuto = checked;
+      const autoCb = document.getElementById(`c3-auto-${i}`);
+      if (autoCb) autoCb.checked = checked;
+    });
     _c3UpdateCount();
   }
 
@@ -5654,7 +5706,8 @@ try {
   }
 
   // ── Complement upload modal ────────────────────────────────────────────────
-  let _complementFile = null;
+  let _complementFile   = null;
+  let _complementParsed = null;  // {total, rows, preview[]} — populated after parse
 
   function _openComplementModal() {
     document.getElementById('complement-modal').style.display = 'flex';
@@ -5663,14 +5716,104 @@ try {
   function _closeComplementModal() {
     document.getElementById('complement-modal').style.display = 'none';
     _complementFile = null;
+    _complementParsed = null;
     document.getElementById('complement-file-input').value = '';
     const nameEl = document.getElementById('complement-filename');
     nameEl.textContent = '';
     nameEl.classList.add('hidden');
-    document.getElementById('complement-confirm-btn').disabled = true;
+    const btn = document.getElementById('complement-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Carregar e Pré-visualizar';
     const dz = document.getElementById('complement-dropzone');
     dz.classList.remove('border-slate-400', 'bg-slate-50');
     dz.classList.add('border-gray-300');
+    document.getElementById('complement-upload-section').classList.remove('hidden');
+    document.getElementById('complement-preview-section').classList.add('hidden');
+    document.getElementById('complement-back-btn').classList.add('hidden');
+    document.getElementById('complement-preview-count').textContent = '';
+    document.getElementById('complement-preview-rows').innerHTML = '';
+    const errEl = document.getElementById('complement-parse-error');
+    errEl.textContent = '';
+    errEl.classList.add('hidden');
+  }
+
+  function _complementBack() {
+    _complementParsed = null;
+    document.getElementById('complement-upload-section').classList.remove('hidden');
+    document.getElementById('complement-preview-section').classList.add('hidden');
+    document.getElementById('complement-back-btn').classList.add('hidden');
+    const btn = document.getElementById('complement-confirm-btn');
+    btn.textContent = 'Carregar e Pré-visualizar';
+    btn.disabled = (_complementFile === null);
+  }
+
+  function _complementConfirm() {
+    if (_complementParsed === null) {
+      _complementLoad();
+    } else {
+      _complementReprocess();
+    }
+  }
+
+  function _complementLoad() {
+    if (!_complementFile) return;
+    const btn = document.getElementById('complement-confirm-btn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Carregando…';
+
+    const fd = new FormData();
+    fd.append('file', _complementFile);
+
+    fetch('/api/controlpanel/parse-complement', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          document.getElementById('complement-upload-section').classList.add('hidden');
+          document.getElementById('complement-preview-section').classList.remove('hidden');
+          document.getElementById('complement-back-btn').classList.remove('hidden');
+          const errEl = document.getElementById('complement-parse-error');
+          errEl.textContent = data.error || 'Erro ao processar o arquivo.';
+          errEl.classList.remove('hidden');
+          btn.textContent = origText;
+          btn.disabled = true;
+          return;
+        }
+        _complementParsed = data;
+        const n = data.total;
+        const shown = data.preview.length;
+        document.getElementById('complement-preview-count').textContent =
+          n + ' linha' + (n !== 1 ? 's' : '') + ' identificada' + (n !== 1 ? 's' : '') +
+          (n > shown ? ' (exibindo as primeiras ' + shown + ')' : '');
+        const tbody = document.getElementById('complement-preview-rows');
+        tbody.innerHTML = '';
+        data.preview.forEach(function (row) {
+          const tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td class="px-2 py-1 border-b border-gray-100 font-mono text-gray-700 break-all max-w-[12rem]">' + _escHtml(row.uid) + '</td>' +
+            '<td class="px-2 py-1 border-b border-gray-100 text-gray-600 break-all">' + _escHtml(row.complement) + '</td>';
+          tbody.appendChild(tr);
+        });
+        document.getElementById('complement-upload-section').classList.add('hidden');
+        document.getElementById('complement-preview-section').classList.remove('hidden');
+        document.getElementById('complement-back-btn').classList.remove('hidden');
+        btn.textContent = 'Confirmar e Reprocessar';
+        btn.disabled = false;
+      })
+      .catch(function (err) {
+        btn.textContent = origText;
+        btn.disabled = false;
+        alert('Erro ao carregar arquivo: ' + (err.message || err));
+      });
+  }
+
+  function _complementReprocess() {
+    if (!_complementParsed || !_mappingRows.length) return;
+    const priority = (document.querySelector('input[name="complement-priority"]:checked') || {}).value || 'uid';
+    const complements = _complementParsed.rows || [];
+    const items = _mappingRows.map(r => ({ unprocessedId: r.unprocessedSecurityId }));
+    _closeComplementModal();
+    _runMatchFetch(items, { complements, complement_priority: priority });
   }
 
   (function () {
@@ -5703,7 +5846,6 @@ try {
       dz.classList.remove('border-slate-500', 'bg-slate-100');
       const file = e.dataTransfer.files[0];
       if (file) {
-        // sync file-input so the change event fires consistently
         try {
           const dt = new DataTransfer();
           dt.items.add(file);

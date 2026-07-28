@@ -80,10 +80,15 @@ def _parse_date_ex(text, prefer_mdy=False):
     """
     text = text.strip()
 
-    # YYYY-MM-DD
+    # YYYY-MM-DD  (also handles YYYY-DD-MM when the "month" field > 12)
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
     if m:
-        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}", True
+        yr, a, b = m.group(1), int(m.group(2)), int(m.group(3))
+        if 1 <= a <= 12:               # standard YYYY-MM-DD
+            return f"{yr}-{a:02d}-{b:02d}", True
+        elif a > 12 and 1 <= b <= 12:  # YYYY-DD-MM (some intl bond formats)
+            return f"{yr}-{b:02d}-{a:02d}", True
+        # else: both parts > 12 → invalid, fall through
 
     # DD-MM-YYYY (dashes, day-first — common in international bond descriptions)
     m = re.search(r"\b(\d{2})-(\d{2})-(\d{4})\b", text)
@@ -1146,6 +1151,7 @@ _GENERIC_NAME_TOKENS = frozenset({
     "responsabilidade", "limitada", "limitado",
     # Portuguese abbreviations carried in beehusName
     "fi", "fic", "fim", "fia", "fidc", "fii",
+    "firf", "ficfi", "ficfim", "ficfia",
     "mm", "rf", "rv", "cp", "di",
     "etf", "lci", "lca", "cdb", "cri", "cra",
     # English — fund / asset-class
@@ -1826,6 +1832,12 @@ def _score_candidate(sec, features, security_type):
     elif "fund_code" in features and features["fund_code"] in sec_main_id:
         score += 35
         matched_on.append("mainId/fund_code")
+    elif any(len(features.get(f"generic_code_{_i}") or "") >= 4
+             and (features[f"generic_code_{_i}"].lower() in sec_main_lower)
+             for _i in range(1, 4)
+             if features.get(f"generic_code_{_i}")):
+        score += 30
+        matched_on.append("mainId/generic")
     elif "selic_code" in features:
         # Exact selicCode already returned above as a perfect match; only the
         # off-by-one (adjacent) case reaches here.
@@ -1858,6 +1870,15 @@ def _score_candidate(sec, features, security_type):
     elif date_agreed:
         score += 15
         matched_on.append("maturityDate")
+
+    # Sovereign bond domain bonus (+20): issuer + exact maturity date nearly
+    # uniquely identify the tranche. The generic scoring (date_exact +30, name +15)
+    # totals 45 when no ISIN is embedded in the uid, just below auto-check (50).
+    # The bonus closes the gap; gated on date_agreed_exact so a month-only match
+    # (less certain) does not trigger auto-check.
+    if security_type == "sovereignBonds" and date_agreed_exact:
+        score += 20
+        matched_on.append("sovereignBond=")
 
     # Brazilian government bond domain bonus (+50): bond_type + maturity month/year
     # uniquely identifies the paper — only one LTN matures each Jan/2029. The
@@ -2015,10 +2036,12 @@ _BREAKDOWN_LABELS = {
     "mainId/code":       (45, "Código interno encontrado no mainId"),
     "mainId/external":   (40, "Código externo encontrado no mainId"),
     "mainId/fund_code":  (35, "Código do fundo encontrado no mainId"),
+    "mainId/generic":    (30, "Código genérico encontrado no mainId"),
     "selicCode~":        (40, "Código SELIC adjacente (±1)"),
     "mainId/structured": (50, "Padrão estruturado de opção no mainId/ticker"),
     "maturityDate=":     (30, "Vencimento exato (dia/mês/ano)"),
     "maturityDate":      (15, "Vencimento (mês/ano)"),
+    "sovereignBond=":   (20, "Soberano: vencimento exato identifica o papel"),
     "govBond=":          (50, "Título público: tipo + vencimento identificam o papel"),
     "coupon≠":           (0,  "Conflito de cupom (com vs sem juros semestrais)"),
     "indexer":           (10, "Indexador bate (CDI/IPCA/SELIC/…)"),
@@ -2435,7 +2458,14 @@ class SecurityCache:
 
             if search_terms:
                 search_terms_unique = list(dict.fromkeys(search_terms))
-                longest = max(search_terms_unique, key=len)
+                # Prefer tokens that mix letters+digits (e.g. "2035b", "bpac11")
+                # over purely alphabetic words (e.g. "advisory") — codes like
+                # fund vintage labels are far more distinctive than brand words
+                # that appear in dozens of fund names. Fall back to longest
+                # alphabetic if no mixed token exists.
+                _mixed_terms = [t for t in search_terms_unique
+                                if re.search(r"[a-z]", t) and re.search(r"\d", t)]
+                longest = max(_mixed_terms or search_terms_unique, key=len)
                 longest_lower = longest.lower()
                 mat = features.get("maturity_date", "")  # for narrowing
 
@@ -2454,8 +2484,15 @@ class SecurityCache:
                         if longest_lower in haystack:
                             candidates[sec["_id"]] = sec
 
-                # Second pass: name only (broader)
+                # Second pass: name only (broader) — scan ALL pool entries that
+                # contain the primary search token, then rank by how many of the
+                # full search_terms list each candidate matches before adding the
+                # top `remaining` to candidates. This prevents an early stop from
+                # silently discarding a candidate with 4 token hits in favour of
+                # one with just 1 hit that happened to appear first in pool order.
                 if len(candidates) < limit:
+                    remaining = limit - len(candidates)
+                    _name_pool = []
                     for sec in pool:
                         if sec["_id"] in candidates:
                             continue
@@ -2464,9 +2501,40 @@ class SecurityCache:
                         tkr = (sec.get("ticker") or "").lower()
                         haystack = f"{bn} {mid} {tkr}"
                         if longest_lower in haystack:
-                            candidates[sec["_id"]] = sec
-                            if len(candidates) >= limit:
-                                break
+                            hits = sum(1 for t in search_terms_unique if t in haystack)
+                            _name_pool.append((hits, sec))
+                    _name_pool.sort(key=lambda x: x[0], reverse=True)
+                    for _, sec in _name_pool[:remaining]:
+                        candidates[sec["_id"]] = sec
+
+        # Phase 2b: generic_code substring scan — runs even when Phase 2 had no
+        # search_terms (e.g. "KCD281 80% CDI 28/10/26": no name/issuer extracted,
+        # only a generic code). Scans ALL securities (cross-type) because the
+        # predicted securityType may differ from the catalog entry's type (e.g.
+        # "KCD281 80% CDI" classified as "bond" but the repo is "brazilianRepo").
+        # A generic_code is a structural identifier — it doesn't imply a type.
+        # Minimum length 4 avoids spurious short-token matches; in practice
+        # _extract_generic_codes already guarantees len >= 6.
+        if len(candidates) < limit:
+            _gc_terms = [features[f"generic_code_{_i}"].lower()
+                         for _i in range(1, 4)
+                         if features.get(f"generic_code_{_i}")
+                         and len(features[f"generic_code_{_i}"]) >= 4]
+            if _gc_terms:
+                _remaining = limit - len(candidates)
+                _gc_pool = []
+                for sec in self._securities:
+                    if sec["_id"] in candidates:
+                        continue
+                    _bn  = (sec.get("beehusName") or "").lower()
+                    _mid = (sec.get("mainId") or "").lower()
+                    _hay = f"{_bn} {_mid}"
+                    _hits = sum(1 for t in _gc_terms if t in _hay)
+                    if _hits:
+                        _gc_pool.append((_hits, sec))
+                _gc_pool.sort(key=lambda x: x[0], reverse=True)
+                for _, sec in _gc_pool[:_remaining]:
+                    candidates[sec["_id"]] = sec
 
         # Phase 3: selicCode adjacent (off-by-one) for gov bonds
         if "selic_code" in features and security_type == "brazilianGovernmentBond":
