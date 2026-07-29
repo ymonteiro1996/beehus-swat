@@ -3063,14 +3063,50 @@ try {
     if (c.score === "manual") return "Seleção manual do operador";
     const bd = c.breakdown || [];
     if (!bd.length) return "Score do match: " + c.score;
-    // L3 only here — there is no wallet position to scope to in mapping.
-    const lines = ["Como o score foi calculado (L3 — cadastro completo):"];
-    bd.forEach(e => lines.push(`• ${e.label}: ${(e.points >= 0 ? "+" : "") + e.points}`));
-    lines.push("──────────────");
-    lines.push(`Score total: ${c.score}`);
-    if (typeof c.score === "number" && c.score > 100) {
-      lines.push("(exibido limitado a 100%)");
+
+    const blockers = bd.filter(e => e.blocker);
+    const matches  = bd.filter(e => !e.blocker);
+
+    if (blockers.length) {
+      // Blocked candidate — show all blockers then what still matched
+      const lines = ["Bloqueadores (score 0):"];
+      blockers.forEach(e => lines.push(`• ${e.label}`));
+      if (matches.length) {
+        lines.push("──────────────");
+        lines.push("Ainda assim coincidiu:");
+        matches.forEach(e => {
+          if (e.points !== 0)
+            lines.push(`• ${e.label} (+${e.points})`);
+          else
+            lines.push(`• ${e.label}`);
+        });
+      }
+      return lines.join("\n");
     }
+
+    // Normal (non-blocked) candidate — split by positive / negative
+    const positives = matches.filter(e => e.points > 0);
+    const negatives = matches.filter(e => e.points < 0);
+    const neutrals  = matches.filter(e => e.points === 0);
+    const lines = [];
+    if (positives.length) {
+      lines.push("Fatores positivos:");
+      positives.forEach(e => lines.push(`• ${e.label}: +${e.points}`));
+    }
+    if (negatives.length) {
+      if (lines.length) lines.push("");
+      lines.push("Penalidades:");
+      negatives.forEach(e => lines.push(`• ${e.label}: ${e.points}`));
+    }
+    if (neutrals.length) {
+      if (lines.length) lines.push("");
+      neutrals.forEach(e => lines.push(`• ${e.label}`));
+    }
+    lines.push("──────────────");
+    const autoTag = typeof c.score === "number" && c.score > 100
+      ? `Score total: ${c.score} (exibido como 100%)  |  auto-check a partir de 50`
+      : `Score total: ${c.score}  |  auto-check a partir de 50`;
+    lines.push(autoTag);
     return lines.join("\n");
   }
 

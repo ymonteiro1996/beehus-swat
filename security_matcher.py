@@ -1512,17 +1512,18 @@ def _fund_discriminator_sig(name):
 
 
 def _exact_identifier_match(sec, features):
-    """Return a label if an exact, unique identifier matches, else None.
+    """Return a label if a strong unique identifier matches exactly, else None.
 
-    "Exact" means strict equality (not substring/adjacency): ticker (incl. the
-    FUT-prefixed variant), taxId/CNPJ (compared digits-only against the
-    candidate's taxId AND its mainId — a brazilianFund mainId IS the bare-digit
-    CNPJ), ISIN, SELIC code, OR an extracted code
-    (cetip/internal/external/fund) that equals the candidate's `mainId` in FULL.
-    A full-equality code identifies the asset as decisively as a ticker/ISIN, so
-    it is promoted out of the additive path. Only SUBSTRING/adjacency code
-    matches (the code appears inside a longer mainId) stay partial inside
-    `_score_candidate`.
+    Covers: ticker, taxId/CNPJ, ISIN, SELIC code, AND structured codes
+    (cetip/internal/external/fund) that equal the candidate's mainId in full.
+    Operator-supplied complement tokens are also treated as decisive.
+
+    generic_code_N is deliberately excluded: these are catch-all tokens for any
+    remaining alphanumeric code in the description and are NOT guaranteed to be
+    globally unique — the same token can appear across different tranches or
+    re-issuances. They are handled in the additive path with a +50 exact-mainId
+    bonus (just at the auto-check threshold) so any further divergence tips the
+    balance below auto-check without suppressing the suggestion entirely.
     """
     sec_ticker  = str(sec.get("ticker", ""))
     sec_main_id = str(sec.get("mainId", ""))
@@ -1587,10 +1588,6 @@ def _exact_identifier_match(sec, features):
             comp_tok = features.get(f"complement_{_ci}")
             if comp_tok and str(comp_tok).lower() == main_lower:
                 return f"complement_{_ci}"
-        for _ci in range(1, 4):
-            gc_tok = features.get(f"generic_code_{_ci}")
-            if gc_tok and str(gc_tok).lower() == main_lower:
-                return f"generic_code_{_ci}"
     return None
 
 
@@ -1697,8 +1694,9 @@ def _score_candidate(sec, features, security_type):
 
       • Exact unique identifier (ticker / taxId / isIn / selicCode / a code that
         equals the whole mainId) → top score (`_EXACT_SCORE`, above the heuristic
-        ceiling so it always outranks a partial pile-up). Short-circuits and
-        IGNORES the date gate: an exact id identifies the asset on its own.
+        ceiling so it always outranks a partial pile-up). Evaluated AFTER the
+        hard-reject gates: a vehicle/regime/date conflict overrides even an exact
+        code match, because the same internal code can appear on different tranches.
 
       • Fixed-income vehicle conflict (bond): the description names a vehicle
         (CRA/LCA/CRI/CDB/…) and the candidate clearly is a DIFFERENT one →
@@ -1719,14 +1717,21 @@ def _score_candidate(sec, features, security_type):
     (substring id, structured-option pattern, agreeing date, indexer, name
     token overlap), on a ~0–100 scale.
     """
-    # ── Rule 1: exact identifier wins (ignores the date gate) ──────────────
+    # ── Rule 1: exact identifier — evaluated AFTER hard blockers ───────────
+    # We check the identifier first to avoid redundant work, but defer the
+    # return until after vehicle/regime/date gates. Those gates must fire even
+    # when a code matches, because the same code (e.g. a CETIP internal_code)
+    # can appear on different tranches or re-issuances with different maturities.
     exact = _exact_identifier_match(sec, features)
-    if exact:
-        return _EXACT_SCORE, [exact, "exact"]
 
     sec_main_id = str(sec.get("mainId", ""))
 
-    # ── Rule 1b: fixed-income vehicle gate (hard reject on conflict) ───────
+    # All hard-reject gates below accumulate into blocked_on instead of
+    # returning immediately, so every applicable gate is evaluated and the
+    # tooltip can show ALL blockers plus whatever the additive scoring found.
+    blocked_on = []
+
+    # ── Rule 1b: fixed-income vehicle gate ──────────────────────────────────
     # A CRA is not an LCA, a CRI is not a CRA. When the description names a
     # vehicle AND the candidate is unambiguously a different one (beehusName word
     # or compacted mainId prefix), reject — no matter how well the issuer /
@@ -1737,9 +1742,10 @@ def _score_candidate(sec, features, security_type):
         if feat_veh in _VEHICLE_SET:
             cand_vehs = _candidate_vehicles(sec)
             if cand_vehs and feat_veh not in cand_vehs:
-                return 0, [f"vehicle≠({feat_veh})"]
+                blocked_on.append(
+                    f"vehicle≠({feat_veh}|{'/'.join(sorted(cand_vehs))})")
 
-    # ── Rule 1c: rate-regime gate, PRE vs POS buckets (hard reject) ────────
+    # ── Rule 1c: rate-regime gate, PRE vs POS buckets ───────────────────────
     # Pré-fixado ≠ pós-fixado/inflation. The description's PRIMARY bucket
     # (from the leftmost active regime) must intersect the candidate's bucket(s);
     # reject when both are known and disjoint. Coarse buckets (not CDI≠IPCA) so a
@@ -1758,9 +1764,10 @@ def _score_candidate(sec, features, security_type):
         if desc_bucket:
             cand_buckets = _candidate_buckets(sec)
             if cand_buckets and desc_bucket not in cand_buckets:
-                return 0, [f"indexer≠({desc_bucket})"]
+                blocked_on.append(
+                    f"indexer≠({desc_bucket}|{'/'.join(sorted(cand_buckets))})")
 
-    # ── Rule 1d: issuer gate, BANK vehicles only (hard reject on conflict) ──
+    # ── Rule 1d: issuer gate, BANK vehicles only ────────────────────────────
     # CDB Santander ≠ CDB BTG. Only fires when the description's vehicle is a bank
     # instrument AND both sides resolve to KNOWN, DIFFERENT bank issuers
     # (data/issuers.json). Excludes securitized CRI/CRA/CDCA (securitizadora ×
@@ -1772,9 +1779,10 @@ def _score_candidate(sec, features, security_type):
         if desc_iss:
             cand_iss = _candidate_issuers(sec)
             if cand_iss and desc_iss.isdisjoint(cand_iss):
-                return 0, [f"issuer≠({'/'.join(sorted(cand_iss))})"]
+                blocked_on.append(
+                    f"issuer≠({'/'.join(sorted(desc_iss))}|{'/'.join(sorted(cand_iss))})")
 
-    # ── Rule 1e: gov bond coupon gate (hard reject on conflict) ────────────
+    # ── Rule 1e: gov bond coupon gate ───────────────────────────────────────
     # NTN-B (coupon) ≠ NTN-B Principal (no coupon). Both share bond type and
     # maturity day convention but are different instruments with different cash
     # flows. Rejects when description coupon status is known AND the candidate's
@@ -1784,12 +1792,14 @@ def _score_candidate(sec, features, security_type):
         if feat_coupon is not None:
             cand_coupon = _candidate_gov_coupon(sec)
             if cand_coupon is not None and (feat_coupon == "Sim") != cand_coupon:
-                return 0, ["coupon≠"]
+                blocked_on.append(
+                    f"coupon≠({feat_coupon}|{'Sim' if cand_coupon else 'Não'})")
 
-    # ── Rule 2: maturity-date gate (hard reject on disagreement) ───────────
+    # ── Rule 2: maturity-date gate ───────────────────────────────────────────
     feat_date = features.get("maturity_date") or features.get("expiry") or ""
     date_agreed = False
     date_agreed_exact = False  # full day/month/year matched (not just month+year)
+    _cand_date_absent = False  # unprocessed has date but candidate has none
     if feat_date:
         day_known = bool(features.get("maturity_day_specified")) or ("expiry" in features)
         cand_dates = _candidate_dates(sec)
@@ -1800,7 +1810,14 @@ def _score_candidate(sec, features, security_type):
                 # (rolled by a few days) or month/year-only agreement stays +25.
                 date_agreed_exact = day_known and (feat_date in cand_dates)
             else:
-                return 0, ["maturityDate≠"]
+                _cand_date_str = sorted(cand_dates)[0]
+                blocked_on.append(f"maturityDate≠({feat_date}|{_cand_date_str})")
+        else:
+            _cand_date_absent = True
+
+    # ── Rule 1 (deferred): exact identifier wins — only if no blockers ──────
+    if exact and not blocked_on:
+        return _EXACT_SCORE, [exact, "exact"]
 
     score = 0
     matched_on = []
@@ -1836,8 +1853,18 @@ def _score_candidate(sec, features, security_type):
              and (features[f"generic_code_{_i}"].lower() in sec_main_lower)
              for _i in range(1, 4)
              if features.get(f"generic_code_{_i}")):
-        score += 30
-        matched_on.append("mainId/generic")
+        _gc_exact = any(
+            features[f"generic_code_{_i}"].lower() == sec_main_lower
+            for _i in range(1, 4)
+            if features.get(f"generic_code_{_i}")
+            and len(features[f"generic_code_{_i}"]) >= 4
+        )
+        if _gc_exact:
+            score += 50
+            matched_on.append("mainId/generic=")
+        else:
+            score += 30
+            matched_on.append("mainId/generic")
     elif "selic_code" in features:
         # Exact selicCode already returned above as a perfect match; only the
         # off-by-one (adjacent) case reaches here.
@@ -1904,6 +1931,12 @@ def _score_candidate(sec, features, security_type):
         if sec_idx and (features["indexer"] in sec_idx or sec_idx in features["indexer"]):
             score += 10
             matched_on.append("indexer")
+        elif not sec_idx:
+            # Soft penalty: unprocessed names an indexer but candidate has none.
+            # Mirrors the missing-date penalty — not a hard reject but enough to
+            # drop a generic-code-only match (50) below the auto-check threshold.
+            score -= 25
+            matched_on.append(f"indexer~missing({features['indexer']})")
 
     # Name token overlap (+15 max) — accent-insensitive
     name_feature = features.get("name") or features.get("issuer") or ""
@@ -2018,6 +2051,16 @@ def _score_candidate(sec, features, security_type):
 
     # Floor at 0 — the discriminator penalty is the only signal that can push the
     # additive score negative, and a negative score has no meaning downstream.
+    # Soft penalty: unprocessed security names a maturity date but the candidate
+    # has no date registered in the catalog. Not a hard blocker (the field may
+    # simply be missing), but enough to drop a generic-code-only match (50) below
+    # the auto-check threshold so the operator must confirm manually.
+    if _cand_date_absent:
+        score -= 25
+        matched_on.append(f"maturityDate~missing({feat_date})")
+
+    if blocked_on:
+        return 0, blocked_on + matched_on
     return max(0, score), matched_on
 
 
@@ -2036,7 +2079,10 @@ _BREAKDOWN_LABELS = {
     "mainId/code":       (45, "Código interno encontrado no mainId"),
     "mainId/external":   (40, "Código externo encontrado no mainId"),
     "mainId/fund_code":  (35, "Código do fundo encontrado no mainId"),
+    "mainId/generic=":   (50, "Código genérico = mainId (exato)"),
     "mainId/generic":    (30, "Código genérico encontrado no mainId"),
+    "maturityDate~missing": (-25, "Vencimento especificado mas candidato sem data cadastrada"),
+    "indexer~missing":      (-25, "Indexador especificado mas candidato sem indexador cadastrado"),
     "selicCode~":        (40, "Código SELIC adjacente (±1)"),
     "mainId/structured": (50, "Padrão estruturado de opção no mainId/ticker"),
     "maturityDate=":     (30, "Vencimento exato (dia/mês/ano)"),
@@ -2064,38 +2110,95 @@ _EXACT_ID_LABELS = {
 }
 
 
+# ── Blocker-reason helpers ───────────────────────────────────────────────────
+
+_BLOCKER_KEY_SET = frozenset({"vehicle≠", "indexer≠", "issuer≠", "coupon≠", "maturityDate≠"})
+
+def _is_blocker_reason(r):
+    return any(r == k or r.startswith(k + "(") for k in _BLOCKER_KEY_SET)
+
+def _parse_blocker_reason(r):
+    """Parse 'key(a|b)' → (key, a_str, b_str); falls back gracefully."""
+    for k in _BLOCKER_KEY_SET:
+        if r == k:
+            return k, None, None
+        prefix = k + "("
+        if r.startswith(prefix) and r.endswith(")"):
+            inner = r[len(prefix):-1]
+            if "|" in inner:
+                a, b = inner.split("|", 1)
+                return k, a or None, b or None
+            return k, inner or None, None
+    return r, None, None
+
+def _blocker_label(key, a, b):
+    _BUCKET = {"POS": "pós-fixado (CDI/IPCA/SELIC)", "PRE": "pré-fixado"}
+    if key == "vehicle≠":
+        return f"Instrumento diverge: {a or '?'} ≠ {b or '?'}"
+    if key == "indexer≠":
+        an = _BUCKET.get(a, a or "?")
+        bn_parts = [_BUCKET.get(x.strip(), x.strip()) for x in (b or "").split("/") if x.strip()]
+        return f"Regime de indexação diverge: {an} ≠ {' / '.join(bn_parts) or '?'}"
+    if key == "issuer≠":
+        return f"Emissor bancário diverge: {a or '?'} ≠ {b or '?'}"
+    if key == "coupon≠":
+        return f"Cupom diverge: {a or '?'} ≠ {b or '?'}"
+    if key == "maturityDate≠":
+        return f"Vencimento diverge: {a or '?'} ≠ {b or '?'}"
+    return f"Bloqueado: {key}"
+
+
 def _score_breakdown(reasons, total_score):
-    """Decompose ``reasons``/``total_score`` into ``[{code, points, label}]`` for
-    the UI tooltip. Mirrors ``_score_candidate`` point weights; any unexplained
-    remainder (e.g. the dynamic rare-name bonus) is folded into a residual entry
-    so the parts always sum to ``total_score``."""
+    """Decompose ``reasons``/``total_score`` into ``[{code, points, label, blocker}]``
+    for the UI tooltip. When blockers are present (score == 0) the list starts with
+    blocker entries (``blocker: True``) followed by whatever the additive scoring
+    still found (``blocker: False``), so the tooltip can render two sections."""
     reasons = list(reasons or [])
     try:
         total = int(total_score)
     except (TypeError, ValueError):
         total = 0
 
-    # Hard rule: an exact unique identifier is a perfect match (100) and the
-    # date gate is bypassed. `reasons` is then [<id_type>, "exact"].
+    # Hard rule: exact unique identifier — no blockers fired.
+    # reasons is [<id_type>, "exact"] in this case.
     if "exact" in reasons:
         id_code = next((r for r in reasons if r != "exact"), "")
         idlbl = _EXACT_ID_LABELS.get(id_code, id_code or "identificador")
         return [{
             "code": id_code or "exact",
             "points": total,
-            "label": f"Identificador exato ({idlbl}) — match perfeito, ignora a data",
+            "label": f"Identificador exato ({idlbl}) — match perfeito",
+            "blocker": False,
         }]
 
+    # Split reasons into blockers and additive matches
+    blocker_reasons = [r for r in reasons if _is_blocker_reason(r)]
+    match_reasons   = [r for r in reasons if not _is_blocker_reason(r)]
+
     comps = []
-    rare_idx = None       # comps index of the rare-name entry (absorbs residual)
+
+    # Blocker entries first (score == 0 when any blocker fired)
+    for r in blocker_reasons:
+        key, a, b = _parse_blocker_reason(r)
+        comps.append({
+            "code":    r,
+            "points":  0,
+            "label":   _blocker_label(key, a, b),
+            "blocker": True,
+        })
+
+    # Additive match entries (informational when blocked, scored when not)
+    rare_idx_offset = len(comps)  # blocker entries already in comps
+    rare_idx = None
     explained = 0
-    for r in reasons:
+    for r in match_reasons:
+        def _app(entry):
+            comps.append({**entry, "blocker": False})
         if r in _BREAKDOWN_LABELS:
             pts, lbl = _BREAKDOWN_LABELS[r]
-            comps.append({"code": r, "points": pts, "label": lbl})
+            _app({"code": r, "points": pts, "label": lbl})
             explained += pts
         elif r.startswith("name(") and "/" in r:
-            # name(o/t) → int((o / t) * 15)  (matcher's name-overlap formula)
             try:
                 inside = r[r.index("(") + 1:r.index(")")]
                 o_s, t_s = inside.split("/")
@@ -2103,67 +2206,65 @@ def _score_breakdown(reasons, total_score):
                 pts = int((o / t) * 15) if t else 0
             except (ValueError, ZeroDivisionError):
                 o = t = pts = 0
-            comps.append({"code": r, "points": pts,
-                          "label": f"Sobreposição de nome ({o} de {t} tokens)"})
+            _app({"code": r, "points": pts,
+                  "label": f"Sobreposição de nome ({o} de {t} tokens)"})
             explained += pts
         elif r.startswith("mainId/name("):
-            # mainId/name(N) → min(cap, per_hit * N)  (compacted-name in mainId)
             try:
                 n = int(r[r.index("(") + 1:r.index(")")])
             except (ValueError, IndexError):
                 n = 0
             pts = min(_MAINID_NAME_CAP, _MAINID_NAME_PER_HIT * n) if n else 0
-            comps.append({"code": r, "points": pts,
-                          "label": f"Nome no mainId comprimido ({n} token(s))"})
+            _app({"code": r, "points": pts,
+                  "label": f"Nome no mainId comprimido ({n} token(s))"})
             explained += pts
         elif r.startswith("name~rare"):
-            # Rarity bonus = min(30, round(rare_w*30)); not recoverable from the
-            # code alone, so it takes the residual (computed after the loop).
-            comps.append({"code": r, "points": 0,
-                          "label": "Token de nome raro no acervo"})
+            _app({"code": r, "points": 0, "label": "Token de nome raro no acervo"})
             rare_idx = len(comps) - 1
         elif r.startswith("type="):
-            comps.append({"code": r, "points": 12,
-                          "label": f"Tipo de instrumento bate ({r[len('type='):]})"})
+            _app({"code": r, "points": 12,
+                  "label": f"Tipo de instrumento bate ({r[len('type='):]})"})
             explained += 12
         elif r.startswith("name~="):
-            comps.append({"code": r, "points": 35,
-                          "label": "Nome (comprimido) é substring da descrição"})
+            _app({"code": r, "points": 35,
+                  "label": "Nome (comprimido) é substring da descrição"})
             explained += 35
         elif r.startswith("mainId~="):
-            comps.append({"code": r, "points": 25,
-                          "label": "mainId (comprimido) é substring da descrição"})
+            _app({"code": r, "points": 25,
+                  "label": "mainId (comprimido) é substring da descrição"})
             explained += 25
+        elif r.startswith("maturityDate~missing"):
+            _hint = r[r.index("(") + 1:r.index(")")] if "(" in r else ""
+            _lbl = (f"Vencimento {_hint} especificado mas candidato sem data cadastrada"
+                    if _hint else "Vencimento especificado mas candidato sem data cadastrada")
+            _app({"code": r, "points": -25, "label": _lbl})
+            explained += -25
+        elif r.startswith("indexer~missing"):
+            _hint = r[r.index("(") + 1:r.index(")")] if "(" in r else ""
+            _lbl = (f"Indexador {_hint} especificado mas candidato sem indexador cadastrado"
+                    if _hint else "Indexador especificado mas candidato sem indexador cadastrado")
+            _app({"code": r, "points": -25, "label": _lbl})
+            explained += -25
         elif r == "fund~discr≠":
-            comps.append({"code": r, "points": -_FUND_DISCR_PENALTY,
-                          "label": "Classe/série/tranche do fundo difere — penalidade"})
+            _app({"code": r, "points": -_FUND_DISCR_PENALTY,
+                  "label": "Classe/série/tranche do fundo difere — penalidade"})
             explained += -_FUND_DISCR_PENALTY
         elif r == "fund~class=":
-            comps.append({"code": r, "points": _FUND_CLASS_CONFIRM,
-                          "label": "Classe/tranche do fundo confere"})
+            _app({"code": r, "points": _FUND_CLASS_CONFIRM,
+                  "label": "Classe/tranche do fundo confere"})
             explained += _FUND_CLASS_CONFIRM
-        elif r == "maturityDate≠":
-            comps.append({"code": r, "points": 0,
-                          "label": "Vencimento diverge — candidato rejeitado"})
-        elif r.startswith("vehicle≠"):
-            comps.append({"code": r, "points": 0,
-                          "label": "Veículo/lastro diverge (CRA≠LCA, CRI≠CRA, …) — candidato rejeitado"})
-        elif r.startswith("indexer≠"):
-            comps.append({"code": r, "points": 0,
-                          "label": "Indexador/regime diverge (IPCA/CDI ≠ Pré-fixado, …) — candidato rejeitado"})
-        elif r.startswith("issuer≠"):
-            comps.append({"code": r, "points": 0,
-                          "label": "Emissor bancário diverge (ex.: Santander ≠ BTG) — candidato rejeitado"})
         else:
-            comps.append({"code": r, "points": 0, "label": r})
+            _app({"code": r, "points": 0, "label": r})
 
-    residual = total - explained
-    if residual:
-        if rare_idx is not None:
-            comps[rare_idx]["points"] = residual
-        else:
-            comps.append({"code": "outros", "points": residual,
-                          "label": "Outros sinais"})
+    # Residual (e.g. rare-name bonus) only meaningful when not blocked
+    if not blocker_reasons:
+        residual = total - explained
+        if residual:
+            if rare_idx is not None:
+                comps[rare_idx]["points"] = residual
+            else:
+                comps.append({"code": "outros", "points": residual,
+                              "label": "Outros sinais", "blocker": False})
     return comps
 
 
