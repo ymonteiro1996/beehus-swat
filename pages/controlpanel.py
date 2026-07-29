@@ -85,7 +85,7 @@ def _get_matcher():
             # for signature compatibility (never dereferenced). So the matcher
             # builds even with Mongo disconnected — do NOT gate on db._ready(),
             # or POST /api/controlpanel/match 500s on a Mongo-free instance.
-            _matcher = SecurityMatcher(db, classifier=_get_classifier())
+            _matcher = SecurityMatcher(db, classifier=clf)
         return _matcher
 
 def _reset_matcher():
