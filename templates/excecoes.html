@@ -1182,8 +1182,12 @@
         if (r.status === "ok") extra = ` — ${r.rows} linha(s)`;
         else if (r.error) extra = ` — ${escHtml(r.error)}`;
         else if (r.reason) extra = ` — ${escHtml(r.reason)}`;
+        // A API do Beehus manda o motivo real da rejeição em `upstream_body`
+        // (ex.: qual coluna/linha veio errada) — sem isso só se via "failed: 400"
+        // e não dava pra saber por quê.
+        const detail = r.upstream_body ? `<div class="text-[11px] text-gray-500 font-mono mt-0.5 whitespace-pre-wrap break-words">${escHtml(String(r.upstream_body).slice(0, 1000))}</div>` : "";
         const wname = wn[r.walletId] || r.walletId;
-        return `<div class="text-xs text-gray-700">${pill} <strong>${escHtml(wname)}</strong>${extra}</div>`;
+        return `<div class="text-xs text-gray-700">${pill} <strong>${escHtml(wname)}</strong>${extra}</div>${detail}`;
       }).join("");
     }
 

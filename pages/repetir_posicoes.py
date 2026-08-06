@@ -3032,19 +3032,25 @@ def b1_prices():
 
 def _build_combined_xlsx(rows):
     """Build a SINGLE workbook containing rows from every wallet in the
-    batch. The upstream's `Carteira` column already routes rows to the
-    correct wallet, and `Data` is per-row, so wallets with different
-    `targetDate`s coexist in the same file. Eliminates the N HTTP calls
-    that the per-wallet variant used to do.
+    batch. The upstream's `walletId` column already routes rows to the
+    correct wallet, and `positionDate` is per-row, so wallets with
+    different `targetDate`s coexist in the same file. Eliminates the N
+    HTTP calls that the per-wallet variant used to do.
 
-    Caixa rows: each `r` with `caixa=True` is emitted as a `Caixa = "Sim"`
-    line with `Ativo="Caixa"`, `Quant=0`, `PU=0` and the cash amount in
-    `SaldoBruto` — same convention used by `/carteira` and `/excecoes`."""
+    Caixa rows: each `r` with `caixa=True` is emitted as an
+    `isCashAccount = "Sim"` line with `unprocessedId="Caixa"`,
+    `quantity=0`, `pu=0` and the cash amount in `balance` — same
+    convention used by `/carteira` and `/excecoes`.
+
+    Columns (2026-08 upstream format change): positionDate, walletId,
+    unprocessedId, quantity, pu, balance, isCashAccount — no currency
+    column anymore (was: Data, Carteira, Ativo, Quant, PU, SaldoBruto,
+    Caixa, Moeda)."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Posicoes"
-    ws.append(["Data", "Carteira", "Ativo", "Quant", "PU",
-               "SaldoBruto", "Caixa", "Moeda"])
+    ws.append(["positionDate", "walletId", "unprocessedId", "quantity",
+               "pu", "balance", "isCashAccount"])
     for r in rows:
         is_cash = bool(r.get("caixa"))
         ws.append([
@@ -3055,7 +3061,6 @@ def _build_combined_xlsx(rows):
             (0 if is_cash else (r.get("pu") or 0)),
             r.get("balance") or 0,
             "Sim" if is_cash else "Não",
-            r.get("currencyId") or "",
         ])
     buf = io.BytesIO()
     wb.save(buf)

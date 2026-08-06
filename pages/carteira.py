@@ -557,21 +557,26 @@ def _build_carteira_xlsx(*, target_date, wallet_id, rows, cash, currency_id,
                          cash_unprocessed_id="Caixa"):
     """Build the upstream-shaped workbook for a single (wallet, date).
 
-    Schema (shared with `pages.excecoes._build_xlsx` and `pages.repetir_posicoes._build_combined_xlsx`):
-        Data, Carteira, Ativo, Quant, PU, SaldoBruto, Caixa, Moeda
+    Schema (shared with `pages.excecoes._build_xlsx` and
+    `pages.repetir_posicoes._build_combined_xlsx`; 2026-08 upstream format
+    change — no currency column anymore):
+        positionDate, walletId, unprocessedId, quantity, pu, balance, isCashAccount
+    (was: Data, Carteira, Ativo, Quant, PU, SaldoBruto, Caixa, Moeda)
 
-    The cash row's `Ativo` is the wallet's `cashAccounts.unprocessedId`
-    (e.g. "Caixa" for BRL wallets, "Cash" for USD). Defaults to "Caixa"
-    when the caller omits it, preserving the historical behaviour for
-    wallets without a cashAccount on file.
+    The cash row's `unprocessedId` is the wallet's
+    `cashAccounts.unprocessedId` (e.g. "Caixa" for BRL wallets, "Cash" for
+    USD). Defaults to "Caixa" when the caller omits it, preserving the
+    historical behaviour for wallets without a cashAccount on file.
 
     A cash row is appended only when the operator supplied a value — an
-    empty cash field means "don't touch caixa", not "set caixa to zero"."""
+    empty cash field means "don't touch caixa", not "set caixa to zero".
+    `currency_id` is accepted but no longer written — kept in the
+    signature so callers don't need to change."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Posicoes"
-    ws.append(["Data", "Carteira", "Ativo", "Quant", "PU",
-               "SaldoBruto", "Caixa", "Moeda"])
+    ws.append(["positionDate", "walletId", "unprocessedId", "quantity",
+               "pu", "balance", "isCashAccount"])
     for r in rows:
         ws.append([
             target_date,
@@ -581,7 +586,6 @@ def _build_carteira_xlsx(*, target_date, wallet_id, rows, cash, currency_id,
             r.get("pu") or 0,
             r.get("balance") or 0,
             "Não",
-            currency_id or "",
         ])
     if cash is not None:
         ws.append([
@@ -592,7 +596,6 @@ def _build_carteira_xlsx(*, target_date, wallet_id, rows, cash, currency_id,
             0,
             cash,
             "Sim",
-            currency_id or "",
         ])
     buf = io.BytesIO()
     wb.save(buf)

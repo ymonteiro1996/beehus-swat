@@ -3204,20 +3204,24 @@ def _xlsx_rows_for(result):
 
 
 def _build_xlsx(rows):
-    """Workbook .xlsx com as colunas do upstream (mesmo formato de Repetir/Carteira)."""
+    """Workbook .xlsx com as colunas do upstream (mesmo formato de Repetir/
+    Carteira/Exceções; mudança de formato do upstream em 2026-08 — sem
+    coluna de moeda): positionDate, walletId, unprocessedId, quantity, pu,
+    balance, isCashAccount (era: Data, Carteira, Ativo, Quant, PU,
+    SaldoBruto, Caixa, Moeda)."""
     from openpyxl import Workbook
     wb = Workbook()
     ws = wb.active
     ws.title = "Posicoes"
-    ws.append(["Data", "Carteira", "Ativo", "Quant", "PU", "SaldoBruto", "Caixa", "Moeda"])
+    ws.append(["positionDate", "walletId", "unprocessedId", "quantity",
+               "pu", "balance", "isCashAccount"])
     for r in rows:
         is_cash = bool(r.get("caixa"))
         ws.append([r.get("date") or "", r.get("walletId") or "",
                    ("Caixa" if is_cash else (r.get("ativo") or "")),
                    (0 if is_cash else (r.get("quantity") or 0)),
                    (0 if is_cash else (r.get("pu") or 0)),
-                   r.get("balance") or 0, "Sim" if is_cash else "Não",
-                   r.get("currencyId") or ""])
+                   r.get("balance") or 0, "Sim" if is_cash else "Não"])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

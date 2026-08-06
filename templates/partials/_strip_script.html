@@ -1091,8 +1091,14 @@ if (typeof Funcoes === 'undefined') {
         } else {
           errCount++;
           const isAuth = httpStatus === 401;
+          // O apply devolve 502 (não é rede/proxy — o backend usa 502 de
+          // propósito pra "alguma chamada upstream ao Beehus falhou") com o
+          // motivo real DENTRO de results[]/transactionResults[] etc, não num
+          // campo `error` no topo — sem isso a tela só mostrava "HTTP 502".
+          const detail = (data && data.error) || this._applyDayErrorDetail(data)
+            || (isAuth ? "auth" : `HTTP ${httpStatus}`);
           this._setMultiDayRow(day, isAuth ? "auth" : "error",
-            `<span class="text-rose-700">${this._esc((data && data.error) || (isAuth ? "auth" : `HTTP ${httpStatus}`))}</span>`);
+            `<span class="text-rose-700">${this._esc(detail)}</span>`);
           if (isAuth) { authBroke = true; break; }
         }
       }
@@ -1156,6 +1162,32 @@ if (typeof Funcoes === 'undefined') {
         add(data.transactionResults, "transações");
       }
       return pills.length ? pills.join(" ") : '<span class="sp-pill sp-pill-muted">nada a enviar</span>';
+    },
+
+    // Varre todos os buckets de resultado que o apply pode devolver e junta
+    // o `error`/`upstream_body` dos itens que falharam — é o motivo REAL de
+    // um 502 (vs. o "HTTP 502" genérico que não diz nada). `upstream_body` é
+    // truncado pra não estourar a linha da tabela; passar o mouse não expande
+    // (é só texto), mas já é bem mais do que nada.
+    _applyDayErrorDetail(data) {
+      if (!data) return "";
+      const buckets = [
+        data.results, data.transactionResults, data.provisionResults,
+        data.sourceResults, data.targetResults, data.processResults, data.navResults,
+      ];
+      const adj = data.adjustmentResults || {};
+      buckets.push(adj.amountDifference, adj.provisionSettlement, adj.transactionSettlement);
+      if (data.positionResult) buckets.push([data.positionResult]);
+      const msgs = [];
+      buckets.forEach(rows => {
+        (rows || []).forEach(r => {
+          if (r && r.status && r.status !== "ok" && r.status !== "skipped") {
+            const body = r.upstream_body ? String(r.upstream_body).slice(0, 200) : "";
+            msgs.push([r.error, body].filter(Boolean).join(" — "));
+          }
+        });
+      });
+      return msgs.length ? msgs.slice(0, 3).join(" | ") + (msgs.length > 3 ? ` (+${msgs.length - 3})` : "") : "";
     },
 
     closeApplyMulti() {

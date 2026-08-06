@@ -24,6 +24,7 @@ from db import (db, get_biz_dates, load_config_delays, get_company_filter,
                 get_grouping_index, atomic_write_json, today_in_brt, _cached_ttl,
                 invalidate_cache, business_days_before, IDENTIFICAR_ENABLED)
 import beehus_catalog
+import asset_registration
 from security_type_classifier import SecurityTypeClassifier, JSON_PATH
 from security_matcher import (
     SecurityMatcher, get_cache, get_mapping_cache, _score_breakdown, _confidence_label,
@@ -1846,6 +1847,111 @@ def apply_mapping_all():
         "results": _fanout_companies(list(by_company.keys()), _run),
         "companyNames": get_company_names(),
     })
+
+
+@bp.route("/api/controlpanel/registration-preview", methods=["POST"])
+def registration_preview():
+    """Cadastro de ativos automatizado — Tier 1 (Onboarding API) / Tier 2
+    (regras determinísticas) / Pendente para cada unprocessedId marcado no
+    Mapeamento, ANTES de qualquer criação real. Não escreve nada — só propõe.
+
+    Body: { "items": [{"unprocessedId": str, "securityType": str}, ...] }
+    Returns: { "results": [ {unprocessedId, tier, beehusName, payload,
+                              reason, warnings}, ... ] }
+
+    `tier`: "onboarding" (payload vem da API real Anbima/B3/CVM) |
+    "rules" (payload vem de fórmula determinística, sem rede) | "pendente"
+    (nenhum dos dois resolveu — `reason` explica por quê; nunca inventa um
+    valor). Ver asset_registration.py para a lógica completa.
+    """
+    body = request.get_json(silent=True) or {}
+    items = body.get("items") or []
+    if not isinstance(items, list) or not items:
+        return jsonify({"results": []})
+
+    results = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        uid = (item.get("unprocessedId") or "").strip()
+        security_type = item.get("securityType") or ""
+        if not uid:
+            continue
+        try:
+            proposal = asset_registration.propose_registration(uid, security_type)
+        except Exception:
+            import traceback, logging
+            logging.error("registration_preview error for %r: %s", uid, traceback.format_exc())
+            results.append({"unprocessedId": uid, "tier": "pendente", "beehusName": None,
+                            "payload": None, "reason": "erro interno ao propor cadastro",
+                            "warnings": []})
+            continue
+        results.append(proposal.to_dict())
+
+    return jsonify({"results": results})
+
+
+@bp.route("/api/controlpanel/create-securities", methods=["POST"])
+def create_securities():
+    """Cria de verdade os ativos revisados no modal "Cadastrar ativos" e, para
+    cada um criado com sucesso, mapeia a posição não processada a ele —
+    fecha o ciclo detectar-não-match -> cadastrar -> mapear dentro do
+    Mapeamento, sem precisar do script `scripts/create_securities.py` à parte.
+
+    Body: { "companyId": str, "items": [{"unprocessedId": str, "payload": {...}}, ...] }
+    Returns: { "results": [ {unprocessedId, status, beehusName, securityId?,
+                              reason?, error?}, ... ], "mapped": int, "mapError": str|None }
+
+    Dedupe: cada item roda `check_similar_securities` + `create_security_raw`
+    (mesma lógica exata já validada ao vivo em
+    scripts/create_securities.py:57-110 — só identificador EXATO bloqueia
+    como duplicata real). Mapeamento: mesmo endpoint/lógica de
+    `apply_mapping` acima (`beehus_catalog.security_mapping_id` +
+    `update_security_mappings`), disparado só para os itens `status=="created"`.
+    """
+    body = request.get_json(silent=True) or {}
+    company_id = (body.get("companyId") or "").strip()
+    items = body.get("items") or []
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items deve ser uma lista não vazia"}), 400
+    if company_id and not company_visible(company_id):
+        return jsonify({"error": "company not visible"}), 403
+
+    results = []
+    to_map = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        uid = (item.get("unprocessedId") or "").strip()
+        payload = item.get("payload") or {}
+        label = payload.get("beehusName") or uid
+        if not uid or not payload:
+            results.append({"unprocessedId": uid, "status": "failed",
+                            "beehusName": label, "error": "payload vazio"})
+            continue
+        # create_registration_payload nunca propaga BeehusAPIError/BeehusAuthError
+        # — sempre devolve {"status": "failed", "error": ...} (mesmo padrão de
+        # scripts/create_securities.py), então não precisa de try/except aqui.
+        results.append(asset_registration.create_registration_payload(uid, payload))
+        if result.get("status") == "created" and result.get("securityId"):
+            to_map.append({"from": uid, "to": result["securityId"]})
+
+    mapped = 0
+    map_error = None
+    if to_map and company_id:
+        mapping_id = beehus_catalog.security_mapping_id(company_id)
+        if mapping_id:
+            try:
+                update_security_mappings(mapping_id, mappings_to_include=to_map, mappings_to_exclude=[])
+                mapped = len(to_map)
+            except (BeehusAuthError, BeehusAPIError) as e:
+                map_error = str(e)
+        else:
+            map_error = "securityMappingId not found for this company"
+    elif to_map and not company_id:
+        map_error = "companyId ausente — ativos criados mas não mapeados"
+
+    return jsonify({"results": results, "mapped": mapped, "mapError": map_error})
 
 
 @bp.route("/api/controlpanel/process-all-wallets", methods=["POST"])
