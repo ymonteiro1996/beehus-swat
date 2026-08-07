@@ -101,6 +101,14 @@ def create_security_raw(payload: dict, *, timeout: int = 30) -> dict:
     return request("POST", "/beehus/securities", json=payload, timeout=timeout)
 
 
+def update_security_raw(security_id: str, payload: dict, *, timeout: int = 30) -> dict:
+    """PATCH /beehus/securities/{securityId} — partial update of an existing
+    security. Confirmed live: only the fields passed in `payload` are changed;
+    everything else on the document is left untouched.
+    """
+    return request("PATCH", f"/beehus/securities/{security_id}", json=payload, timeout=timeout)
+
+
 _PRICING_TYPES = ("B1", "B2", "C1", "C2", "C3")
 
 
