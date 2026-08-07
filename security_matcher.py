@@ -1860,8 +1860,18 @@ def _score_candidate(sec, features, security_type):
             and len(features[f"generic_code_{_i}"]) >= 4
         )
         if _gc_exact:
-            score += 50
-            matched_on.append("mainId/generic=")
+            # If the generic token also came from the complement file, attribute
+            # it with the higher complement weight so the tooltip is accurate.
+            _gc_as_complement = any(
+                (features.get(f"complement_{_ci}") or "").lower() == sec_main_lower
+                for _ci in range(1, 4)
+            )
+            if _gc_as_complement:
+                score += 300
+                matched_on.append("mainId/complement=")
+            else:
+                score += 50
+                matched_on.append("mainId/generic=")
         else:
             score += 30
             matched_on.append("mainId/generic")
@@ -2079,6 +2089,7 @@ _BREAKDOWN_LABELS = {
     "mainId/code":       (45, "Código interno encontrado no mainId"),
     "mainId/external":   (40, "Código externo encontrado no mainId"),
     "mainId/fund_code":  (35, "Código do fundo encontrado no mainId"),
+    "mainId/complement=": (300, "Cód. complementar = mainId (exato)"),
     "mainId/generic=":   (50, "Código genérico = mainId (exato)"),
     "mainId/generic":    (30, "Código genérico encontrado no mainId"),
     "maturityDate~missing": (-25, "Vencimento especificado mas candidato sem data cadastrada"),
