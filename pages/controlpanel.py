@@ -1626,15 +1626,26 @@ def match_securities():
             else:
                 feats = match.get("extracted") or {}
             # Complement display tokens: remove injected complement_N (they came back
-            # via combined_feats) then recalculate keeping only tokens not already
-            # captured as a specific feature (exact string match).
+            # via combined_feats) then recalculate. Tokens from the complement file
+            # always show in the complement section even if they were also extracted
+            # as generic_code_N — so we exclude generic_code keys from the
+            # "already captured" exclusion set. After placing them, remove any
+            # generic_code slot that would duplicate a complement display token.
             for _k in ("complement_1", "complement_2", "complement_3"):
                 feats.pop(_k, None)
             if raw_comp_tokens:
-                non_comp_values = {str(v) for v in feats.values() if v}
+                _generic_keys = {"generic_code_1", "generic_code_2", "generic_code_3"}
+                non_comp_values = {str(v) for k, v in feats.items()
+                                   if v and k not in _generic_keys}
                 display_tokens  = [t for t in raw_comp_tokens if t not in non_comp_values]
                 for _ci, _ct in enumerate(display_tokens[:3], 1):
                     feats[f"complement_{_ci}"] = _ct
+                # Remove generic_code slots that are now shown as complement
+                _comp_shown = {feats[f"complement_{_ci}"]
+                               for _ci in range(1, 4) if feats.get(f"complement_{_ci}")}
+                for _gk in ("generic_code_1", "generic_code_2", "generic_code_3"):
+                    if feats.get(_gk) in _comp_shown:
+                        feats.pop(_gk, None)
             results.append({
                 "unprocessedId":  uid,
                 "predicted_type": match["predicted_type"],
