@@ -23,6 +23,10 @@ data/settings.json
 data/*.backup-*.json
 data/precificacao_lists-*.json
 
+# Script outputs in reference/CriarAtivos (date-stamped input/result files)
+reference/CriarAtivos/dados_sec_*.json
+reference/CriarAtivos/resultado_[0-9]*.json
+
 # Captured scenario snapshots (may contain real customer data — review before committing)
 tests/scenarios/T*/
 !tests/scenarios/T9/
