@@ -1138,48 +1138,77 @@ try {
 </div>
 
 <!-- Registration sub-modal -->
-<div id="registration-modal" class="fixed inset-0 bg-black/30 flex items-center justify-center" style="display:none;z-index:70">
-  <div class="bg-white rounded-xl shadow-xl w-full max-w-[95vw] max-h-[90vh] flex flex-col">
-    <div class="flex items-center justify-between px-5 py-3 border-b">
+<!-- Cadastro de ativos — lista única (sem abas), status por linha sempre
+     visível, detalhe expansível por ativo. Toda a derivação de campos
+     (Onboarding API / regras determinísticas) vem pronta do backend via
+     /api/controlpanel/registration-preview — esta tela só exibe, deixa
+     editar, e envia para /api/controlpanel/create-securities. -->
+<div id="registration-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center" style="display:none;z-index:70">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-[1400px] h-[92vh] flex flex-col overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
       <div>
-        <p class="font-bold text-gray-800 text-sm">Cadastrar ativos</p>
-        <p class="text-[10px] text-gray-400">Edite os campos e gere o JSON de cadastro de securities.</p>
+        <h2 class="font-bold text-gray-900 text-base">Cadastro de ativos</h2>
+        <p class="text-xs text-gray-500 mt-0.5">Campos já sugeridos pela Onboarding API / regras automáticas — revise e cadastre.</p>
       </div>
       <div class="flex items-center gap-2">
-        <button onclick="_generateRegistrationJSON()" class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-xs font-semibold">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-          Gerar JSON Cadastro
+        <button id="reg-create-btn" onclick="_createRegisteredSecurities()"
+          class="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold shadow-sm disabled:opacity-50">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+          Cadastrar no sistema
         </button>
-        <button onclick="document.getElementById('registration-modal').style.display='none'" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        <button onclick="_generateRegistrationJSON()"
+          class="flex items-center gap-1.5 px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">
+          Baixar JSON
+        </button>
+        <button onclick="document.getElementById('registration-modal').style.display='none'"
+          class="ml-1 w-8 h-8 flex items-center justify-center text-gray-400 hover:bg-gray-100 rounded-full text-xl">&times;</button>
       </div>
     </div>
-    <div id="reg-toolbar" class="px-5 py-2 border-b bg-gray-50 flex items-center gap-3 text-xs">
-      <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer">
-        <input type="checkbox" onchange="_regSelectAll(this.checked)" title="Selecionar todos" /> Todos
+
+    <div class="px-6 py-3 border-b border-gray-100 bg-gray-50/70 flex items-center gap-3 flex-wrap text-sm">
+      <div id="reg-status-filters" class="flex items-center gap-1"></div>
+      <div class="h-5 border-l border-gray-300"></div>
+      <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer select-none text-xs">
+        <input type="checkbox" id="reg-select-all" onchange="_regToggleAll(this.checked)" /> Selecionar todos
       </label>
-      <span class="border-l pl-3 text-gray-500">Origem: linhas <b>marcadas</b> no Mapeamento</span>
-      <span class="border-l pl-3 flex items-center gap-2">
-        <button onclick="_regBulkSet('securityType')" class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar securityType em lote</button>
-        <button onclick="_regBulkSet('type')"         class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar type em lote</button>
-        <button onclick="_regBulkSet('currency')"     class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar currency em lote</button>
-        <button onclick="_regBulkSet('country')"      class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Aplicar country em lote</button>
-      </span>
-      <span id="reg-count" class="ml-auto text-gray-400"></span>
+      <div class="h-5 border-l border-gray-300"></div>
+      <div class="flex items-center gap-1.5 text-xs">
+        <span class="text-gray-500">Aplicar às selecionadas:</span>
+        <select id="reg-bulk-field" class="border rounded-lg px-2 py-1 bg-white">
+          <option value="securityType">Tipo (securityType)</option>
+          <option value="currency">Moeda (currency)</option>
+          <option value="country">País (country)</option>
+        </select>
+        <input id="reg-bulk-value" placeholder="valor" class="border rounded-lg px-2 py-1 w-28" />
+        <button onclick="_regApplyBulk()" class="px-2.5 py-1 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium text-gray-700">Aplicar</button>
+      </div>
+      <button onclick="_regClearDone()" class="text-xs text-gray-500 hover:text-gray-700 underline">Remover concluídos da lista</button>
+      <span id="reg-count" class="ml-auto text-gray-500 text-xs font-medium"></span>
     </div>
-    <!-- Abas por tipo de ativo (todos os tipos configurados em
-         data/security_type_fields.json). Abas sem ativos ficam desabilitadas.
-         A aba ativa filtra os cards exibidos abaixo. -->
-    <div id="reg-tabs" class="px-3 pt-2 flex flex-wrap gap-1 border-b bg-white"></div>
-    <div class="overflow-auto flex-1 px-3 py-3">
-      <!-- Um "card" por ativo (3 seções): linha 1 = info do ativo (leitura) +
-           seletor de tipo; linha 2 = beehusName; seção 3 = campos do tipo da
-           aba ativa (de data/security_type_fields.json). -->
-      <div id="reg-cards"></div>
-      <p id="reg-msg" class="text-center text-gray-400 py-6" style="display:none">Nenhuma linha marcada — marque as linhas no Mapeamento que deseja cadastrar.</p>
+
+    <div id="reg-create-result" class="mx-6 mt-3 px-4 py-2.5 rounded-lg text-sm" style="display:none"></div>
+
+    <div class="flex-1 overflow-auto px-6 py-3">
+      <table class="w-full text-sm border-separate" style="border-spacing: 0 6px">
+        <thead class="text-[11px] uppercase tracking-wide text-gray-400 text-left">
+          <tr>
+            <th class="px-2 w-8"></th>
+            <th class="px-2 w-32">Status</th>
+            <th class="px-2">Ativo (texto bruto)</th>
+            <th class="px-2 w-44">Tipo</th>
+            <th class="px-2">beehusName</th>
+            <th class="px-2 w-36">Identificador</th>
+            <th class="px-2 w-28">Vencimento</th>
+            <th class="px-2 w-8"></th>
+          </tr>
+        </thead>
+        <tbody id="reg-tbody"></tbody>
+      </table>
+      <p id="reg-msg" class="text-center text-gray-400 py-16 text-sm" style="display:none"></p>
     </div>
-    <!-- Floating tooltip (shared, positioned on hover) -->
-    <div id="reg-tooltip" class="fixed z-[80] px-3 py-2 bg-gray-900 text-white text-[11px] rounded shadow-lg max-w-lg break-words whitespace-pre-wrap font-mono pointer-events-none" style="display:none"></div>
   </div>
+  <!-- Floating tooltip (shared, positioned on hover) -->
+  <div id="reg-tooltip" class="fixed z-[80] px-3 py-2 bg-gray-900 text-white text-[11px] rounded shadow-lg max-w-lg break-words whitespace-pre-wrap font-mono pointer-events-none" style="display:none"></div>
 </div>
 <!-- Security search sub-modal -->
 <div id="security-search-modal" class="fixed inset-0 bg-black/30 flex items-center justify-center" style="display:none;z-index:70">
@@ -2707,6 +2736,22 @@ try {
     if (_secSearchTimer) { clearTimeout(_secSearchTimer); _secSearchTimer = null; }
   }
 
+  // Atalho "Ativo não encontrado — cadastrar novo": marca a linha desta busca
+  // na tabela de Mapeamento (reaproveita o mecanismo de checkbox que
+  // _openRegistrationModal já lê) e abre o modal de cadastro só para ela —
+  // sem precisar fechar a busca, achar a linha na tabela e marcar manualmente.
+  function _openRegistrationModalForUid(uid) {
+    const tr = document.querySelector(`#modal-tbody tr[data-uid="${CSS.escape(uid)}"]`);
+    const cb = tr ? tr.querySelector('input[type="checkbox"]') : null;
+    if (cb) cb.checked = true;
+    _closeSecuritySearch();
+    if (!cb) {
+      alert("Não encontrei essa linha na tabela de Mapeamento (pode ter sido filtrada) — marque-a manualmente e use \"Cadastrar ativos\".");
+      return;
+    }
+    _openRegistrationModal();
+  }
+
   function _setSecuritySearchTab(source) {
     const positions = document.getElementById("sec-search-tab-positions");
     const cadastro  = document.getElementById("sec-search-tab-cadastro");
@@ -2912,7 +2957,11 @@ try {
         }
         if (!results.length) {
           tbody.innerHTML = "";
-          msg.textContent = `Nenhum security encontrado (cache: ${cacheCount}).`;
+          const uidJsEscaped = _escHtml(_secSearchUid || "").replace(/'/g, "\\'");
+          msg.innerHTML = `Nenhum security encontrado (cache: ${cacheCount}).<br>` +
+            `<button onclick="_openRegistrationModalForUid('${uidJsEscaped}')" ` +
+            `class="mt-3 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-semibold">` +
+            `Ativo não encontrado — cadastrar novo</button>`;
           msg.style.display = "block";
           return;
         }
@@ -3367,9 +3416,16 @@ try {
   }
 
   // ── Registration modal (Cadastrar ativos) ────────────────────────────────
-  let _regRows = [];      // editable working set (see _buildRegRow)
+  let _regRows = [];      // editable working set (see _regBuildRow)
   let _regRowSrc = [];    // parallel: original mapping row for each _regRows[i] (for tooltips)
-  let _regActiveTab = null;  // securityType da aba ativa (filtra os cards)
+  let _regStatusFilter = "all";  // "all" | "onboarding" | "rules" | "pendente"
+  let _regExpanded = new Set();  // indices of rows with the detail panel open
+  // unprocessedId -> resposta de /api/controlpanel/registration-preview (Tier 1
+  // Onboarding API / Tier 2 regras determinísticas / Pendente). Populado por
+  // _openRegistrationModal antes de _buildRegRow rodar — só Tier 1 sobrescreve
+  // o que o parser client-side já calcula (Tier 2 client-side já implementa a
+  // mesma fórmula "sem taxa" e não precisa de round-trip ao servidor).
+  let _regPreviewByUid = {};
 
   // Floating tooltip for the unprocessedId cell
   function _regShowTip(e, i) {
@@ -4333,113 +4389,52 @@ try {
     return "";
   }
 
-  // Build a registration working-row from a mapping row. Shape:
-  //   { uid, include,
-  //     asset:  {unprocessedId, securityType, isin, ticker, type, taxId},  // top (info) line, read-only
-  //     securityType,                                                       // editable "tipo de ativo"
-  //     beehusName,                                                         // editable
-  //     values: { <fieldKey>: value } }                                     // editable, keyed by config
-  // `values` keys are the field `key`s from data/security_type_fields.json
-  // (which are also the registration-JSON keys).
-  function _buildRegRow(r) {
-    const uid    = r.unprocessedSecurityId || "";
-    const cand   = r.candidate || {};
-    const ex     = r.extracted || {};
-    const detected = r.type || "";  // classifier securityType (bond/brazilianFund/…)
+  // Tela nova de "Cadastro de ativos" (2026-07-31) — substitui inteiramente o
+  // modal antigo (abas por tipo, cards densos, prompt() nativo pra lote). Não
+  // reaproveita nenhuma lógica de derivação client-side (parsers §15/§16,
+  // canonicalização, _recomputeBondBeehusName) — o backend
+  // (/api/controlpanel/registration-preview, ver asset_registration.py) já
+  // resolve Tier 1 (Onboarding API) e Tier 2 (regras determinísticas)
+  // igualmente bem; esta tela só exibe o resultado numa lista única (sem
+  // abas), com status sempre visível por linha, e deixa editar/completar
+  // antes de enviar pra /api/controlpanel/create-securities.
+  //
+  // Shape de cada _regRows[i]:
+  //   { uid, include, securityType, beehusName, values: {<fieldKey>: value},
+  //     _tier: "onboarding"|"rules"|"pendente", _reason, _warnings,
+  //     _resultStatus: null|"created"|"skipped"|"failed", _resultDetail }
 
-    // Cadeia de parsers MD-conformantes: CDB/LCA/LCI (§15) → CRI/CRA/DEB (§16).
-    const p = _parseUnprocessedId(uid) || _parseCriCraDeb(uid);
-
-    const asset = {
-      unprocessedId: uid,
-      securityType:  detected,
-      isin:          ex.isin || "",
-      ticker:        (p && p.ticker) || ex.ticker || "",
-      type:          (p && p.type)  || ex.type   || "",
-      taxId:         ex.taxId || "",
+  function _regBuildRow(mappingRow, preview) {
+    const uid = mappingRow.unprocessedSecurityId || "";
+    const tier = (preview && preview.tier) || "pendente";
+    const payload = (tier !== "pendente" && preview.payload) || null;
+    const values = {};
+    if (payload) {
+      Object.keys(payload).forEach(k => {
+        if (k !== "securityType" && k !== "beehusName" && k !== "walletIds" && k !== "companyIds") {
+          values[k] = payload[k];
+        }
+      });
+    }
+    const row = {
+      uid,
+      include: true,
+      securityType: (payload && payload.securityType) || mappingRow.type || "otc",
+      beehusName: (payload && preview.beehusName) || "",
+      values,
+      _tier: tier,
+      _reason: (preview && preview.reason) || null,
+      _warnings: (preview && preview.warnings) || [],
+      _resultStatus: null,
+      _resultDetail: "",
     };
-
-    // securityType inicial da linha de cadastro: o parser reconhece RF BR como
-    // bond; caso contrário usa o tipo detectado pelo classificador.
-    const securityType = p ? "bond" : detected;
-
-    let beehusName, values;
-    let fallbackEmissorShort = "";
-    if (p) {
-      beehusName = p.beehusName;
-      values = {
-        type: p.type,
-        ticker: p.ticker || cand.mainId || "",
-        maturityDate: p.maturityIso,
-        indexer: p.indexer,
-        indexerPercentual: p.indexerPercentual,
-        yield: p.yield,
-        currency: "BRL",
-        country: "BR",
-        subscriptionSettlementDays: 0,
-        subscriptionNAVDays: 0,
-        redemptionNAVDays: 0,
-        redemptionSettlementDays: 0,
-      };
-    } else {
-      // Fallback: quando o parser rígido (grade de formatos §15/§16) não casa,
-      // prioriza os campos já extraídos pelo matcher (extract_features, no
-      // security_matcher.py — mesma origem do tooltip de diagnóstico), que são
-      // mais confiáveis do que reprocessar o uid do zero. Heurísticas antigas
-      // (_extractMaturity/_extractIndexerPct/_inferType) só cobrem o que `ex`
-      // não tiver.
-      const instrumentType = _EXTRACTED_INSTRUMENT_TO_TYPE[String(ex.instrument || "").toUpperCase()];
-      const isDeb = ex.instrument === "DEB" || ex.instrument === "DEBENTURE";
-      const inferredType = instrumentType
-        ? (isDeb ? (_isInfraDebenture(uid) ? "infrastructureDebenture" : "debenture") : instrumentType)
-        : _inferType(detected, uid);
-
-      const emissorRaw = ex.issuer || "";
-      fallbackEmissorShort = emissorRaw
-        ? ((isDeb || ex.instrument === "CRI" || ex.instrument === "CRA")
-            ? _getDevedorCanonical(emissorRaw) : _getShortEmissor(emissorRaw))
-        : "";
-
-      const ix = _extractIndexerPct(uid);
-      const indexerVal = ex.indexer || ix.indexer;
-
-      beehusName = cand.beehusName || "";
-      values = {
-        type: inferredType,
-        ticker: cand.mainId || "",
-        maturityDate: ex.maturity_date || _extractMaturity(uid),
-        indexer: indexerVal,
-        indexerPercentual: ix.pct,
-        // ex.rate não distingue spread de percentual do indexador — só dá pra
-        // usar sem ambiguidade quando pré-fixado (o rate É o yield).
-        yield: (indexerVal === "PRE" && ex.rate) ? Number(ex.rate) : null,
-        currency: "BRL",
-        country: "BR",
-        subscriptionSettlementDays: 0,
-        subscriptionNAVDays: 0,
-        redemptionNAVDays: 0,
-        redemptionSettlementDays: 0,
-      };
-    }
-
-    const row = { uid, include: true, asset, securityType, beehusName, values };
-    // Guardados para o recálculo do beehusName ao trocar o `type` no dropdown
-    // (_recomputeBondBeehusName) — evita reprocessar o texto bruto do zero.
-    row._rawUid = uid;
-    row._emissorShort = (p && p.emissorShort) || fallbackEmissorShort || "";
-    if (securityType === "bond" && values.type) {
-      // A partir daqui a fórmula de nome vem sempre de _recomputeBondBeehusName
-      // (beehusName-regra-final.md §4.2-4.4), não do `p.beehusName` do parser —
-      // que ainda reflete a regra antiga (com taxa/rótulo).
-      row.beehusName = _recomputeBondBeehusName(row);
-    }
     _regEnsureDefaults(row);
     return row;
   }
 
   // Ensure `values` has an entry for every field configured for the row's
-  // securityType (so newly-shown fields after a type change start from the
-  // config default). Never clobbers a value already present.
+  // securityType (so switching type starts new fields from the config
+  // default). Never clobbers a value already present.
   function _regEnsureDefaults(row) {
     _regFieldsFor(row.securityType).forEach(f => {
       if (row.values[f.key] === undefined) {
@@ -4449,346 +4444,264 @@ try {
     });
   }
 
-  function _openRegistrationModal() {
-    _renderRegistrationTable();
+  async function _openRegistrationModal() {
     document.getElementById("registration-modal").style.display = "flex";
+    document.getElementById("reg-create-result").style.display = "none";
+    const msg = document.getElementById("reg-msg");
+    document.getElementById("reg-tbody").innerHTML = "";
+    msg.style.display = "block";
+    msg.textContent = "Consultando Onboarding API para os tipos cobertos…";
+
+    // Captura as linhas marcadas AGORA (síncrono, antes de qualquer await) —
+    // não relemos os checkboxes depois da chamada de rede: se algo re-renderizar
+    // a tabela de Mapeamento nesse meio-tempo (poll de TXN, refresh de preço
+    // etc.), o segundo read acharia tudo desmarcado e _regRows ficaria vazio
+    // mesmo com linhas marcadas na tela. `picked` é a fonte da verdade única.
+    const checkedUids = new Set();
+    _visibleCheckedMappingRows().forEach(tr => { if (tr?.dataset?.uid) checkedUids.add(tr.dataset.uid); });
+    const picked = _mappingRows.filter(r => checkedUids.has(r.unprocessedSecurityId));
+
+    _regPreviewByUid = {};
+    if (picked.length) {
+      const r = await api("POST", "/api/controlpanel/registration-preview", {
+        items: picked.map(row => ({ unprocessedId: row.unprocessedSecurityId, securityType: row.type || "" })),
+      });
+      (r.body?.results || []).forEach(p => { _regPreviewByUid[p.unprocessedId] = p; });
+    }
+
+    _regRows = picked.map(row => _regBuildRow(row, _regPreviewByUid[row.unprocessedSecurityId]));
+    _regRowSrc = picked;
+    _regExpanded = new Set();
+    _regStatusFilter = "all";
+    if (!picked.length) {
+      msg.textContent = "Nenhuma linha marcada — marque as linhas no Mapeamento que deseja cadastrar.";
+    }
+    _regRenderTable();
   }
 
-  // rebuild=true reconstrói _regRows a partir das linhas marcadas no Mapeamento;
-  // rebuild=false apenas re-renderiza os cards preservando os _regRows atuais
-  // (usado após trocar o tipo ou aplicar valor em lote, sem perder edições).
-  // Tipos para as abas: todos os tipos configurados (ordem do JSON) MAIS
-  // qualquer tipo presente nos ativos que não esteja configurado (anexado ao
-  // fim) — assim o tipo de um card sempre tem uma aba e nunca some da tela.
-  function _regAllTypes() {
-    const cfg = Object.keys(_secTypeFields || {});
-    const present = [...new Set(_regRows.map(r => r.securityType).filter(Boolean))];
-    if (!cfg.length) return present;
-    return cfg.concat(present.filter(t => !cfg.includes(t)));
-  }
-
-  // Aba padrão = primeira aba com ao menos um ativo (senão a primeira).
-  function _regDefaultTab(types) {
-    const withRows = types.find(t => _regRows.some(r => r.securityType === t));
-    return withRows || types[0] || null;
-  }
-
-  function _regSetTab(t) {
-    _regActiveTab = t;
-    _renderRegistrationTable(false);
-  }
-
-  // Barra de abas: TODOS os tipos configurados; abas sem ativos ficam
-  // desabilitadas (cinza, não clicáveis). A aba ativa fica destacada.
-  function _regRenderTabs(types) {
-    const tabsEl = document.getElementById("reg-tabs");
-    if (!tabsEl) return;
-    tabsEl.innerHTML = types.map(t => {
-      const count  = _regRows.filter(r => r.securityType === t).length;
-      const label  = (_secTypeFields[t] && _secTypeFields[t].label) || t;
-      const active = t === _regActiveTab;
-      if (!count) {
-        return `<span class="px-2.5 py-1 text-[11px] rounded-t text-gray-400 cursor-default"
-          title="Sem ativos deste tipo">${_escHtml(label)} (0)</span>`;
-      }
-      const cls = active
-        ? "bg-white border border-b-white border-gray-300 text-blue-700 font-semibold -mb-px"
-        : "bg-gray-50 border border-transparent text-gray-600 hover:text-blue-600 hover:bg-white";
-      return `<button onclick="_regSetTab('${_escHtml(t).replace(/'/g,"\\'")}')"
-        class="px-2.5 py-1 text-[11px] rounded-t ${cls}">${_escHtml(label)} (${count})</button>`;
+  // Chips de filtro por status (não removem linhas do working set — só
+  // escondem da lista; a contagem de selecionadas continua sobre TODAS).
+  function _regRenderStatusFilters() {
+    const counts = { all: _regRows.length, onboarding: 0, rules: 0, pendente: 0 };
+    _regRows.forEach(r => { if (counts[r._tier] !== undefined) counts[r._tier]++; });
+    const chips = [
+      ["all", "Todos"], ["onboarding", "Onboarding API"], ["rules", "Regra automática"], ["pendente", "Pendente"],
+    ];
+    document.getElementById("reg-status-filters").innerHTML = chips.map(([key, label]) => {
+      const active = _regStatusFilter === key;
+      const cls = active ? "bg-blue-600 text-white" : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-100";
+      return `<button onclick="_regSetStatusFilter('${key}')" class="px-2.5 py-1 rounded-full text-xs font-medium ${cls}">${_escHtml(label)} (${counts[key]})</button>`;
     }).join("");
   }
 
-  function _renderRegistrationTable(rebuild = true) {
-    if (rebuild) {
-      // Only rows whose mapping checkbox is checked AND that are currently
-      // visible in the main Mapeamento table (respects Match mínimo (%) / Tipo /
-      // Identificado filters).
-      const checkedUids = new Set();
-      _visibleCheckedMappingRows().forEach(tr => {
-        if (tr?.dataset?.uid) checkedUids.add(tr.dataset.uid);
-      });
-      const picked = _mappingRows.filter(r => checkedUids.has(r.unprocessedSecurityId));
-      _regRows   = picked.map(_buildRegRow);
-      _regRowSrc = picked;  // keep original mapping rows for tooltip lookup
-      _regActiveTab = null;  // recomputa a aba padrão para o novo conjunto
-    }
+  function _regSetStatusFilter(f) {
+    _regStatusFilter = f;
+    _regRenderTable();
+  }
 
-    const types = _regAllTypes();
-    if (!_regActiveTab || !types.includes(_regActiveTab)) {
-      _regActiveTab = _regDefaultTab(types);
-    }
-    _regRenderTabs(types);
-
-    const container = document.getElementById("reg-cards");
-    const msg     = document.getElementById("reg-msg");
-    const countEl = document.getElementById("reg-count");
-    countEl.textContent = `${_regRows.length} linha${_regRows.length !== 1 ? "s" : ""}`;
+  function _regRenderTable() {
+    _regRenderStatusFilters();
+    const tbody = document.getElementById("reg-tbody");
+    const msg = document.getElementById("reg-msg");
     if (!_regRows.length) {
-      container.innerHTML = "";
+      tbody.innerHTML = "";
+      msg.textContent = "Nenhuma linha marcada — marque as linhas no Mapeamento que deseja cadastrar.";
       msg.style.display = "block";
+      _regUpdateCount();
+      return;
+    }
+    const visible = _regRows.map((r, i) => ({ r, i }))
+      .filter(({ r }) => _regStatusFilter === "all" || r._tier === _regStatusFilter);
+    if (!visible.length) {
+      tbody.innerHTML = "";
+      msg.textContent = "Nenhum ativo neste filtro.";
+      msg.style.display = "block";
+      _regUpdateCount();
       return;
     }
     msg.style.display = "none";
-    // Renderiza só os cards da aba ativa, preservando o índice GLOBAL em
-    // _regRows (os handlers — _regSetVal, _regSetType… — usam esse índice).
-    const cards = _regRows
-      .map((r, i) => ({ r, i }))
-      .filter(({ r }) => r.securityType === _regActiveTab)
-      .map(({ r, i }) => _buildRegCardHtml(r, i));
-    container.innerHTML = cards.length
-      ? cards.join("")
-      : `<p class="text-center text-gray-400 py-6 text-xs">Nenhum ativo nesta aba.</p>`;
+    tbody.innerHTML = visible.map(({ r, i }) => _regBuildRowHtml(r, i)).join("");
     _regUpdateCount();
   }
 
-  // Renderiza um card (3 seções) para o ativo i:
-  //   linha 1 = info do ativo (leitura) + seletor de tipo de ativo;
-  //   linha 2 = beehusName;
-  //   seção 3 = campos específicos do tipo (da aba ativa), ou aviso quando o
-  //             tipo ainda não tem campos configurados.
-  function _buildRegCardHtml(r, i) {
-    const a = r.asset || {};
-    const info = (label, val) =>
-      `<span class="whitespace-nowrap"><span class="text-gray-400">${label}:</span> ` +
-      `<span class="text-gray-700">${val ? _escHtml(val) : "—"}</span></span>`;
+  function _regStatusBadgeHtml(r) {
+    if (r._resultStatus === "created")
+      return `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">✓ Criado</span>`;
+    if (r._resultStatus === "skipped")
+      return `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-gray-200 text-gray-600 cursor-help" title="${_escHtml(r._resultDetail)}">↷ Já existe</span>`;
+    if (r._resultStatus === "failed")
+      return `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 cursor-help" title="${_escHtml(r._resultDetail)}">✗ Falhou</span>`;
+    if (r._tier === "onboarding")
+      return `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700" title="Campos vieram da Onboarding API (Anbima/B3/CVM)">Onboarding</span>`;
+    if (r._tier === "rules")
+      return `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700" title="Campos calculados por regra determinística, sem IA">Regra</span>`;
+    return `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700 cursor-help" title="${_escHtml(r._reason || 'não foi possível confirmar os campos automaticamente')}">Pendente</span>`;
+  }
 
-    // Dropdown "tipo de ativo" (securityType). Usa a lista global; se ainda não
-    // carregou, mostra ao menos o tipo atual para não esvaziar o select.
-    const stypeList = _securityTypes.length ? _securityTypes : [r.securityType];
-    const typeOpts = stypeList
-      .map(t => `<option value="${_escHtml(t)}"${t === r.securityType ? " selected" : ""}>${_escHtml(t)}</option>`)
-      .join("");
+  function _regFieldInputHtml(r, i, f) {
+    const v = r.values[f.key];
+    const base = "border rounded-lg px-2 py-1.5 text-xs w-full bg-white focus:outline-none focus:ring-2 focus:ring-blue-400";
+    let input;
+    if (f.input === "select") {
+      const opts = (f.options || []).map(o =>
+        `<option value="${_escHtml(o.value)}"${v === o.value ? " selected" : ""}>${_escHtml(o.label)}</option>`).join("");
+      input = `<select class="${base}" onchange="_regSetVal(${i},'${f.key}',this.value)">
+        <option value=""${!v ? " selected" : ""}></option>${opts}</select>`;
+    } else if (f.input === "number") {
+      input = `<input type="number" step="any" value="${v ?? ""}" class="${base}"
+        oninput="_regSetVal(${i},'${f.key}',this.value===''?null:Number(this.value))" />`;
+    } else if (f.input === "date") {
+      input = `<input type="date" value="${_escHtml(v || "")}" class="${base}" oninput="_regSetVal(${i},'${f.key}',this.value)" />`;
+    } else {
+      input = `<input type="text" value="${_escHtml(v ?? "")}" class="${base}" oninput="_regSetVal(${i},'${f.key}',this.value)" />`;
+    }
+    const reqMark = f.required ? '<span class="text-red-500"> *</span>' : "";
+    return `<label class="flex flex-col gap-1"${f.title ? ` title="${_escHtml(f.title)}"` : ""}>
+      <span class="text-[10px] uppercase tracking-wide text-gray-400 font-medium">${_escHtml(f.label)}${reqMark}</span>
+      ${input}
+    </label>`;
+  }
 
-    const base = "border rounded px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-400";
-    const fieldsHtml = _regFieldsFor(r.securityType).map(f => {
-      const v = r.values[f.key];
-      const w = f.width ? ` style="min-width:${f.width}px"` : "";
-      const titleAttr = f.title ? ` title="${_escHtml(f.title)}"` : "";
-      let input;
-      if (f.input === "select") {
-        const opts = (f.options || []).map(o =>
-          `<option value="${_escHtml(o.value)}"${v === o.value ? " selected" : ""}>${_escHtml(o.label)}</option>`
-        ).join("");
-        input = `<select${w} class="${base}" onchange="_regOnFieldChange(${i},'${f.key}',this.value)">
-          <option value=""${!v ? " selected" : ""}></option>
-          ${opts}
-        </select>`;
-      } else if (f.input === "number") {
-        input = `<input type="number" step="any" value="${v ?? ""}"${w}
-          class="${base} text-right"
-          oninput="_regSetVal(${i},'${f.key}',this.value===''?null:Number(this.value))" />`;
-      } else if (f.input === "date") {
-        input = `<input type="date" value="${_escHtml(v || "")}"${w}
-          class="${base}" oninput="_regSetVal(${i},'${f.key}',this.value)" />`;
-      } else {
-        input = `<input type="text" value="${_escHtml(v ?? "")}"${w}
-          class="${base}" oninput="_regSetVal(${i},'${f.key}',this.value)" />`;
-      }
-      const reqMark = f.required ? '<span class="text-red-500"> *</span>' : "";
-      return `<label class="flex flex-col gap-0.5"${titleAttr}>
-        <span class="text-[9px] uppercase tracking-wide text-gray-400">${_escHtml(f.label)}${reqMark}</span>
-        ${input}
-      </label>`;
-    }).join("");
+  // Duas <tr>: resumo (sempre visível) + detalhe (só quando expandido).
+  function _regBuildRowHtml(r, i) {
+    const typeOpts = (_securityTypes.length ? _securityTypes : [r.securityType]).map(t =>
+      `<option value="${_escHtml(t)}"${t === r.securityType ? " selected" : ""}>${_escHtml((_secTypeFields[t] && _secTypeFields[t].label) || t)}</option>`).join("");
+    const identifier = r.values.ticker || r.values.isIn || r.values.taxId || "";
+    const maturity = r.values.maturityDate ? _isoToDdmmyyyy(r.values.maturityDate) : "";
+    const expanded = _regExpanded.has(i);
 
-    const typeLabel = (_secTypeFields[r.securityType] && _secTypeFields[r.securityType].label) || r.securityType;
-    const fieldsSection = fieldsHtml
-      ? `<div class="flex items-end gap-2 px-3 py-2 flex-wrap border-t border-gray-100 bg-gray-50/60">
-           ${fieldsHtml}
-         </div>`
-      : `<div class="px-3 py-2 border-t border-gray-100 bg-gray-50/60 text-[10px] text-gray-400 italic">
-           Campos de "${_escHtml(typeLabel)}" ainda não definidos.
-         </div>`;
+    const summary = `
+      <tr class="bg-white hover:bg-gray-50/60 shadow-sm">
+        <td class="px-2 py-2.5 rounded-l-xl"><input type="checkbox" class="reg-include" ${r.include ? "checked" : ""}
+          onchange="_regRows[${i}].include=this.checked;_regUpdateCount()" /></td>
+        <td class="px-2 py-2.5">${_regStatusBadgeHtml(r)}</td>
+        <td class="px-2 py-2.5 font-mono text-[11px] text-gray-500 truncate max-w-[240px] cursor-help"
+          onmouseenter="_regShowTip(event, ${i})" onmousemove="_regMoveTip(event)" onmouseleave="_regHideTip()">${_escHtml(r.uid)}</td>
+        <td class="px-2 py-2.5">
+          <select class="border rounded-lg px-2 py-1 text-xs w-full bg-white" onchange="_regSetSecurityType(${i}, this.value)">${typeOpts}</select>
+        </td>
+        <td class="px-2 py-2.5">
+          <input type="text" value="${_escHtml(r.beehusName)}" placeholder="${r._tier === 'pendente' ? 'preencher manualmente' : ''}"
+            class="border rounded-lg px-2 py-1.5 text-xs w-full" oninput="_regRows[${i}].beehusName=this.value" />
+        </td>
+        <td class="px-2 py-2.5 text-xs text-gray-600 font-mono truncate">${identifier ? _escHtml(identifier) : '<span class="text-gray-300">—</span>'}</td>
+        <td class="px-2 py-2.5 text-xs text-gray-600">${maturity || '<span class="text-gray-300">—</span>'}</td>
+        <td class="px-2 py-2.5 rounded-r-xl text-center">
+          <button onclick="_regToggleExpand(${i})" class="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full">${expanded ? "&#9650;" : "&#9660;"}</button>
+        </td>
+      </tr>`;
+    if (!expanded) return summary;
 
-    return `
-    <div class="border border-gray-200 rounded-lg mb-2 bg-white">
-      <!-- Linha 1: informações do ativo (leitura) + seletor de tipo -->
-      <div class="flex items-center gap-3 px-3 py-1.5 border-b border-gray-100 bg-gray-50">
-        <input type="checkbox" class="reg-include" ${r.include ? "checked" : ""}
-          onchange="_regRows[${i}].include=this.checked;_regUpdateCount()" />
-        <span class="font-mono text-[10px] text-gray-500 truncate max-w-[280px] cursor-help"
-          onmouseenter="_regShowTip(event, ${i})" onmousemove="_regMoveTip(event)" onmouseleave="_regHideTip()"
-        >${_escHtml(a.unprocessedId)}</span>
-        <label class="flex items-center gap-1 whitespace-nowrap">
-          <span class="text-[9px] uppercase tracking-wide text-blue-500 font-semibold">tipo</span>
-          <select class="${base} font-semibold bg-white" onchange="_regSetType(${i}, this.value)">${typeOpts}</select>
-        </label>
-        <span class="flex items-center gap-3 text-[10px] ml-auto flex-wrap justify-end">
-          ${info("type", a.type)}
-          ${info("ISIN", a.isin)}
-          ${info("ticker", a.ticker)}
-          ${info("taxId", a.taxId)}
-        </span>
-      </div>
-      <!-- Linha 2: beehusName -->
-      <div class="px-3 py-2">
-        <label class="flex flex-col gap-0.5">
-          <span class="text-[9px] uppercase tracking-wide text-gray-400">beehusName</span>
-          <input type="text" value="${_escHtml(r.beehusName ?? "")}"
-            class="${base} w-full" oninput="_regRows[${i}].beehusName=this.value" />
-        </label>
-      </div>
-      <!-- Seção 3: campos do tipo (variam conforme a aba) -->
-      ${fieldsSection}
-    </div>`;
+    const warningsHtml = (r._tier === "pendente" && r._reason)
+      ? `<div class="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">⚠ ${_escHtml(r._reason)}</div>`
+      : (r._warnings && r._warnings.length)
+        ? `<div class="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">${r._warnings.map(w => `⚠ ${_escHtml(w)}`).join("<br>")}</div>`
+        : "";
+    const fields = _regFieldsFor(r.securityType);
+    const fieldsHtml = fields.length
+      ? `<div class="grid grid-cols-4 gap-3">${fields.map(f => _regFieldInputHtml(r, i, f)).join("")}</div>`
+      : `<p class="text-xs text-gray-400 italic">Nenhum campo adicional configurado para este tipo.</p>`;
+
+    return summary + `
+      <tr>
+        <td colspan="8" class="px-2 pb-3 pt-0">
+          <div class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 -mt-1.5">
+            ${warningsHtml}${fieldsHtml}
+          </div>
+        </td>
+      </tr>`;
+  }
+
+  function _regToggleExpand(i) {
+    if (_regExpanded.has(i)) _regExpanded.delete(i); else _regExpanded.add(i);
+    _regRenderTable();
   }
 
   function _regSetVal(i, key, value) {
     if (_regRows[i]) _regRows[i].values[key] = value;
   }
 
-  // Setter para campos com efeito colateral no beehusName sugerido (hoje: `type`
-  // em bond). Sempre sobrescreve o beehusName atual, mesmo se editado manualmente
-  // pelo usuário — decisão explícita (2026-07-03): trocar o subtipo sempre
-  // recalcula a sugestão, não preserva edição anterior.
-  function _regOnFieldChange(i, key, value) {
-    const row = _regRows[i];
-    if (!row) return;
-    row.values[key] = value;
-    if (key === "type" && row.securityType === "bond") {
-      row.beehusName = _recomputeBondBeehusName(row);
-    }
-    _renderRegistrationTable(false);
-  }
-
-  // Prefixo de exibição por `type` de bond — beehusName-regra-final.md §4.2-4.4.
-  const _BOND_TYPE_PREFIX = {
-    cdb: "CDB", cra: "CRA", cri: "CRI", lca: "LCA", lci: "LCI", lcd: "LCD",
-    lf: "LF", "lf-sub": "LF", lig: "LIG", lc: "LC", ccb: "CCB",
-    debenture: "DEB", infrastructureDebenture: "DEB", np: "NP",
-  };
-  // Tipos sem emissor no nome (§4.2, nota LIG/NP).
-  const _BOND_TYPE_NO_EMISSOR = new Set(["lig", "np"]);
-  // Mapa do `instrument` já extraído por extract_features (security_matcher.py,
-  // via _BOND_INSTRUMENT_RE) para o `type` do dropdown — usado para pré-
-  // selecionar o subtipo quando o parser rígido (§15/§16) não reconhece o
-  // formato bruto, mas o matcher já identificou o instrumento com confiança.
-  // CPRF, FIDC, LFSN, LFS, FND não têm correspondência confiável no domínio de
-  // 20 tipos — ficam de fora de propósito (dropdown fica em branco nesses casos).
-  const _EXTRACTED_INSTRUMENT_TO_TYPE = {
-    CDB: "cdb", CRA: "cra", CRI: "cri", LCA: "lca", LCI: "lci", LCD: "lcd",
-    CCB: "ccb", LF: "lf", LIG: "lig", CDCA: "cd",
-    DEB: "debenture", DEBENTURE: "debenture",  // desambiguado p/ infrastructureDebenture em _buildRegRow
-  };
-  // Tipos sem fórmula definida (gap documentado) — beehusName = texto bruto do
-  // ativo, sem transformação (decisão do usuário, 2026-07-03).
-  const _BOND_TYPE_PASSTHROUGH = new Set(["inflation", "precatorio", "over"]);
-
-  // Limpeza de nome para bond internacional (fixed/floating) — §4.1: ponto→vírgula
-  // em taxas, remove " - " antes de taxa, remove sufixo ISIN, data → inglês.
-  function _cleanOffshoreBondName(raw) {
-    let s = String(raw || "");
-    s = s.replace(/(\d+)\.(\d+)/g, "$1,$2");
-    s = s.replace(/\s+-\s+(?=\d+[.,]\d+)/g, " ");
-    s = s.replace(/\s*-\s*[A-Z]{2}[A-Z0-9]{10}\s*$/, "");
-    const EN = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/, (_, y, m, d) => `${d}/${EN[parseInt(m, 10)]}/${y}`);
-    s = s.replace(/\b(\d{1,2})-(\d{2})-(\d{4})\b/, (_, d, m, y) => `${d}/${EN[parseInt(m, 10)]}/${y}`);
-    return s.trim();
-  }
-
-  // Recalcula o beehusName sugerido de uma linha `bond` para o `type` selecionado
-  // no dropdown. Usa o emissor já extraído na montagem da linha (`row._emissorShort`)
-  // e a data/indexador já em `row.values` — não reprocessa o texto bruto do zero.
-  function _recomputeBondBeehusName(row) {
-    const type = row.values.type;
-    const rawUid = row._rawUid || row.uid || "";
-    if (!type) return rawUid;
-    if (_BOND_TYPE_PASSTHROUGH.has(type)) return rawUid;
-    if (type === "fixed" || type === "floating") return _cleanOffshoreBondName(rawUid);
-
-    const emissorShort = row._emissorShort || "";
-    const ddmmyyyy = _isoToDdmmyyyy(row.values.maturityDate || "");
-    const datePt = ddmmyyyy ? _dateToPtAbbr(ddmmyyyy) : "";
-    const isPre = row.values.indexer === "PRE";
-
-    let prefix;
-    if (type === "cd") {
-      prefix = /\bCDCA\b/i.test(rawUid) ? "CDCA" : "CD";
-    } else {
-      prefix = _BOND_TYPE_PREFIX[type] || type.toUpperCase();
-    }
-
-    const parts = [prefix];
-    if (!_BOND_TYPE_NO_EMISSOR.has(type) && emissorShort) parts.push(emissorShort);
-    if (isPre) parts.push("Pré");
-    if (datePt) parts.push(datePt);
-    return parts.join(" ").replace(/\s+/g, " ").trim();
-  }
-
-  // Troca o securityType (tipo de ativo) de um card e re-renderiza para exibir
-  // os campos daquele tipo (preservando valores das chaves em comum).
-  function _regSetType(i, newType) {
+  function _regSetSecurityType(i, newType) {
     const row = _regRows[i];
     if (!row) return;
     row.securityType = newType;
     _regEnsureDefaults(row);
-    // Segue o card para a aba do novo tipo (senão ele "sumiria" da aba atual).
-    _regActiveTab = newType;
-    _renderRegistrationTable(false);
+    _regRenderTable();
   }
 
-  function _regSelectAll(checked) {
+  function _regToggleAll(checked) {
     _regRows.forEach(r => r.include = checked);
-    document.querySelectorAll("#reg-cards input.reg-include").forEach(cb => cb.checked = checked);
+    document.querySelectorAll("#reg-tbody input.reg-include").forEach(cb => cb.checked = checked);
     _regUpdateCount();
   }
 
   function _regUpdateCount() {
     const n = _regRows.filter(r => r.include).length;
-    document.getElementById("reg-count").textContent = `${n} de ${_regRows.length} selecionado${n !== 1 ? "s" : ""}`;
+    document.getElementById("reg-count").textContent = `${n} de ${_regRows.length} selecionada${n !== 1 ? "s" : ""}`;
+    const allCb = document.getElementById("reg-select-all");
+    if (allCb) allCb.checked = _regRows.length > 0 && n === _regRows.length;
   }
 
-  // Aplica um valor a todas as linhas marcadas. `securityType` troca o tipo de
-  // ativo (e materializa os defaults do novo tipo); os demais campos escrevem em
-  // `values[field]` (afetam só as linhas cujo tipo expõe aquele campo).
-  function _regBulkSet(field) {
-    const v = prompt(`Aplicar valor de "${field}" a todas as linhas marcadas:`);
-    if (v === null) return;
+  // Sem prompt() nativo: lê o campo/valor da mini-toolbar e aplica só às
+  // linhas marcadas (`include`). Só campos estruturais comuns a qualquer
+  // securityType (mudar `type` em lote não faz sentido — cada securityType
+  // tem seu próprio enum de `type`).
+  function _regApplyBulk() {
+    const field = document.getElementById("reg-bulk-field").value;
+    const valueEl = document.getElementById("reg-bulk-value");
+    const value = valueEl.value.trim();
+    if (!value) return;
     _regRows.forEach(r => {
       if (!r.include) return;
-      if (field === "securityType") { r.securityType = v; _regEnsureDefaults(r); }
-      else { r.values[field] = v; }
+      if (field === "securityType") { r.securityType = value; _regEnsureDefaults(r); }
+      else { r.values[field] = value; }
     });
-    // Mudança de tipo em lote move os cards para a aba do novo tipo.
-    if (field === "securityType" && v) _regActiveTab = v;
-    _renderRegistrationTable(false);
+    valueEl.value = "";
+    _regRenderTable();
+  }
+
+  function _regClearDone() {
+    _regRows = _regRows.filter(r => r._resultStatus !== "created" && r._resultStatus !== "skipped");
+    _regRenderTable();
+  }
+
+  // Estruturais (sempre presentes), depois os campos configurados para o
+  // securityType — cada campo controla o próprio envio via `include`:
+  //   always    → sempre envia (usa default quando vazio);
+  //   ifPresent → só envia quando preenchido.
+  // `transform: upperIndexer` normaliza indexer p/ MAIÚSCULAS (IPC-A→IPCA).
+  // Usado tanto por "Baixar JSON" quanto por "Cadastrar no sistema" — as duas
+  // ações partem exatamente do mesmo payload, só muda o destino.
+  function _buildRegistrationEntry(r) {
+    const entry = {
+      beehusName:   r.beehusName || "",
+      securityType: r.securityType || "",
+    };
+    _regFieldsFor(r.securityType).forEach(f => {
+      let v = r.values[f.key];
+      if (f.transform === "upperIndexer") {
+        v = String(v || "").toUpperCase().replace("IPC-A", "IPCA");
+      }
+      const isEmpty = (v === null || v === undefined || v === "");
+      if (f.input === "number") {
+        if (f.include === "always")  entry[f.key] = isEmpty ? (f.default ?? 0) : Number(v);
+        else if (!isEmpty)           entry[f.key] = Number(v);
+      } else {  // text | date
+        if (f.include === "always")  entry[f.key] = isEmpty ? (f.default ?? "") : v;
+        else if (!isEmpty)           entry[f.key] = v;
+      }
+    });
+    entry.walletIds  = [];
+    entry.companyIds = [];
+    entry.feederIds  = [];
+    return entry;
   }
 
   function _generateRegistrationJSON() {
     const selected = _regRows.filter(r => r.include);
     if (!selected.length) { alert("Nenhuma linha selecionada."); return; }
 
-    const payload = selected.map(r => {
-      // Estruturais (sempre presentes), depois os campos configurados para o
-      // securityType — cada campo controla o próprio envio via `include`:
-      //   always    → sempre envia (usa default quando vazio);
-      //   ifPresent → só envia quando preenchido.
-      // `transform: upperIndexer` normaliza indexer p/ MAIÚSCULAS (IPC-A→IPCA).
-      const entry = {
-        beehusName:   r.beehusName || "",
-        securityType: r.securityType || "",
-      };
-      _regFieldsFor(r.securityType).forEach(f => {
-        let v = r.values[f.key];
-        if (f.transform === "upperIndexer") {
-          v = String(v || "").toUpperCase().replace("IPC-A", "IPCA");
-        }
-        const isEmpty = (v === null || v === undefined || v === "");
-        if (f.input === "number") {
-          if (f.include === "always")  entry[f.key] = isEmpty ? (f.default ?? 0) : Number(v);
-          else if (!isEmpty)           entry[f.key] = Number(v);
-        } else {  // text | date
-          if (f.include === "always")  entry[f.key] = isEmpty ? (f.default ?? "") : v;
-          else if (!isEmpty)           entry[f.key] = v;
-        }
-      });
-      entry.walletIds  = [];
-      entry.companyIds = [];
-      entry.feederIds  = [];
-      return entry;
-    });
+    const payload = selected.map(_buildRegistrationEntry);
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url  = URL.createObjectURL(blob);
@@ -4797,6 +4710,72 @@ try {
     a.download = `registration_${_currentCompanyId}_${_currentDate}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  // "Cadastrar no sistema" — cria de verdade via API (check-similar-securities
+  // + create, com dedupe por identificador exato — mesma lógica já validada em
+  // scripts/create_securities.py) e, para cada criado com sucesso, mapeia a
+  // posição não processada ao security novo (fecha o ciclo do Mapeamento sem
+  // precisar reabrir o modal). Escrita em produção — sempre com revisão humana
+  // prévia (a lista já está na tela, editável, antes deste clique). Ao
+  // terminar, o status de cada linha é atualizado NA PRÓPRIA LINHA (✓/↷/✗) em
+  // vez de sumir da tela — "Remover concluídos da lista" limpa quando quiser.
+  async function _createRegisteredSecurities() {
+    const selected = _regRows.filter(r => r.include);
+    if (!selected.length) { alert("Nenhuma linha selecionada."); return; }
+    if (!confirm(`Cadastrar ${selected.length} ativo(s) de verdade no Beehus (produção)? Essa ação não é reversível pelo app.`)) return;
+
+    const btn = document.getElementById("reg-create-btn");
+    const resultEl = document.getElementById("reg-create-result");
+    btn.disabled = true;
+    resultEl.style.display = "block";
+    resultEl.className = "mx-6 mt-3 px-4 py-2.5 rounded-lg text-sm bg-gray-100 text-gray-600";
+    resultEl.textContent = "Cadastrando…";
+
+    const items = selected.map(r => ({ unprocessedId: r.uid, payload: _buildRegistrationEntry(r) }));
+
+    try {
+      const r = await api("POST", "/api/controlpanel/create-securities",
+        { companyId: _currentCompanyId || "", items });
+      if (r.status === 401) {
+        alert("Token Beehus não está carregado ou foi rejeitado.\nClique no badge \"Token\" no topo desta página e cole o token do dia.");
+        return;
+      }
+      if (!r.ok) {
+        resultEl.className = "mx-6 mt-3 px-4 py-2.5 rounded-lg text-sm bg-red-50 text-red-700";
+        resultEl.textContent = `Falha: ${r.body?.error || `HTTP ${r.status}`}`;
+        return;
+      }
+      const data = r.body || {};
+      const results = data.results || [];
+      const byUid = {};
+      results.forEach(res => { byUid[res.unprocessedId] = res; });
+      _regRows.forEach(row => {
+        const res = byUid[row.uid];
+        if (!res) return;
+        row._resultStatus = res.status;
+        row._resultDetail = res.status === "created" ? `securityId: ${res.securityId || "—"}`
+          : res.status === "skipped" ? (res.reason || (res.similar || []).join(", "))
+          : (res.error || "");
+      });
+
+      const created = results.filter(x => x.status === "created").length;
+      const skipped = results.filter(x => x.status === "skipped").length;
+      const failed  = results.filter(x => x.status === "failed").length;
+      resultEl.className = "mx-6 mt-3 px-4 py-2.5 rounded-lg text-sm " + (failed ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700");
+      let summary = `Criados: ${created} · Já existiam: ${skipped} · Falhas: ${failed}`;
+      if (typeof data.mapped === "number") summary += ` · Mapeados no Mapeamento: ${data.mapped}`;
+      if (data.mapError) summary += ` (erro ao mapear: ${_escHtml(data.mapError)})`;
+      resultEl.textContent = summary;
+
+      _regRenderTable();
+      // A tabela de Mapeamento não se atualiza sozinha aqui — mesmo
+      // comportamento já existente em _applyMappingDirect(); o usuário roda o
+      // match de novo (ou reabre o modal) pra ver o status atualizado.
+    } finally {
+      Token.refresh();
+      btn.disabled = false;
+    }
   }
 
   // Colunas Carteira/Empresa (só no modo cross-empresa) — substituem PU/Preço,

@@ -51,12 +51,68 @@
         { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionSettlementDays" }
       ]
     },
-    "brazilianFund":           { "label": "Fundo Brasileiro",          "fields": [] },
+    "brazilianFund": {
+      "label": "Fundo Brasileiro",
+      "fields": [
+        { "key": "taxId",        "label": "taxId (CNPJ)", "input": "text",   "include": "always", "required": true, "width": 140 },
+        { "key": "currency",     "label": "currency",     "input": "text",   "include": "always", "required": true, "default": "BRL", "width": 64 },
+        { "key": "subscriptionSettlementDays", "label": "subSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionSettlementDays" },
+        { "key": "subscriptionNAVDays",        "label": "subND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionNAVDays" },
+        { "key": "redemptionNAVDays",          "label": "redND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionNAVDays" },
+        { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionSettlementDays" }
+      ]
+    },
     "fund":                    { "label": "Fundo",                     "fields": [] },
-    "stockEtf":                { "label": "Ação / ETF",                "fields": [] },
+    "stockEtf": {
+      "label": "Ação / ETF",
+      "fields": [
+        { "key": "ticker",       "label": "ticker",   "input": "text", "include": "always", "required": true, "width": 100 },
+        { "key": "exchange",     "label": "exchange", "input": "text", "include": "always", "required": true, "width": 80, "title": "código MIC (BVMF, XNYS, XNAS...)" },
+        { "key": "currency",     "label": "currency", "input": "text", "include": "always", "required": true, "default": "BRL", "width": 64 },
+        { "key": "subscriptionSettlementDays", "label": "subSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionSettlementDays" },
+        { "key": "subscriptionNAVDays",        "label": "subND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionNAVDays" },
+        { "key": "redemptionNAVDays",          "label": "redND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionNAVDays" },
+        { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionSettlementDays" }
+      ]
+    },
     "options":                 { "label": "Opções",                    "fields": [] },
-    "futures":                 { "label": "Futuros",                   "fields": [] },
-    "otc":                     { "label": "OTC",                       "fields": [] },
+    "futures": {
+      "label": "Futuros",
+      "fields": [
+        { "key": "ticker",       "label": "ticker",   "input": "text", "include": "always", "required": true, "width": 100 },
+        { "key": "maturityDate", "label": "maturity", "input": "date", "include": "always", "required": true, "width": 140 },
+        { "key": "currency",     "label": "currency", "input": "text", "include": "always", "required": true, "default": "BRL", "width": 64 },
+        { "key": "subscriptionSettlementDays", "label": "subSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionSettlementDays" },
+        { "key": "subscriptionNAVDays",        "label": "subND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionNAVDays" },
+        { "key": "redemptionNAVDays",          "label": "redND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionNAVDays" },
+        { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionSettlementDays" }
+      ]
+    },
+    "otc": {
+      "label": "OTC",
+      "fields": [
+        { "key": "type", "label": "type", "input": "select", "include": "always", "required": true, "width": 150, "options": [
+          { "value": "brazilianRepo",  "label": "Compromissada" },
+          { "value": "structuredNote", "label": "COE / Nota Estruturada" },
+          { "value": "swap",           "label": "Swap" },
+          { "value": "forward",        "label": "Forward" },
+          { "value": "leverage",       "label": "Alavancagem" },
+          { "value": "brazilianTerm",  "label": "Termo BR" },
+          { "value": "others",         "label": "Outros" }
+        ]},
+        { "key": "ticker",       "label": "ticker",    "input": "text",   "include": "always",    "required": true, "width": 140 },
+        { "key": "maturityDate", "label": "maturity",  "input": "date",   "include": "always",    "required": true, "width": 140 },
+        { "key": "indexer",      "label": "indexer",   "input": "text",   "include": "ifPresent", "transform": "upperIndexer", "width": 70 },
+        { "key": "indexerPercentual", "label": "idxPct", "input": "number", "include": "ifPresent", "width": 70, "title": "indexerPercentual" },
+        { "key": "yield",        "label": "yield",     "input": "number", "include": "ifPresent", "width": 70 },
+        { "key": "currency",     "label": "currency",  "input": "text",   "include": "always",    "required": true, "default": "BRL", "width": 64 },
+        { "key": "country",      "label": "country",   "input": "text",   "include": "always",    "required": true, "default": "BR",  "width": 56 },
+        { "key": "subscriptionSettlementDays", "label": "subSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionSettlementDays" },
+        { "key": "subscriptionNAVDays",        "label": "subND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "subscriptionNAVDays" },
+        { "key": "redemptionNAVDays",          "label": "redND", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionNAVDays" },
+        { "key": "redemptionSettlementDays",   "label": "redSD", "input": "number", "include": "always", "required": true, "default": 0, "width": 64, "title": "redemptionSettlementDays" }
+      ]
+    },
     "privateMarket":           { "label": "Mercado Privado",           "fields": [] },
     "realAssets":              { "label": "Ativos Reais",              "fields": [] },
     "brazilianGovernmentBond": { "label": "Título Público (BR)",       "fields": [] },

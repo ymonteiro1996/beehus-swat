@@ -41,7 +41,18 @@ from .consolidation import (
 )
 from .grouping import list_groupings
 from .security_mappings import update_security_mappings, get_security_mappings
-from .securities import create_security, get_security, list_securities, filtered_security_price, security_events
+from .securities import (create_security, get_security, list_securities,
+                         filtered_security_price, security_events,
+                         check_similar_securities, create_security_raw)
+from .onboarding import (
+    onboard_cri_cra, onboard_cri_cra_bulk,
+    onboard_debenture, onboard_debenture_bulk,
+    onboard_lf, onboard_lf_bulk,
+    onboard_equity, onboard_equity_bulk,
+    onboard_brazilian_fund, onboard_brazilian_fund_bulk,
+    onboard_future, onboard_future_bulk,
+    onboard_option, onboard_option_bulk,
+)
 
 __all__ = [
     "set_token",
@@ -90,4 +101,20 @@ __all__ = [
     "list_securities",
     "filtered_security_price",
     "security_events",
+    "check_similar_securities",
+    "create_security_raw",
+    "onboard_cri_cra",
+    "onboard_cri_cra_bulk",
+    "onboard_debenture",
+    "onboard_debenture_bulk",
+    "onboard_lf",
+    "onboard_lf_bulk",
+    "onboard_equity",
+    "onboard_equity_bulk",
+    "onboard_brazilian_fund",
+    "onboard_brazilian_fund_bulk",
+    "onboard_future",
+    "onboard_future_bulk",
+    "onboard_option",
+    "onboard_option_bulk",
 ]

@@ -224,9 +224,14 @@ def upload_unprocessed_security_positions_file(
     """POST /beehus/financial/positions/unprocessed-security-positions/file.
 
     Multipart upload of an Excel workbook with the wallet's unprocessed
-    security positions. The upstream endpoint expects the columns:
-    `Data, Carteira, Ativo, Quant, PU, SaldoBruto, Caixa, Moeda` plus a
-    form field `companyId`.
+    security positions. The upstream endpoint expects the columns
+    `positionDate, walletId, unprocessedId, quantity, pu, balance,
+    isCashAccount` plus a form field `companyId` (format changed 2026-08 —
+    was `Data, Carteira, Ativo, Quant, PU, SaldoBruto, Caixa, Moeda`, no
+    currency column anymore). Callers: `pages/excecoes.py` (`_build_xlsx`,
+    `_intraday_build_xlsx_multi`), `pages/repetir_posicoes.py`
+    (`_build_combined_xlsx`), `pages/carteira.py` (`_build_carteira_xlsx`),
+    `pages/conciliacao_mov.py` (`_build_xlsx`).
     """
     files = {
         "file": (

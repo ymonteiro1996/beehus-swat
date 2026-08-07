@@ -1642,12 +1642,15 @@ def preview_exception(exception_id):
 
 def _build_xlsx(rows, target_date):
     """Build the upstream-shaped workbook in memory.
-    Columns: Data, Carteira, Ativo, Quant, PU, SaldoBruto, Caixa, Moeda."""
+    Columns (2026-08 upstream format change): positionDate, walletId,
+    unprocessedId, quantity, pu, balance, isCashAccount — no currency
+    column anymore (was: Data, Carteira, Ativo, Quant, PU, SaldoBruto,
+    Caixa, Moeda)."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Posicoes"
-    ws.append(["Data", "Carteira", "Ativo", "Quant", "PU",
-               "SaldoBruto", "Caixa", "Moeda"])
+    ws.append(["positionDate", "walletId", "unprocessedId", "quantity",
+               "pu", "balance", "isCashAccount"])
     for r in rows:
         ws.append([
             target_date,
@@ -1657,7 +1660,6 @@ def _build_xlsx(rows, target_date):
             r.get("pu") or 0,
             r.get("balance") or 0,
             "Sim" if r.get("caixa") else "Não",
-            r.get("currencyId") or "",
         ])
     buf = io.BytesIO()
     wb.save(buf)
@@ -3882,8 +3884,8 @@ def _intraday_build_xlsx_multi(patched):
     wb = Workbook()
     ws = wb.active
     ws.title = "Posicoes"
-    ws.append(["Data", "Carteira", "Ativo", "Quant", "PU",
-               "SaldoBruto", "Caixa", "Moeda"])
+    ws.append(["positionDate", "walletId", "unprocessedId", "quantity",
+               "pu", "balance", "isCashAccount"])
     for p in patched:
         for r in p["rows"]:
             ws.append([
@@ -3894,7 +3896,6 @@ def _intraday_build_xlsx_multi(patched):
                 r.get("pu") or 0,
                 r.get("balance") or 0,
                 "Sim" if r.get("caixa") else "Não",
-                r.get("currencyId") or "",
             ])
     buf = io.BytesIO()
     wb.save(buf)
