@@ -284,23 +284,34 @@ def _extract_brazilian_fund(uid):
 
 def _extract_stock_etf(uid):
     features = {}
-    # Ticker in parentheses: (ABCB4)
-    m = re.search(r"\(([A-Z]{3,6}\d{1,2})\)", uid)
-    if m:
-        features["ticker"] = m.group(1)
+    # Bloomberg terminal format: "AMZN US EQUITY", "GOOG BZ EQUITY", etc.
+    # Pure-letter ticker followed by a 2-letter exchange code and asset class.
+    _bloomberg = re.match(
+        r"^([A-Z]{1,6})\s+([A-Z]{2})\s+(EQUITY|INDEX|COMDTY|GOVT|CORP)\b",
+        uid, re.IGNORECASE)
+    if _bloomberg:
+        features["ticker"] = _bloomberg.group(1)
+        # Strip exchange qualifier and asset class from the name
+        name = uid[:_bloomberg.start(2)].strip()
     else:
-        # Standalone ticker at start
-        m = re.match(r"([A-Z]{3,6}\d{1,2})\b", uid)
+        # Ticker in parentheses: (ABCB4)
+        m = re.search(r"\(([A-Z]{3,6}\d{1,2})\)", uid)
         if m:
             features["ticker"] = m.group(1)
+        else:
+            # Standalone B3 ticker at start (letters + 1-2 digits, e.g. PETR4)
+            m = re.match(r"([A-Z]{3,6}\d{1,2})\b", uid)
+            if m:
+                features["ticker"] = m.group(1)
 
-    # Name after ticker
-    name = uid
-    name = re.sub(r"\([A-Z]{3,6}\d{1,2}\)\s*", "", name)
-    name = re.sub(r"^[A-Z]{3,6}\d{1,2}\s*-?\s*", "", name)
-    name = re.sub(r"\s*-\s*[A-Z]{3,6}\d{1,2}$", "", name)
-    # Remove "ALUGUEL -" prefix
-    name = re.sub(r"^ALUGUEL\s*-\s*", "", name, flags=re.IGNORECASE)
+        # Name after ticker (B3 cleanup)
+        name = uid
+        name = re.sub(r"\([A-Z]{3,6}\d{1,2}\)\s*", "", name)
+        name = re.sub(r"^[A-Z]{3,6}\d{1,2}\s*-?\s*", "", name)
+        name = re.sub(r"\s*-\s*[A-Z]{3,6}\d{1,2}$", "", name)
+        # Remove "ALUGUEL -" prefix
+        name = re.sub(r"^ALUGUEL\s*-\s*", "", name, flags=re.IGNORECASE)
+
     name = name.strip(" -")
     if name:
         features["name"] = name
@@ -1827,11 +1838,13 @@ def _score_candidate(sec, features, security_type):
     # nature as the CETIP-substring signal. The whole-mainId == id case already
     # returned a decisive exact match upstream; here the id is a substring of a
     # bigger mainId. Length-guarded so a short ticker can't match by coincidence
-    # (ticker ≥ 4, ISIN ≥ 8). Case-insensitive.
+    # (ticker ≥ 3, ISIN ≥ 8). 3 covers pure-letter US tickers like VTV/SPY/QQQ
+    # whose mainIds are "US:VTV" — they'd be excluded by the former ≥ 4 guard.
+    # Case-insensitive.
     sec_main_lower = sec_main_id.lower()
     feat_tkr  = features.get("ticker") or ""
     feat_isin = features.get("isin") or ""
-    if len(feat_tkr) >= 4 and feat_tkr.lower() in sec_main_lower:
+    if len(feat_tkr) >= 3 and feat_tkr.lower() in sec_main_lower:
         score += 50
         matched_on.append("mainId/ticker")
     elif len(feat_isin) >= 8 and feat_isin.lower() in sec_main_lower:

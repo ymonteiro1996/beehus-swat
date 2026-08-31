@@ -9,5 +9,10 @@
   "Sports Media Futebol Brasileiro - Classe A - Advisory FIP": "brazilianFund",
   "test": "brazilianGovernmentBond",
   "BACEN-NTN-B": "brazilianGovernmentBond",
-  "KCD231 55% CDI 09/12/26": "bond"
+  "KCD231 55% CDI 09/12/26": "bond",
+  "AMAZON.COM INC 5.3000% 2036-07-09": "bond",
+  "META PLATFORMS 5,2500% 2036-05-15": "bond",
+  "ISHARES VII PLC MSCI JAPAN": "fund",
+  "ISHARES III PLC EM": "fund",
+  "PIMCO US SHORT TERM HY CORP BOND": "fund"
 }
