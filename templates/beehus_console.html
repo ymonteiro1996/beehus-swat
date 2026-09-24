@@ -1317,6 +1317,20 @@
           </div>
         </div>
 
+        <!-- Aviso do lote de 500 — visível apenas em modo "faixa" (toggled em
+             onModeChange). A faixa pode cobrir milhares de transações; a
+             busca sempre carrega no máximo BATCH_LIMIT por vez. -->
+        <div id="i-range-cap-note" class="hidden mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+          <div class="text-[11px] font-semibold text-amber-800 mb-1">
+            Faixa de datas — carga em lotes de 500
+          </div>
+          <div class="text-[11px] text-amber-700 leading-relaxed">
+            O intervalo selecionado pode retornar até <strong>500 transações por vez</strong>,
+            começando pelas mais antigas. Se houver mais pendências na faixa, elas entram no
+            lote seguinte conforme você for identificando e implementando as atuais.
+          </div>
+        </div>
+
         <div class="flex gap-2 items-center flex-wrap mt-3 pt-3 border-t">
           <button onclick="IdentifyTxn.search()" class="btn btn-primary">Buscar transações</button>
           <button onclick="IdentifyTxn.reset()"  class="btn btn-muted">Limpar filtros</button>
@@ -1445,6 +1459,15 @@
 
     <!-- Full-width result section -->
     <section id="i-result" class="section-card mt-3 hidden">
+      <!-- Aviso de lote pendente. Preenchido por _renderBatchNotice() quando o
+           backend reporta hasMore (mais transações no range além deste lote
+           de 500). Mesmo padrão visual do aviso de faixa acima. -->
+      <div id="i-batch-warning" class="hidden mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+        <div class="text-[11px] font-semibold text-amber-800 mb-1">
+          Mais transações pendentes nesta faixa
+        </div>
+        <div id="i-batch-warning-body" class="text-[11px] text-amber-700 leading-relaxed"></div>
+      </div>
       <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div class="text-[11px] text-gray-500">
           <span id="i-result-count">0</span> transações encontradas
@@ -3176,6 +3199,14 @@ const IdentifyTxn = {
   // thousands of large <select>s would hang the browser).
   INLINE_EDIT_MAX_ROWS: 200,
 
+  // Lote de classificação: a API Beehus não pagina, então o corte é feito no
+  // servidor. `_batch` guarda o que o backend reportou na última busca —
+  // `total` vem `null` quando o backend não escaneou a faixa inteira (range
+  // grande, ainda sobra trabalho fora deste lote). `_renderBatchNotice()` usa
+  // isso para avisar quando há mais pendências além das 500 exibidas.
+  BATCH_LIMIT: 500,
+  _batch: { total: null, returned: 0, hasMore: false, identified: 'false' },
+
   // Field metadata for the edit configurator. `txnKey` is the property on the
   // search-result transaction; `apiKey` is what the upstream PATCH expects.
   EDIT_FIELDS: {
@@ -3257,6 +3288,7 @@ const IdentifyTxn = {
     const btnRange  = document.getElementById('i-mode-range');
     if (btnSingle) btnSingle.classList.toggle('active', mode === 'single');
     if (btnRange)  btnRange .classList.toggle('active', mode === 'range');
+    document.getElementById('i-range-cap-note').classList.toggle('hidden', mode !== 'range');
   },
   _modeIsRange() { return this._mode === 'range'; },
 
@@ -3446,6 +3478,7 @@ const IdentifyTxn = {
       entityIds:              Array.from(this._entityIds),
       securityIds:            Array.from(this._securityIds),
       identified:             identified,
+      limit:                  this.BATCH_LIMIT,
     };
     const myGen = ++this._opGen;
     showBusy('Buscando transações…');
@@ -3456,8 +3489,15 @@ const IdentifyTxn = {
       hideBusy();
     }
     if (myGen !== this._opGen) return;   // a newer search/identify started
-    if (!r.ok) { alert('Falha na busca. Veja o Log.'); return; }
+    if (!r.ok) { alert(r.body?.error || 'Falha na busca. Veja o Log.'); return; }
     this._txns = r.body?.transactions || [];
+    const bb = r.body || {};
+    this._batch = {
+      total:      (typeof bb.total === 'number') ? bb.total : null,
+      returned:   this._txns.length,
+      hasMore:    !!bb.hasMore,
+      identified: identified,   // the filter this batch was fetched with, not whatever the radio shows now
+    };
     if (preserveSug) {
       // Drop suggestions for ids that aren't in the new result set; keep
       // the rest so the operator can keep filtering/implementing without
@@ -3473,7 +3513,10 @@ const IdentifyTxn = {
       this._suggestions = {};
       this._execEdits = {};
     }
-    this._truncated = !!r.body?.truncated;
+    // The old "(truncado em 10000)" indicator is obsolete now that this view
+    // always requests a 500-row batch — `_renderBatchNotice()` (driven by
+    // `_batch`) replaces it with a more informative banner.
+    this._truncated = false;
     // A new result set is a fresh selection: select every row. Subsequent
     // re-renders (filtros/sort/sugestão/inline) read from _selSet and so
     // preserve the operator's ticks.
@@ -4687,14 +4730,47 @@ const IdentifyTxn = {
     return rows;
   },
 
+  // Aviso do lote de 500. Só aparece quando o backend disse que sobrou algo
+  // no range (`_batch.hasMore`); `_batch.total` é sempre exato (o backend faz
+  // 1 fetch do range inteiro e corta em Python — ver comentário em
+  // `_TXN_SEARCH_CAP` no backend sobre por que NÃO é dividido em janelas de
+  // data). Em "Não identificadas" o texto é de fila de trabalho (resolva
+  // estas para liberar as próximas); nos outros modos de "Mostrar" não há
+  // fila a resolver, então o texto é só informativo.
+  _renderBatchNotice() {
+    const box  = document.getElementById('i-batch-warning');
+    const body = document.getElementById('i-batch-warning-body');
+    const b    = this._batch;
+    if (!box) return;
+    if (!b.hasMore) { box.classList.add('hidden'); return; }
+
+    const fila = b.identified === 'false';
+    const restante = b.total - b.returned;
+
+    body.innerHTML = fila
+      ? `A faixa selecionada tem <strong>${b.total}</strong> transações pendentes de
+         classificação. Carregamos as <strong>${b.returned}</strong> mais antigas.
+         Para ver as <strong>${restante}</strong> restantes é necessário primeiro
+         <strong>resolver (Identificar + Implementar) estas ${b.returned}</strong> —
+         assim que forem classificadas elas saem desta lista e o próximo lote é
+         carregado automaticamente na próxima busca.`
+      : `A faixa selecionada tem <strong>${b.total}</strong> transações. Estamos
+         exibindo as <strong>${b.returned}</strong> mais antigas
+         (${restante} fora deste lote). Reduza o intervalo de datas para ver as demais.`;
+    box.classList.remove('hidden');
+  },
+
   // Single-source-of-truth render. The truncation indicator reflects the
   // last search response (`_truncated`); callers no longer pass it as a
   // per-call argument, so re-renders triggered by filter/sort/edit don't
   // accidentally wipe a "(truncado em 1000)" warning that's still relevant.
   _render() {
     document.getElementById('i-result').classList.remove('hidden');
-    document.getElementById('i-result-count').textContent = this._txns.length;
+    const b = this._batch;
+    document.getElementById('i-result-count').textContent =
+      b.hasMore ? `${this._txns.length} de ${b.total}` : this._txns.length;
     document.getElementById('i-result-truncated').classList.toggle('hidden', !this._truncated);
+    this._renderBatchNotice();
 
     // Repainting the tbody throws away the previous DOM nodes, so any
     // index-based anchor for shift+click range selection no longer maps
@@ -6347,7 +6423,14 @@ const IdentifyTxn = {
     Token.refresh();
     alert(`Concluído: ${ok} excluídas, ${fail} falhas. Veja o Log para detalhes.`);
     const idSet = new Set(ids);
+    const deletedCount = this._txns.filter(t => idSet.has(t.id)).length;
     this._txns = this._txns.filter(t => !idSet.has(t.id));
+    // Pruned locally (no re-search), so the batch counters from the last
+    // search response would overstate what's left — bring them down by the
+    // same amount so the "500 de N" / pending-batch banner stays accurate.
+    this._batch.total -= deletedCount;
+    this._batch.returned -= deletedCount;
+    this._batch.hasMore = this._batch.total > this._batch.returned;
     for (const id of ids) { delete this._tempEdits[id]; delete this._suggestions[id]; delete this._execEdits[id]; this._selSet.delete(id); }
     // Drop the active inline-edit column and re-render from the pruned _txns so
     // counters/chips/selection stay consistent (the deleted rows were the
@@ -6374,6 +6457,8 @@ const IdentifyTxn = {
     this._securityIds = new Set();
     this._typeIds = new Set();
     this._txns = [];
+    this._batch = { total: null, returned: 0, hasMore: false, identified: 'false' };
+    document.getElementById('i-batch-warning').classList.add('hidden');
     this._suggestions = {};
     this._execEdits = {};
     this._edits = {};

@@ -20,6 +20,7 @@ data/excecoes/
 data/repeat_positions_logs/
 data/.tmp/
 data/settings.json
+data/template_wallet_companies.json
 data/*.backup-*.json
 data/precificacao_lists-*.json
 

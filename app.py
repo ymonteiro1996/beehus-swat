@@ -23,6 +23,7 @@ from pages.repetir_posicoes import bp as repetir_posicoes_bp
 from pages.precificacao   import bp as precificacao_bp
 import db as db_module
 import auth
+import wallet_scope
 
 _log = logging.getLogger(__name__)
 
@@ -45,6 +46,9 @@ if db_module.IDENTIFICAR_ENABLED:
 # before_request handlers in registration order, and the auth gate whitelists
 # /static, /bootstrap, /healthz, /favicon.ico for unauthenticated access.
 auth.install(app)
+# Escopo de carteiras dos painéis Template Carteiras (cabeçalhos X-Swat-Scope*,
+# ver wallet_scope.py). Depois do auth: o gate precisa ser o 1º before_request.
+wallet_scope.install(app)
 app.register_blueprint(config_bp)
 app.register_blueprint(conciliacao_bp)
 app.register_blueprint(conciliacao_unprocessed_bp)

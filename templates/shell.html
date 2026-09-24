@@ -95,6 +95,22 @@
           <span class="nav-text">Painel de Controle</span>
         </a>
 
+        <!-- Painéis derivados: mesmos fluxos do Painel de Controle, recortados
+             às carteiras do TemplateCarteiras.xlsx (ver wallet_scope.py). -->
+        <a href="#controlpanel_template" data-page="controlpanel_template" onclick="navigateTo('controlpanel_template'); return false;"
+           title="Painel de Controle - Template Carteiras (só carteiras do TemplateCarteiras.xlsx)"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+          <span class="nav-text">Painel · Template</span>
+        </a>
+
+        <a href="#controlpanel_sla" data-page="controlpanel_sla" onclick="navigateTo('controlpanel_sla'); return false;"
+           title="Painel de Controle - Template Carteiras (Somente SLA): cada carteira só na data de execução − Defasagem"
+           class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="nav-text">Painel · Template (SLA)</span>
+        </a>
+
         <a href="#stripping" data-page="stripping" onclick="navigateTo('stripping'); return false;"
            title="Stripping — Position Stripping e Fatiar carteira (mesma funcionalidade do chip Stripping no Painel de Controle)"
            class="nav-link flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-white/60 hover:text-white hover:bg-white/10">
@@ -256,6 +272,8 @@
     /* ── Page registry ────────────────────────────────────────────────────────── */
     const PAGES = {
       controlpanel:             '/controlpanel',
+      controlpanel_template:    '/controlpanel/template',
+      controlpanel_sla:         '/controlpanel/template-sla',
       conciliacao:              '/conciliacao',
       conciliacao_unprocessed:  '/conciliacao-unprocessed',
       conciliacao_mov:          '/conciliacao-mov',

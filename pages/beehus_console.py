@@ -51,6 +51,9 @@ from bson.errors import InvalidId
 import beehus_catalog
 from flask import Blueprint, render_template, jsonify, make_response, request
 
+from template_carteiras import wallets_bloqueadas_para_publicacao
+import wallet_scope
+
 from beehus_api import (
     BeehusAPIError,
     BeehusAuthError,
@@ -116,6 +119,30 @@ def _sorted_dicts_to_list(d: dict, name_key="name"):
     )
 
 
+def _scope_restrict(requested, permitted):
+    """Recorte de uma lista de ids pedida por uma ação ao escopo dos painéis
+    Template Carteiras (wallet_scope.py). Retorna (efetivo, fora_do_escopo).
+
+    `permitted` None = sem escopo -> lista inalterada. Lista pedida VAZIA
+    significa "todas da empresa" no contrato upstream — com escopo ela vira a
+    lista permitida (senão a ação atingiria carteiras fora do Template)."""
+    if permitted is None:
+        return list(requested), []
+    if not requested:
+        return sorted(permitted), []
+    inside = [x for x in requested if x in permitted]
+    outside = [x for x in requested if x not in permitted]
+    return inside, outside
+
+
+def _scope_empty_error(kind):
+    return jsonify({
+        "error": f"Nenhum(a) {kind} do TemplateCarteiras nesta seleção "
+                 "(empresa/data) — o painel Template só atua nas carteiras do cadastro"
+                 " (no Somente SLA, só na data de SLA de cada carteira).",
+    }), 400
+
+
 # ── Token ─────────────────────────────────────────────────────────────────────
 
 @bp.route("/api/beehus/token", methods=["GET"])
@@ -179,9 +206,10 @@ def _companies_empty_reason():
 def filter_companies():
     cf = get_company_filter()
     names = get_company_names()
+    scoped = wallet_scope.empresas()  # painéis Template: só empresas do cadastro
     items = [{"id": cid, "name": name or cid}
              for cid, name in names.items()
-             if not cf or cid in cf]
+             if (not cf or cid in cf) and (scoped is None or cid in scoped)]
     items.sort(key=lambda x: x["name"].lower())
     if items:
         return jsonify(items)
@@ -211,11 +239,14 @@ def filter_groupings():
     if not company_visible(company_id):
         return jsonify([])
 
+    permitted = wallet_scope.agrupamentos(company_id)
     items = []
     for gid, g in get_grouping_index().items():
         if g.get("trashed"):
             continue
         if g.get("companyId") != company_id:
+            continue
+        if permitted is not None and gid not in permitted:
             continue
         items.append({
             "id":        gid,
@@ -261,8 +292,14 @@ def filter_wallets():
         items.sort(key=lambda x: x["name"].lower())
         return items
 
-    # Per (company, grouping) result is stable within the 5-min TTL.
-    return jsonify(_cached_ttl(("wallets_filter", company_id, grouping_id or ""), _build))
+    # Per (company, grouping) result is stable within the 5-min TTL. O recorte
+    # do escopo (painéis Template) é aplicado DEPOIS do cache — a entrada
+    # cacheada continua sendo a lista completa, compartilhada com o painel normal.
+    items = _cached_ttl(("wallets_filter", company_id, grouping_id or ""), _build)
+    permitted = wallet_scope.carteiras(company_id)
+    if permitted is not None:
+        items = [it for it in items if it["id"] in permitted]
+    return jsonify(items)
 
 
 @bp.route("/api/beehus/filters/groupings-by-publish-state")
@@ -302,13 +339,26 @@ def filter_groupings_by_publish_state():
         return jsonify([])
 
     gindex = get_grouping_index()
+    # [2026-09-03, pedido do usuário] Ao listar candidatos a PUBLICAR (não a
+    # despublicar), nenhum agrupamento com carteira-membro marcada "Deve
+    # Publicar" = Não no TemplateCarteiras (cadastro do projeto irmão
+    # ControleCargas) deve aparecer — ver template_carteiras.py. Despublicar
+    # continua sem esse filtro: o objetivo é impedir NOVA publicação
+    # indevida, não esconder o que já foi publicado incorretamente (isso é
+    # trabalho pra Despublicar mesmo, sem restrição a mais).
+    wallets_bloqueadas = wallets_bloqueadas_para_publicacao() if not published else set()
+    permitted = wallet_scope.agrupamentos(company_id, position_date)
     items = []
     for gid in eligible:
         g = gindex.get(gid)
         if not g or g.get("trashed"):
             continue
+        if permitted is not None and gid not in permitted:
+            continue
         # Defense in depth: only return groupings that belong to the company.
         if g.get("companyId") and g["companyId"] != company_id:
+            continue
+        if wallets_bloqueadas and wallets_bloqueadas.intersection(g["walletIds"]):
             continue
         items.append({
             "id":        gid,
@@ -391,8 +441,11 @@ def filter_grouping_return_deltas():
             cur["rnps"], cur["rc"], cur["deltaAbs"] = rnps, rc, delta_abs
 
     gindex = get_grouping_index()
+    permitted = wallet_scope.agrupamentos(company_id, position_date)
     items = []
     for gid, info in by_grouping.items():
+        if permitted is not None and gid not in permitted:
+            continue
         item: dict = {
             "groupingId":         gid,
             "groupingName":       (gindex.get(gid) or {}).get("name", "") or gid,
@@ -424,6 +477,9 @@ def filter_wallets_with_position():
         return jsonify([])
 
     eligible = beehus_catalog.wallets_with_position(company_id, position_date)
+    permitted = wallet_scope.carteiras(company_id, position_date)
+    if permitted is not None:
+        eligible = [w for w in eligible if w["id"] in permitted]
     if not eligible:
         return jsonify([])
 
@@ -460,7 +516,16 @@ def filter_entities():
 
     # Per-company result is stable within the 5-min TTL; cache it so reopening
     # the same company doesn't re-scan its wallets + rebuild + sort each time.
-    return jsonify(_cached_ttl(("entities_filter", company_id), _build))
+    items = _cached_ttl(("entities_filter", company_id), _build)
+    permitted = wallet_scope.carteiras(company_id)
+    if permitted is not None:
+        # Painéis Template: só entidades com carteira do cadastro (recorte fora
+        # do cache, que segue guardando a lista completa).
+        eids = {beehus_catalog.id_str(w["entityId"])
+                for w in beehus_catalog.wallets_in_company(company_id)
+                if w.get("entityId") and str(w["_id"]) in permitted}
+        items = [it for it in items if it["id"] in eids]
+    return jsonify(items)
 
 
 @bp.route("/api/beehus/filters/securities")
@@ -498,6 +563,9 @@ def transactions_create():
     missing = [k for k in required if data.get(k) in (None, "")]
     if missing:
         return jsonify({"error": f"missing fields: {', '.join(missing)}"}), 400
+    permitted = wallet_scope.carteiras(data["companyId"])
+    if permitted is not None and data["walletId"] not in permitted:
+        return _scope_empty_error("carteira")
     try:
         result = create_transaction(
             company_id=data["companyId"],
@@ -596,6 +664,14 @@ def positions_process():
     if not isinstance(wallets, list) or not all(isinstance(w, str) for w in wallets):
         return jsonify({"error": "wallets must be a list of strings"}), 400
 
+    # Painéis Template: só carteiras do cadastro (e da data de SLA). "Todas"
+    # (lista vazia) vira a lista do escopo. A cadeia de explosão abaixo continua
+    # arrastando o que for preciso — sem ela o processamento não conclui.
+    wallets, out_of_scope = _scope_restrict(
+        wallets, wallet_scope.carteiras(company_id, position_date))
+    if wallet_scope.ativo() and not wallets:
+        return _scope_empty_error("carteira")
+
     # Arrasta a cadeia de explosão de cada carteira pedida (no-op quando vazio).
     effective = beehus_catalog.expand_wallets_with_explosion(company_id, wallets)
     dragged = [w for w in effective if w not in set(wallets)]
@@ -611,6 +687,8 @@ def positions_process():
     out = result if isinstance(result, dict) else {"ok": True}
     if dragged:
         out["draggedWallets"] = dragged
+    if out_of_scope:
+        out["outOfScopeWallets"] = out_of_scope
     return jsonify(out)
 
 
@@ -665,6 +743,10 @@ def positions_delete():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(wallet_ids, list) or not all(isinstance(w, str) for w in wallet_ids):
         return jsonify({"error": "walletIds must be a list of strings"}), 400
+    wallet_ids, _out = _scope_restrict(
+        wallet_ids, wallet_scope.carteiras(company_id, position_date))
+    if wallet_scope.ativo() and not wallet_ids:
+        return _scope_empty_error("carteira")
 
     try:
         result = delete_processed_position(
@@ -701,6 +783,10 @@ def nav_calculate_wallets():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(wallets, list) or not all(isinstance(w, str) for w in wallets):
         return jsonify({"error": "wallets must be a list of strings"}), 400
+    wallets, _out = _scope_restrict(
+        wallets, wallet_scope.carteiras(company_id, position_date))
+    if wallet_scope.ativo() and not wallets:
+        return _scope_empty_error("carteira")
 
     try:
         result = calculate_nav_wallets(
@@ -738,6 +824,10 @@ def nav_explosion_proportions():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(groupings, list) or not all(isinstance(g, str) for g in groupings):
         return jsonify({"error": "groupings must be a list of strings"}), 400
+    groupings, _out = _scope_restrict(
+        groupings, wallet_scope.agrupamentos(company_id, position_date))
+    if wallet_scope.ativo() and not groupings:
+        return _scope_empty_error("agrupamento")
 
     try:
         result = proportion_explosion(
@@ -773,6 +863,10 @@ def nav_calculate_groupings():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(groupings, list) or not all(isinstance(g, str) for g in groupings):
         return jsonify({"error": "groupings must be a list of strings"}), 400
+    groupings, _out = _scope_restrict(
+        groupings, wallet_scope.agrupamentos(company_id, position_date))
+    if wallet_scope.ativo() and not groupings:
+        return _scope_empty_error("agrupamento")
 
     try:
         result = calculate_nav_groupings(
@@ -881,6 +975,18 @@ def nav_publish():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(grouping_ids, list) or not all(isinstance(g, str) for g in grouping_ids):
         return jsonify({"error": "groupingIds must be a list of strings"}), 400
+    if wallet_scope.ativo():
+        # Painéis Template: só agrupamentos do cadastro; e como "todos" vira a
+        # lista do escopo, aplica aqui também a regra do Deve Publicar = Não
+        # (que no painel normal só existe na listagem de candidatos).
+        grouping_ids, _out = _scope_restrict(
+            grouping_ids, wallet_scope.agrupamentos(company_id, position_date))
+        bloqueadas = wallets_bloqueadas_para_publicacao()
+        gindex = get_grouping_index()
+        grouping_ids = [g for g in grouping_ids
+                        if not bloqueadas.intersection((gindex.get(g) or {}).get("walletIds") or [])]
+        if not grouping_ids:
+            return _scope_empty_error("agrupamento")
 
     summary = _run_publish_in_chunks(
         publish_nav,
@@ -917,6 +1023,10 @@ def nav_unpublish():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(grouping_ids, list) or not all(isinstance(g, str) for g in grouping_ids):
         return jsonify({"error": "groupingIds must be a list of strings"}), 400
+    grouping_ids, _out = _scope_restrict(
+        grouping_ids, wallet_scope.agrupamentos(company_id, position_date))
+    if wallet_scope.ativo() and not grouping_ids:
+        return _scope_empty_error("agrupamento")
 
     summary = _run_publish_in_chunks(
         unpublish_nav,
@@ -931,6 +1041,24 @@ def nav_unpublish():
     return jsonify(summary), code
 
 
+# Cap the result set so a broad company-wide range can't return an unbounded
+# list; the `truncated` flag surfaces over-cap cases for legacy (no `limit`)
+# callers. 10k handles realistic company-wide ranges.
+#
+# NOTE: an earlier version of this route walked the date range in windows
+# (oldest-first) when `limit` was set, to avoid "one giant fetch" for a wide
+# range. Measured against a real company (980 wallets): single-shot fetch of
+# an 8-year range took ~112s; the windowed version of the *same* query took
+# ~161s — worse, not better. `list_transactions` chunks `walletIds` into
+# groups of 150 and fans out in parallel (`_MAX_WALLET_IDS_PER_REQUEST`); for
+# a large company that chunking is a large FIXED cost per call (~27s here),
+# essentially independent of the date range requested. Windowing pays that
+# fixed cost once per window instead of once total, so it multiplies the
+# expensive part instead of shrinking it. Single-shot + slice-in-Python (as
+# below) is the right shape for this upstream's cost profile.
+_TXN_SEARCH_CAP = 10_000
+
+
 @bp.route("/api/beehus/transactions/search", methods=["POST"])
 def transactions_search():
     """Query local `db.transactions` using the filters from the UI.
@@ -942,6 +1070,13 @@ def transactions_search():
                identified (str: 'true' / 'false'/ ''=both) — when set,
                restricts to rows whose `beehusTransactionType` is filled
                ('true') or empty/missing ('false').
+               limit (int, optional) — caps the number of rows returned
+               (batched work queue for the Identificar view: 500/batch,
+               oldest-first; other callers omit it and get every row, most
+               recent first, up to `_TXN_SEARCH_CAP`). Either way the whole
+               range is fetched from upstream in one shot and sliced/sorted
+               here — `total`/`returned`/`hasMore` in the response are always
+               exact.
 
     Selecting groupings widens the scope rather than narrowing it: a row
     matches if its `walletId` is in the (grouping-narrowed) wallet set OR its
@@ -969,6 +1104,18 @@ def transactions_search():
             continue
         if not isinstance(_v, list) or not all(isinstance(x, str) for x in _v):
             return jsonify({"error": f"{_list_key} must be a list of strings"}), 400
+
+    # `limit`: batched callers (Identificar view) pass this to work a fixed
+    # queue size at a time. Absent → legacy single-shot behaviour (unbounded
+    # up to `_TXN_SEARCH_CAP`, whole range fetched in one go).
+    _raw_limit = data.get("limit")
+    limit: int | None
+    if _raw_limit is None:
+        limit = None
+    else:
+        if not isinstance(_raw_limit, int) or isinstance(_raw_limit, bool) or _raw_limit <= 0:
+            return jsonify({"error": "limit must be a positive integer"}), 400
+        limit = min(_raw_limit, _TXN_SEARCH_CAP)
 
     # Resolve the search scope (company → grouping(s) → explicit wallets).
     # `groupingIds[]` is the new shape (Editar Transações multi-upload);
@@ -1019,6 +1166,15 @@ def transactions_search():
     explicit_wallets  = set(data.get("walletIds") or [])
     if explicit_wallets:
         candidate_wallets &= explicit_wallets
+
+    # Painéis Template: só carteiras do cadastro — no Somente SLA, as que têm
+    # a data de SLA dentro do range pedido (a transação que conta é a da
+    # própria data de SLA da carteira). Agrupamentos: os do cadastro.
+    scoped_wallets = wallet_scope.carteiras(company_id, initial_date, final_date)
+    if scoped_wallets is not None:
+        candidate_wallets &= scoped_wallets
+        scoped_groupings = wallet_scope.agrupamentos(company_id, initial_date, final_date)
+        valid_grouping_ids = [g for g in valid_grouping_ids if g in scoped_groupings]
 
     # The transaction is in scope if it lives in a candidate wallet OR (when
     # groupings are selected) carries one of the selected groupingIds. The
@@ -1083,11 +1239,6 @@ def transactions_search():
     security_names = get_security_names()
 
     out = []
-    # Cap the result set so a broad company-wide range can't return an
-    # unbounded list; the `truncated` flag surfaces over-cap cases. 10k
-    # handles realistic company-wide ranges. Sorted by `liquidationDate`
-    # desc (most recent settlement first).
-    _TXN_SEARCH_CAP = 10_000
 
     # Migrated from `db.transactions.find` → Beehus endpoint G via
     # beehus_catalog.transactions_search. The endpoint handles the
@@ -1104,11 +1255,17 @@ def transactions_search():
     ent_filter = [str(e) for e in entity_ids] if entity_ids else None
 
     def _search(*, wallet_ids=None, grouping_ids=None):
+        # raise_on_error=True: this route lists *pending* rows (identify
+        # queue, or Repetir's "what changed" scan) — if the upstream call
+        # fails (e.g. a wide range + a large wallet count timing out),
+        # swallowing it to `[]` would read as "nothing pending" instead of
+        # "the search didn't complete", silently hiding real work from the
+        # operator. Caught below and turned into a real error response.
         return beehus_catalog.transactions_search(
             company_id, initial_date=initial_date, final_date=final_date,
             wallet_ids=wallet_ids, grouping_ids=grouping_ids,
             security_ids=sec_filter, entity_ids=ent_filter,
-            date_type="liquidation")
+            date_type="liquidation", raise_on_error=True)
 
     raw_docs: list[dict] = []
     seen_ids: set[str] = set()
@@ -1117,18 +1274,28 @@ def transactions_search():
         branch_calls.append({"wallet_ids": list(candidate_wallets)})
     if valid_grouping_ids:
         branch_calls.append({"grouping_ids": list(valid_grouping_ids)})
-    for _call in branch_calls:
-        for d in _search(**_call):
-            _key = str(d.get("_id") or d.get("id") or "")
-            if _key and _key in seen_ids:
-                continue
-            if _key:
-                seen_ids.add(_key)
-            raw_docs.append(d)
+    try:
+        for _call in branch_calls:
+            for d in _search(**_call):
+                _key = str(d.get("_id") or d.get("id") or "")
+                if _key and _key in seen_ids:
+                    continue
+                if _key:
+                    seen_ids.add(_key)
+                raw_docs.append(d)
+    except (BeehusAPIError, BeehusAuthError, Exception) as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "transactions_search route failed for company %s [%s..%s]: %s",
+            company_id, initial_date, final_date, exc)
+        return jsonify({
+            "error": "A busca à API Beehus falhou ou excedeu o tempo limite "
+                      "(comum em faixas de data largas numa empresa com muitas "
+                      "carteiras). Tente um intervalo menor.",
+            "transactions": [],
+        }), 502
 
-    # Reapply filters the endpoint G doesn't cover, then sort desc by
-    # liquidationDate and cap. `trashed` guard mirrors the original
-    # "trashed": {"$ne": True}.
+    # Reapply filters the endpoint G doesn't cover: `trashed` guard mirrors the
+    # original "trashed": {"$ne": True}.
     def _type_ok(d):
         bt = d.get("beehusTransactionType")
         # 'false' overrides any user-provided types filter (mirrors the
@@ -1148,8 +1315,16 @@ def transactions_search():
         return True
 
     filtered = [d for d in raw_docs if not d.get("trashed") and _type_ok(d)]
-    filtered.sort(key=lambda d: str(d.get("liquidationDate") or ""), reverse=True)
-    docs = filtered[:_TXN_SEARCH_CAP]
+    # Batched callers (limit set) work oldest-first (FIFO queue); legacy
+    # callers keep the original most-recent-first order. Tie-break by id for a
+    # stable cut when several rows share a liquidationDate.
+    filtered.sort(key=lambda d: (str(d.get("liquidationDate") or ""),
+                                 str(d.get("_id") or d.get("id") or "")),
+                  reverse=(limit is None))
+    cap = limit if limit is not None else _TXN_SEARCH_CAP
+    total = len(filtered)
+    docs = filtered[:cap]
+    has_more = total > len(docs)
 
     for d in docs:
         wid = str(d.get("walletId") or "")
@@ -1174,7 +1349,13 @@ def transactions_search():
             "comment":         d.get("comment") or "",
         })
 
-    return jsonify({"transactions": out, "truncated": len(out) >= _TXN_SEARCH_CAP})
+    return jsonify({
+        "transactions": out,
+        "total":        total,        # exact count, or null when not fully scanned (batched mode)
+        "returned":     len(out),
+        "hasMore":      has_more,
+        "truncated":    has_more,     # legacy alias kept for existing callers (e.g. Repetir Posições)
+    })
 
 
 # ── Identificar Transações (config + identification stub) ─────────────────────
@@ -2598,6 +2779,11 @@ def provisions_search():
         # Modo overlap (legado).
         _provs = beehus_catalog.provisions_overlapping(
             company_id, initial_date, final_date, wallet_ids=_wids)
+    # Painéis Template: só provisões de carteiras do cadastro (sem recorte por
+    # data de SLA — provisão vale por um intervalo, não por um dia).
+    _scoped = wallet_scope.carteiras(company_id)
+    if _scoped is not None:
+        _provs = [p for p in _provs if beehus_catalog.id_str(p.get("walletId")) in _scoped]
     _provs.sort(key=lambda p: str(p.get("liquidationDate") or "")[:10], reverse=True)
 
     wallet_names   = get_wallet_names()

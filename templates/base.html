@@ -12,6 +12,68 @@
     .spinning { animation: spin 1s linear infinite; }
   </style>
 
+  <script>
+  /* Escopo de carteiras dos painéis "Template Carteiras" (wallet_scope.py).
+     O painel define window.__SWAT_SCOPE__ = {mode, runDate, companyId}; as
+     ferramentas abertas em iframe dentro dele (Transações, Processar, NAV,
+     Carteira...) não definem nada e herdam o escopo do painel-pai (mesma
+     origem). Toda chamada a /api/ leva o escopo em cabeçalhos X-Swat-*, lido
+     A CADA chamada — trocar data/empresa no painel já vale para as ferramentas
+     abertas. Sem escopo (Painel de Controle normal) o fetch fica intocado. */
+  (function () {
+    function resolveScope() {
+      try {
+        let w = window;
+        for (let i = 0; i < 5 && w; i++) {
+          if (w.__SWAT_SCOPE__ && w.__SWAT_SCOPE__.mode) return w.__SWAT_SCOPE__;
+          if (w.parent === w) break;
+          w = w.parent;
+        }
+      } catch (e) { /* frame de outra origem — sem escopo */ }
+      return null;
+    }
+    window.swatResolveScope = resolveScope;
+    const origFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      const scope = resolveScope();
+      if (!scope) return origFetch(input, init);
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const path = url.startsWith(location.origin) ? url.slice(location.origin.length) : url;
+      if (!path.startsWith('/api/')) return origFetch(input, init);
+      const opts = Object.assign({}, init || {});
+      const headers = new Headers(opts.headers || (typeof input !== 'string' && input.headers) || {});
+      headers.set('X-Swat-Scope', scope.mode);
+      if (scope.runDate)   headers.set('X-Swat-Run-Date', scope.runDate);
+      if (scope.companyId) headers.set('X-Swat-Scope-Company', scope.companyId);
+      opts.headers = headers;
+      return origFetch(input, opts);
+    };
+    // Aviso discreto nas ferramentas em iframe: deixa claro que a listagem
+    // está recortada ao Template (o próprio painel já mostra a barra de escopo).
+    document.addEventListener('DOMContentLoaded', function () {
+      if (window.__SWAT_SCOPE__) return;
+      const scope = resolveScope();
+      if (!scope) return;
+      const pill = document.createElement('div');
+      pill.id = 'swat-scope-pill';
+      pill.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:9999;padding:3px 10px;'
+        + 'border-radius:9999px;font:600 10px/1.6 system-ui,sans-serif;background:#eef2ff;'
+        + 'color:#3730a3;border:1px solid #c7d2fe;pointer-events:none;opacity:.95';
+      const render = () => {
+        const s = resolveScope();
+        if (!s) { pill.style.display = 'none'; return; }
+        pill.style.display = '';
+        pill.textContent = s.mode === 'template_sla'
+          ? `Escopo: Template Carteiras · Somente SLA · execução ${s.runDate || 'hoje'}`
+          : 'Escopo: Template Carteiras';
+      };
+      render();
+      setInterval(render, 2000);
+      document.body.appendChild(pill);
+    });
+  })();
+  </script>
+
   {% block head %}{% endblock %}
 </head>
 <body class="bg-gray-100 min-h-screen font-sans text-sm flex">

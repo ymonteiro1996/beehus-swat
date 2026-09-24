@@ -4,7 +4,7 @@ import io
 import json
 import os
 import threading
-from datetime import date
+from datetime import date, datetime
 
 from bson import ObjectId
 from flask import Blueprint, render_template, jsonify, make_response, request
@@ -25,6 +25,7 @@ from db import (db, get_biz_dates, load_config_delays, get_company_filter,
                 invalidate_cache, business_days_before, IDENTIFICAR_ENABLED)
 import beehus_catalog
 import asset_registration
+import wallet_scope
 from security_type_classifier import SecurityTypeClassifier, JSON_PATH
 from security_matcher import (
     SecurityMatcher, get_cache, get_mapping_cache, _score_breakdown, _confidence_label,
@@ -405,12 +406,25 @@ def _date_cards(dates):
     return [{"date": d} for d in dates]
 
 
-@bp.route("/controlpanel")
-def index():
+# Painéis derivados (ver wallet_scope.py): mesma página/fluxos, universo de
+# carteiras = TemplateCarteiras.xlsx. O modo vai para o template, que passa a
+# mandar o escopo em cabeçalho em todas as chamadas /api/.
+_PANEL_TITLES = {
+    "": "Painel de Controle",
+    wallet_scope.MODO_TEMPLATE: "Painel de Controle - Template Carteiras",
+    wallet_scope.MODO_SLA: "Painel de Controle - Template Carteiras (Somente SLA)",
+}
+
+
+def _render_panel(panel_mode):
     dates   = get_biz_dates(_NUM_DATES)
     cards   = _date_cards(dates)
     delays  = load_config_delays()
     default_delay = min(delays.values(), default=1) if delays else 1
+    # Somente SLA: a data selecionada é a de EXECUÇÃO — abre em hoje (o último
+    # card), e cada carteira é avaliada em hoje − Defasagem.
+    if panel_mode == wallet_scope.MODO_SLA:
+        default_delay = 0
     threshold_pct = float(_load_threshold_config().get("diffThresholdPct",
                                                       _DEFAULT_DIFF_THRESHOLD_PCT))
     return render_template(
@@ -421,7 +435,44 @@ def index():
         default_delay=default_delay,
         threshold_pct=threshold_pct,
         identificar_enabled=IDENTIFICAR_ENABLED,
+        panel_mode=panel_mode,
+        panel_title=_PANEL_TITLES[panel_mode],
     )
+
+
+@bp.route("/controlpanel")
+def index():
+    return _render_panel("")
+
+
+@bp.route("/controlpanel/template")
+def index_template():
+    return _render_panel(wallet_scope.MODO_TEMPLATE)
+
+
+@bp.route("/controlpanel/template-sla")
+def index_template_sla():
+    return _render_panel(wallet_scope.MODO_SLA)
+
+
+@bp.route("/api/controlpanel/scope-info")
+def scope_info():
+    """Resumo do escopo para a barra dos painéis Template: carteiras do
+    Template por empresa (alimenta o seletor de empresa), órfãs (walletId do
+    Template sem carteira no Beehus) e o arquivo-fonte com data de alteração."""
+    esc = wallet_scope.atual()
+    if esc is None:
+        return jsonify({"error": "sem escopo (cabeçalho X-Swat-Scope)"}), 400
+    info = wallet_scope.resumo(esc.modo, esc.data_execucao)
+    names = get_company_names()
+    info["empresas"] = sorted(
+        [{"id": cid, "name": names.get(cid, cid), "count": n}
+         for cid, n in info.pop("porEmpresa").items()],
+        key=lambda e: (e["name"] or "").lower())
+    mtime = info.get("atualizadoEm")
+    info["atualizadoEmTexto"] = (datetime.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
+                                 if mtime else "")
+    return jsonify(info)
 
 
 @bp.route("/api/controlpanel/date-cards")
@@ -470,6 +521,10 @@ def get_rows():
     company_names = get_company_names()
     threshold     = _diff_threshold_decimal(request)
 
+    if wallet_scope.ativo():
+        return jsonify({"rows": _scoped_rows(date, threshold, company_names),
+                        "date": date})
+
     # Issues (6 tipos) + posições processadas saem do endpoint E (pre-processing),
     # 1 chamada por empresa em paralelo (o fan-out já usa 10 workers internos) —
     # substitui os reads Mongo de `issues` e `processedPosition`. Inclui empresas
@@ -501,44 +556,147 @@ def get_rows():
 
     rows = []
     for cid in sorted(company_ids, key=lambda c: company_names.get(c, c)):
-        cells = []
-        for key, _label in ISSUE_TYPES:
-            count = counts.get((cid, key), 0)
-            cells.append({
-                "type":  key,
-                "count": count,
-                "label": str(count) if count > 0 else "—",
-                "cls":   _cell_cls(count),
-            })
-
-        wt = wallets_total.get(cid, 0)
-        gt = groupings_total.get(cid, 0)
-        extras = [
-            {"key": "processed",
-             **_extra_cell(processed.get(cid, 0),    wt)},
-            {"key": "nav_wallet",
-             **_extra_cell(nav_wallet.get(cid, 0),   wt)},
-            {"key": "gap",
-             **_extra_cell(gap.get(cid, 0),          wt, mode="count")},
-            {"key": "nav_grouping",
-             **_extra_cell(nav_grouping.get(cid, 0), gt)},
-            {"key": "published",
-             **_extra_cell(published.get(cid, 0),    gt)},
-        ]
-
-        rows.append({
-            "companyId": cid,
-            "company":   company_names.get(cid, cid),
-            "cells":     cells,
-            "extras":    extras,
-            # A coluna TXN é preenchida assíncronamente via /txn-counts depois que
-            # a grade renderiza (G é o endpoint mais caro). Aqui vai só um marcador
-            # "pendente" — o front renderiza a célula como "…" e troca quando o
-            # /txn-counts chega.
-            "txn": {"pending": True},
-        })
+        rows.append(_build_row(
+            cid, company_names.get(cid, cid), date,
+            {key: counts.get((cid, key), 0) for key, _label in ISSUE_TYPES},
+            processed=processed.get(cid, 0), nav_wallet=nav_wallet.get(cid, 0),
+            gap=gap.get(cid, 0), nav_grouping=nav_grouping.get(cid, 0),
+            published=published.get(cid, 0),
+            wallets_total=wallets_total.get(cid, 0),
+            groupings_total=groupings_total.get(cid, 0)))
 
     return jsonify({"rows": rows, "date": date})
+
+
+def _build_row(cid, company, date, counts, *, processed, nav_wallet, gap,
+               nav_grouping, published, wallets_total, groupings_total,
+               row_key=None, sla_label=None):
+    """Uma linha do grid (células de issue + extras). `counts` = {tipo: n}.
+    `rowKey` identifica a linha no front: a própria empresa no painel normal e
+    no Template; "empresa|data" no Somente SLA (1 linha por data de SLA)."""
+    cells = []
+    for key, _label in ISSUE_TYPES:
+        count = counts.get(key, 0)
+        cells.append({
+            "type":  key,
+            "count": count,
+            "label": str(count) if count > 0 else "—",
+            "cls":   _cell_cls(count),
+        })
+    wt, gt = wallets_total, groupings_total
+    extras = [
+        {"key": "processed",    **_extra_cell(processed,    wt)},
+        {"key": "nav_wallet",   **_extra_cell(nav_wallet,   wt)},
+        {"key": "gap",          **_extra_cell(gap,          wt, mode="count")},
+        {"key": "nav_grouping", **_extra_cell(nav_grouping, gt)},
+        {"key": "published",    **_extra_cell(published,    gt)},
+    ]
+    row = {
+        "companyId": cid,
+        "company":   company,
+        "date":      date,
+        "rowKey":    row_key or cid,
+        "cells":     cells,
+        "extras":    extras,
+        # A coluna TXN é preenchida assíncronamente via /txn-counts depois que
+        # a grade renderiza (G é o endpoint mais caro). Aqui vai só um marcador
+        # "pendente" — o front renderiza a célula como "…" e troca quando o
+        # /txn-counts chega.
+        "txn": {"pending": True},
+    }
+    if sla_label:
+        row["slaLabel"] = sla_label
+    return row
+
+
+# ── Painéis Template Carteiras (escopo ativo — ver wallet_scope.py) ──────────
+# Mesmas colunas e regras de contagem do grid normal, só que recortadas às
+# carteiras do TemplateCarteiras.xlsx: as contagens saem dos arrays *Detailed
+# do E / /results filtrados por carteira, e o denominador é o nº de carteiras
+# (agrupamentos) do Template — não o total da empresa. Cada "par" é uma
+# (empresa, data): no Template, a data do grid; no Somente SLA, cada data de
+# SLA distinta da empresa (data de execução − Defasagem).
+
+def _row_key(cid, date):
+    esc = wallet_scope.atual()
+    return f"{cid}|{date}" if esc and esc.sla else cid
+
+
+def _fanout_pairs(keys, fn):
+    """fn(companyId, date) em paralelo (máx. 10) para cada (companyId, date)."""
+    out = {}
+    if not keys:
+        return out
+    workers = min(_DETAIL_ALL_WORKERS, len(keys))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for key, res in zip(keys, ex.map(lambda k: fn(*k), keys)):
+            out[key] = res
+    return out
+
+
+def _preproc_status(cid, date):
+    return beehus_catalog.preprocessing_status_many([cid], date).get(cid) or {}
+
+
+def _scoped_issue_counts(st, wallet_ids):
+    """{tipo: ocorrências} do status E contando só as linhas (security ×
+    carteira) de carteiras em `wallet_ids` — mesma unidade de contagem do grid
+    normal (ver _PREPROC_SPEC). Itens sem carteira (ex.: conta sem wallet
+    cadastrada) não pertencem a nenhuma carteira do Template e ficam de fora."""
+    out = {}
+    for tkey, _top, _det in _PREPROC_SPEC:
+        n = sum(1 for r in beehus_catalog._rows_from_status(st, tkey)
+                if r.get("walletId") in wallet_ids)
+        if n:
+            out[tkey] = n
+    return out
+
+
+def _scoped_pairs(date):
+    """wallet_scope.pares(date) já sem empresas fora do filtro de visibilidade."""
+    cf = get_company_filter()
+    return [(cid, d, wids) for cid, d, wids in wallet_scope.pares(date)
+            if (not cf or cid in cf) and company_visible(cid)]
+
+
+def _scoped_rows(date, threshold, company_names):
+    """Linhas do grid com escopo ativo. Toda empresa (ou empresa × data de
+    SLA) com carteira no Template entra, mesmo sem atividade na data — a
+    carteira do Template é esperada, então 0/N processadas é informação."""
+    pairs = _scoped_pairs(date)
+    keys = [(cid, d) for cid, d, _ in pairs]
+    statuses = _fanout_pairs(keys, _preproc_status)
+    navs = _fanout_pairs(keys, beehus_catalog.nav_results)
+
+    rows = []
+    for cid, d, wids in pairs:
+        gids = wallet_scope.agrupamentos(cid, d)
+        st  = statuses.get((cid, d)) or {}
+        res = navs.get((cid, d)) or {}
+        processed = {beehus_catalog.id_str(it.get("walletId"))
+                     for it in (st.get("processedWalletsDetailed") or [])
+                     if isinstance(it, dict)} & wids
+        nav_entries = [w for w in (res.get("walletsWithNavDetailed") or [])
+                       if beehus_catalog.id_str(w.get("walletId")) in wids]
+        grp_entries = [x for x in (res.get("groupingsDetailed") or [])
+                       if beehus_catalog.id_str(x.get("groupingId")) in gids]
+        rows.append(_build_row(
+            cid, company_names.get(cid, cid), d,
+            _scoped_issue_counts(st, wids),
+            processed=len(processed),
+            nav_wallet=len({beehus_catalog.id_str(w.get("walletId")) for w in nav_entries}),
+            gap=sum(1 for w in nav_entries
+                    if beehus_catalog._nav_results_is_gap(w, threshold)),
+            nav_grouping=len({beehus_catalog.id_str(x.get("groupingId")) for x in grp_entries}),
+            published=len({beehus_catalog.id_str(x.get("groupingId"))
+                           for x in grp_entries if x.get("published")}),
+            wallets_total=len(wids), groupings_total=len(gids),
+            row_key=_row_key(cid, d),
+            sla_label=wallet_scope.rotulo_defasagens(wids) if wallet_scope.atual().sla else None))
+    # Por empresa; dentro dela, data mais recente primeiro (D-1 antes de D-3).
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    rows.sort(key=lambda r: (r["company"] or "").lower())
+    return rows
 
 
 @bp.route("/api/controlpanel/txn-counts")
@@ -557,6 +715,14 @@ def txn_counts():
     aparecem (o fan-out de G só conta positivos)."""
     date          = request.args.get("date", get_biz_dates(1)[0])
     company_names = get_company_names()
+    if wallet_scope.ativo():
+        items = [
+            {"companyId": cid, "company": company_names.get(cid, cid), "date": d,
+             "rowKey": _row_key(cid, d),
+             "txn": {"count": n, "label": str(n) if n > 0 else "—", "cls": _cell_cls(n)}}
+            for (cid, d), n in _scoped_unidentified_txn_counts(date).items()
+        ]
+        return jsonify({"date": date, "items": items})
     txn_unident   = _unidentified_txn_count_by_company(date)
     cf = get_company_filter()
     items = []
@@ -566,9 +732,40 @@ def txn_counts():
         items.append({
             "companyId": cid,
             "company":   company_names.get(cid, cid),
+            "rowKey":    cid,
             "txn": {"count": n, "label": str(n) if n > 0 else "—", "cls": _cell_cls(n)},
         })
     return jsonify({"date": date, "items": items})
+
+
+# Até 1 bloco da API (150 walletIds/request, ver list_transactions) vale mais
+# pedir só as carteiras do par; acima disso sai mais barato buscar a empresa
+# inteira numa chamada e filtrar aqui.
+_TXN_WALLET_FILTER_MAX = 150
+
+
+def _scoped_txns(cid, date, wallet_ids, final_date=None):
+    """Transações (liquidação em [date, final_date]) só das carteiras do escopo."""
+    wl = sorted(wallet_ids) if len(wallet_ids) <= _TXN_WALLET_FILTER_MAX else None
+    txns = beehus_catalog.transactions_search(
+        cid, initial_date=date, final_date=final_date or date,
+        wallet_ids=wl, date_type="liquidation")
+    return [t for t in txns if beehus_catalog.id_str(t.get("walletId")) in wallet_ids]
+
+
+def _scoped_unidentified_txn_counts(date):
+    """{(companyId, data): n} de transações não identificadas nas carteiras do
+    escopo — mesma regra de _unidentified_txn_count_by_company. Só n > 0."""
+    pairs = _scoped_pairs(date)
+    wids_by_key = {(cid, d): wids for cid, d, wids in pairs}
+
+    def _count(cid, d):
+        return sum(1 for t in _scoped_txns(cid, d, wids_by_key[(cid, d)])
+                   if not t.get("trashed")
+                   and (t.get("beehusTransactionType") or "") == "")
+
+    counts = _fanout_pairs(list(wids_by_key), _count)
+    return {k: n for k, n in counts.items() if n}
 
 
 # ── Per-company issue summary (used by Fluxo apontamentos) ────────────────────
@@ -613,7 +810,11 @@ def issues_summary():
     # call per (company, date); empty/failed → all-zero counts.
     statuses = beehus_catalog.preprocessing_status_many([cid], date)
     st = statuses.get(cid)
-    counts = _counts_from_status(st) if st else {}
+    permitted = wallet_scope.carteiras(cid, date)
+    if permitted is not None:
+        counts = _scoped_issue_counts(st or {}, permitted)
+    else:
+        counts = _counts_from_status(st) if st else {}
 
     # Preserve the order requested by the caller so the UI can render the
     # apontamento list deterministically — order in ISSUE_TYPES matches the
@@ -691,17 +892,20 @@ def get_detail():
         return jsonify({"issues": [], "date": date, "type": typ}), 403
 
     wallet_names = get_wallet_names()
+    permitted = wallet_scope.carteiras(cid, date)
 
     # Issues vêm do pre-processing (E) via `beehus_catalog.issues_detail` — os
     # mesmos arrays `*Detailed` que o grid já consome, expandidos por
     # affectedWallets (1 linha por security×carteira). Drop-in do antigo
     # `db.issues.find({companyId, status:'pending', date, type})`; validado ao
     # vivo == Mongo nos 5 tipos. O enriquecimento (walletName/beehusName/mainId)
-    # segue abaixo, igual a antes.
+    # segue abaixo, igual a antes. Com escopo (painéis Template), só as
+    # linhas das carteiras do Template (e da data de SLA, no Somente SLA).
     issues = sorted([
         {**_format_issue(issue),
          "walletName": wallet_names.get(str(issue.get("walletId", "") or ""), "")}
         for issue in beehus_catalog.issues_detail(cid, date, typ)
+        if permitted is None or (issue.get("walletId") or "") in permitted
     ], key=lambda x: x["createdAt"])
 
     _enrich_issue_securities(issues)
@@ -747,19 +951,38 @@ def get_detail_all():
 
     company_names = get_company_names()
     wallet_names  = get_wallet_names()
-    cids = _visible_company_ids()
-
-    results = _fanout_companies(cids, lambda cid: beehus_catalog.issues_detail(cid, date, typ))
 
     issues = []
-    for cid, company_issues in results.items():
-        for issue in company_issues:
-            issues.append({
-                **_format_issue(issue),
-                "walletName": wallet_names.get(str(issue.get("walletId", "") or ""), ""),
-                "companyId":  cid,
-                "company":    company_names.get(cid, cid),
-            })
+    if wallet_scope.ativo():
+        # Painéis Template: cada (empresa, data) do escopo, só as linhas das
+        # carteiras do par — no Somente SLA as datas diferem por carteira, então
+        # cada issue leva a sua `date`.
+        pairs = _scoped_pairs(date)
+        wids_by_key = {(cid, d): wids for cid, d, wids in pairs}
+        results = _fanout_pairs(list(wids_by_key),
+                                lambda cid, d: beehus_catalog.issues_detail(cid, d, typ))
+        for (cid, d), company_issues in results.items():
+            for issue in company_issues or []:
+                if (issue.get("walletId") or "") not in wids_by_key[(cid, d)]:
+                    continue
+                issues.append({
+                    **_format_issue(issue),
+                    "walletName": wallet_names.get(str(issue.get("walletId", "") or ""), ""),
+                    "companyId":  cid,
+                    "company":    company_names.get(cid, cid),
+                    "date":       d,
+                })
+    else:
+        cids = _visible_company_ids()
+        results = _fanout_companies(cids, lambda cid: beehus_catalog.issues_detail(cid, date, typ))
+        for cid, company_issues in results.items():
+            for issue in company_issues:
+                issues.append({
+                    **_format_issue(issue),
+                    "walletName": wallet_names.get(str(issue.get("walletId", "") or ""), ""),
+                    "companyId":  cid,
+                    "company":    company_names.get(cid, cid),
+                })
     issues.sort(key=lambda x: (x["company"], x["createdAt"]))
 
     def _to_oid(val):
@@ -817,6 +1040,10 @@ def wallet_issues():
     company_name  = company_names.get(cid) or cid
     wallets       = beehus_catalog.wallets_for_company(cid)  # {walletId: name}
     by_wallet     = beehus_catalog.issues_by_wallet_detail(cid, date)
+    permitted     = wallet_scope.carteiras(cid, date)
+    if permitted is not None:
+        wallets   = {w: nm for w, nm in wallets.items() if w in permitted}
+        by_wallet = {w: r for w, r in by_wallet.items() if w in permitted}
 
     # ── Modo 1: lista de carteiras para o seletor ─────────────────────────
     if not wid:
@@ -1027,9 +1254,15 @@ def cell_detail():
     company_name  = company_names.get(company_id) or company_id
 
     groupings = _untrashed_groupings_for_company(company_id)
+    # Painéis Template: denominador = agrupamentos/carteiras do Template (mesmo
+    # recorte do grid), não o total da empresa.
+    permitted_groupings = wallet_scope.agrupamentos(company_id, date)
+    permitted_wallets   = wallet_scope.carteiras(company_id, date)
 
     # ── Grouping-level columns ────────────────────────────────────────────
     if column in _GROUPING_COLUMNS:
+        if permitted_groupings is not None:
+            groupings = [g for g in groupings if g["id"] in permitted_groupings]
         done = _nav_done_groupings(company_id, date,
                                    only_published=(column == "published"))
         items = [{
@@ -1050,6 +1283,8 @@ def cell_detail():
 
     # ── Wallet-level columns (processed / nav_wallet) ─────────────────────
     wallets = _wallets_for_company(company_id)
+    if permitted_wallets is not None:
+        wallets = [w for w in wallets if w["id"] in permitted_wallets]
     wallet_ids = {w["id"] for w in wallets}
     wallet_names = {w["id"]: (w["name"] or w["id"]) for w in wallets}
 
@@ -1170,24 +1405,34 @@ def _visible_company_ids():
 
 
 def _visible_entities():
-    """[{id, name, companyId, companyName}] — uma entidade ("carteira-mãe")
-    pertence a UMA empresa (via `wallets_index`, que já traz `companyId`/
+    """[{id, name, companyId, companyName}] — um item por par (entidade,
+    empresa) com carteira (via `wallets_index`, que já traz `companyId`/
     `entityId` normalizados de todas as carteiras) — usado pra alimentar o
     seletor de entidade do "Processar Transações" sem exigir que o operador
-    escolha a empresa também."""
+    escolha a empresa também (o seletor agrupa por empresa)."""
     names = beehus_catalog.entity_names()
     companies = get_company_names()
-    by_entity = {}
-    for w in beehus_catalog.wallets_index().values():
+    # Painéis Template: só entidades que têm carteira do Template (a heurística
+    # roda por entidade inteira — não há como restringir a carteiras).
+    permitted = wallet_scope.carteiras()
+    # [CORRIGIDO 2026-09-24] Uma entidade NÃO pertence a uma empresa só —
+    # 38 das 100 (Itaú, BTG, XP, Santander...) aparecem em várias empresas, e o
+    # antigo setdefault(eid, cid) guardava só a 1ª: a entidade Itaú da Blue3,
+    # p.ex., nunca era oferecida nem processada. A heurística roda por
+    # (empresa, entidade), então a lista é de pares.
+    pairs = set()
+    for wid, w in beehus_catalog.wallets_index().items():
         eid = w.get("entityId")
         cid = w.get("companyId")
         if not eid or not cid or not company_visible(cid):
             continue
-        by_entity.setdefault(eid, cid)
+        if permitted is not None and wid not in permitted:
+            continue
+        pairs.add((eid, cid))
     out = [
         {"id": eid, "name": names.get(eid, eid),
          "companyId": cid, "companyName": companies.get(cid, cid)}
-        for eid, cid in by_entity.items()
+        for eid, cid in pairs
     ]
     out.sort(key=lambda e: (e["companyName"], e["name"]))
     return out
@@ -1217,6 +1462,11 @@ def process_transactions():
         return jsonify({"error": "entityId, companyId e date são obrigatórios"}), 400
     if not company_visible(company_id):
         return jsonify({"error": "empresa não visível"}), 403
+    permitted = wallet_scope.carteiras(company_id)
+    if permitted is not None and not any(
+            beehus_catalog.id_str((beehus_catalog.wallet_doc(w) or {}).get("entityId")) == entity_id
+            for w in permitted):
+        return jsonify({"error": "entidade sem carteira no TemplateCarteiras"}), 403
 
     try:
         result = run_heuristics(
@@ -1245,6 +1495,13 @@ def detail_all():
     cids = _visible_company_ids()
     issue_keys = {k for k, _ in ISSUE_TYPES}
     rows = []
+
+    if wallet_scope.ativo():
+        rows = _scoped_detail_all(date_, column, company_names, issue_keys)
+        if rows is None:
+            return jsonify({"error": f"coluna inválida: {column}"}), 400
+        rows.sort(key=lambda r: (r["company"], r.get("date") or "", r["walletName"]))
+        return jsonify({"rows": rows, "date": date_, "column": column})
 
     if column in issue_keys:
         wallet_names = get_wallet_names()
@@ -1341,6 +1598,86 @@ def detail_all():
 
     rows.sort(key=lambda r: (r["company"], r["walletName"]))
     return jsonify({"rows": rows, "date": date_, "column": column})
+
+
+def _scoped_detail_all(date_, column, company_names, issue_keys):
+    """Mesmas linhas de detail_all, recortadas ao escopo (painéis Template):
+    uma varredura por (empresa, data) do escopo, só carteiras/agrupamentos do
+    Template. No Somente SLA cada linha leva a sua `date`. None = coluna
+    inválida.
+
+    Obs.: wallet_scope usa o contexto da requisição (flask.g) — tudo que
+    depende dele é resolvido AQUI, antes do fan-out (as threads não têm
+    contexto)."""
+    pairs = _scoped_pairs(date_)
+    wids_by_key = {(cid, d): wids for cid, d, wids in pairs}
+    keys = list(wids_by_key)
+    wallet_names = get_wallet_names()
+    sla = wallet_scope.atual().sla
+
+    def _row(cid, d, wallet_name, detail, **extra):
+        row = {"companyId": cid, "company": company_names.get(cid, cid),
+               "walletName": wallet_name, "detail": detail, **extra}
+        if sla:
+            row["date"] = d
+        return row
+
+    rows = []
+    if column in issue_keys:
+        results = _fanout_pairs(keys, lambda cid, d: beehus_catalog.issues_detail(cid, d, column))
+        for (cid, d), issues in results.items():
+            for issue in issues or []:
+                wid = issue.get("walletId") or ""
+                if wid not in wids_by_key[(cid, d)]:
+                    continue
+                rows.append(_row(cid, d, wallet_names.get(wid, wid),
+                                 issue.get("unprocessedSecurityId") or issue.get("securityId") or ""))
+
+    elif column == "txn":
+        for (cid, d), n in _scoped_unidentified_txn_counts(date_).items():
+            rows.append(_row(cid, d, "", f"{n} transação(ões) não identificada(s)"))
+
+    elif column == "processed":
+        results = _fanout_pairs(
+            keys, lambda cid, d: _processed_done_wallets(cid, d, wids_by_key[(cid, d)]))
+        for (cid, d), done in results.items():
+            for wid in wids_by_key[(cid, d)] - (done or set()):
+                rows.append(_row(cid, d, wallet_names.get(wid, wid), "pendente"))
+
+    elif column in ("nav_wallet", "gap"):
+        threshold = _diff_threshold_decimal(request)
+        results = _fanout_pairs(keys, beehus_catalog.nav_results)
+        for (cid, d), res in results.items():
+            detailed = {beehus_catalog.id_str(w.get("walletId")): w
+                        for w in (res or {}).get("walletsWithNavDetailed") or []}
+            for wid in wids_by_key[(cid, d)]:
+                entry = detailed.get(wid)
+                name = wallet_names.get(wid, wid)
+                if column == "gap":
+                    if entry and beehus_catalog._nav_results_is_gap(entry, threshold):
+                        rows.append(_row(cid, d, entry.get("walletName") or name,
+                                         f"NAV {entry.get('returnNavPerShare')} vs Contrib "
+                                         f"{entry.get('returnContribution')}"))
+                elif entry:
+                    rows.append(_row(cid, d, name, "ok",
+                                     returnNavPerShare=entry.get("returnNavPerShare"),
+                                     returnContribution=entry.get("returnContribution"),
+                                     returnDifference=entry.get("returnDifference")))
+                else:
+                    rows.append(_row(cid, d, name, "pendente"))
+
+    elif column in ("nav_grouping", "published"):
+        gids_by_key = {k: wallet_scope.agrupamentos(k[0], k[1]) for k in keys}
+        gindex = get_grouping_index()
+        results = _fanout_pairs(
+            keys, lambda cid, d: _nav_done_groupings(cid, d, only_published=(column == "published")))
+        for (cid, d), done in results.items():
+            for gid in gids_by_key[(cid, d)] - (done or set()):
+                rows.append(_row(cid, d, (gindex.get(gid) or {}).get("name") or gid, "pendente"))
+
+    else:
+        return None
+    return rows
 
 
 # ── Classifier endpoints ──────────────────────────────────────────────────────
@@ -1984,6 +2321,9 @@ def process_all_wallets():
     if not position_date:
         return jsonify({"error": "date é obrigatório"}), 400
 
+    if wallet_scope.ativo():
+        return _scoped_process_all_wallets(position_date)
+
     cids = _visible_company_ids()
     if not cids:
         return jsonify({"error": "nenhuma empresa visível"}), 400
@@ -2019,6 +2359,54 @@ def process_all_wallets():
     return jsonify({
         "results": _fanout_companies(list(targets.keys()), _run),
         "companyNames": get_company_names(),
+        "date": position_date,
+        "skipped": skipped,
+    })
+
+
+def _scoped_process_all_wallets(position_date):
+    """process_all_wallets com escopo (painéis Template): mesma regra "só quem
+    tem posição bruta e ainda não foi processado", mas só carteiras do
+    Template, por (empresa, data) do escopo. No Somente SLA `position_date` é a
+    data de EXECUÇÃO — cada empresa é processada em cada uma das suas datas de
+    SLA. `results`/`companyNames` vêm chaveados pelo rowKey da linha do grid."""
+    company_names = get_company_names()
+    pairs = _scoped_pairs(position_date)
+    if not pairs:
+        return jsonify({"error": "nenhuma carteira do TemplateCarteiras visível"}), 400
+    wids_by_key = {(cid, d): wids for cid, d, wids in pairs}
+    labels = {}
+    for cid, d in wids_by_key:
+        key = _row_key(cid, d)
+        labels[key] = company_names.get(cid, cid) + (f" ({d})" if key != cid else "")
+
+    def _ready(cid, d):
+        wids = wids_by_key[(cid, d)]
+        has_raw = _unprocessed_existing_wallets(cid, d, wids)
+        done    = _processed_done_wallets(cid, d, wids)
+        return sorted((has_raw & wids) - done)
+
+    ready = _fanout_pairs(list(wids_by_key), _ready)
+    targets = {k: w for k, w in ready.items() if w}
+    skipped = len(wids_by_key) - len(targets)
+    if not targets:
+        return jsonify({"results": {}, "companyNames": labels,
+                        "date": position_date, "skipped": skipped})
+
+    def _run(cid, d):
+        try:
+            result = process_processed_position(
+                company_id=cid, position_date=d, wallets=targets[(cid, d)],
+            )
+            return {"ok": True, "walletsProcessed": len(targets[(cid, d)]),
+                    "response": result if result is not None else {}}
+        except (BeehusAuthError, BeehusAPIError) as e:
+            return {"ok": False, "error": str(e)}
+
+    results = _fanout_pairs(list(targets), _run)
+    return jsonify({
+        "results": {_row_key(cid, d): res for (cid, d), res in results.items()},
+        "companyNames": labels,
         "date": position_date,
         "skipped": skipped,
     })

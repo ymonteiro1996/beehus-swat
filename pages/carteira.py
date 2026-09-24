@@ -39,6 +39,7 @@ from flask import Blueprint, jsonify, render_template, request
 from openpyxl import Workbook
 
 import beehus_catalog
+import wallet_scope
 from beehus_api import (
     BeehusAPIError,
     BeehusAuthError,
@@ -194,9 +195,12 @@ def list_companies():
     settings.json gate so the dropdown matches the favourites-bar one."""
     from db import get_company_filter, get_company_names
     cf = get_company_filter()
+    scoped = wallet_scope.empresas()  # painéis Template: só empresas do cadastro
     out = []
     for cid, name in get_company_names().items():
         if cf and cid not in cf:
+            continue
+        if scoped is not None and cid not in scoped:
             continue
         out.append({"id": cid, "name": name or cid})
     out.sort(key=lambda c: (c["name"] or "").lower())
@@ -208,11 +212,14 @@ def list_groupings():
     company_id = (request.args.get("companyId") or "").strip()
     if not company_visible(company_id):
         return jsonify([])
+    permitted = wallet_scope.agrupamentos(company_id)
     out = []
     for gid, g in get_grouping_index().items():
         if g.get("trashed"):
             continue
         if g.get("companyId") != company_id:
+            continue
+        if permitted is not None and gid not in permitted:
             continue
         out.append({
             "id":        gid,
@@ -229,8 +236,11 @@ def list_wallets():
     if not company_visible(company_id):
         return jsonify([])
     wallet_names = get_wallet_names()
+    permitted = wallet_scope.carteiras(company_id)
     items = []
     for wid, nm in beehus_catalog.wallets_for_company(company_id).items():
+        if permitted is not None and wid not in permitted:
+            continue
         items.append({"id": wid, "name": nm or wallet_names.get(wid, wid)})
     items.sort(key=lambda x: (x["name"] or "").lower())
     return jsonify(items)
@@ -269,6 +279,9 @@ def get_data():
         return jsonify({"wallets": [], "dates": []})
 
     wallet_ids = _resolve_wallets(company_id, grp_ids, wal_ids)
+    permitted = wallet_scope.carteiras(company_id)
+    if permitted is not None:
+        wallet_ids = [w for w in wallet_ids if w in permitted]
     if not wallet_ids:
         return jsonify({"wallets": [], "dates": dates})
 

@@ -1,8 +1,22 @@
 {% extends "base.html" %}
 {% set active = "controlpanel" %}
-{% block title %}Painel de Controle{% endblock %}
+{% block title %}{{ panel_title or "Painel de Controle" }}{% endblock %}
 
 {% block head %}
+<script>
+  /* Painéis "Template Carteiras" (pages/controlpanel.py::_render_panel): o
+     modo vira o escopo que o wrapper de fetch do base.html manda em toda
+     chamada /api/ (também das ferramentas em iframe). runDate = data dos
+     cards (no Somente SLA, a data de EXECUÇÃO); companyId = empresa escolhida
+     na barra de escopo, restaurada aqui já na 1ª chamada. Painel normal: null. */
+  window.__SWAT_PANEL_MODE__ = {{ (panel_mode or "")|tojson }};
+  window.__SWAT_SCOPE__ = null;
+  if (window.__SWAT_PANEL_MODE__) {
+    let _savedCompany = "";
+    try { _savedCompany = localStorage.getItem("controlpanel.scopeCompany." + window.__SWAT_PANEL_MODE__) || ""; } catch (e) {}
+    window.__SWAT_SCOPE__ = { mode: window.__SWAT_PANEL_MODE__, runDate: null, companyId: _savedCompany };
+  }
+</script>
 {% if request.args.get('_frame') == '1' %}
 <style>
   /* Dentro do shell (templates/shell.html), o botão "Token" vive no sidebar
@@ -704,6 +718,30 @@ try {
   <span id="cache-banner-msg">Atualizando cache de securities…</span>
 </div>
 
+{% if panel_mode %}
+<!-- Barra de escopo dos painéis Template Carteiras — preenchida por ScopeBar
+     (GET /api/controlpanel/scope-info). O seletor de empresa recorta TODOS os
+     fluxos do painel (grid, drill-downs e ferramentas), não só a grade. -->
+<div id="scope-bar" class="px-6 pt-2 pb-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+  <span class="inline-flex items-center font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-2.5 py-0.5 whitespace-nowrap">
+    {{ panel_title }}
+  </span>
+  <label class="inline-flex items-center gap-1.5 text-gray-600" title="Todas as carteiras do Template, independente da empresa — ou só as de uma empresa">
+    Empresa
+    <select id="scope-company" class="ec-input text-[11px]" style="padding-top:2px;padding-bottom:2px" onchange="ScopeBar.setCompany(this.value)">
+      <option value="">Todas as empresas</option>
+    </select>
+  </label>
+  {% if panel_mode == 'template_sla' %}
+  <span class="text-gray-500">
+    Data selecionada = <b class="text-gray-700">data de execução</b>. Cada carteira entra só na sua data de SLA
+    (execução − Defasagem, dias úteis ANBIMA; "M" conta como D-1).
+  </span>
+  {% endif %}
+  <span id="scope-source" class="text-gray-400 ml-auto whitespace-nowrap"></span>
+</div>
+{% endif %}
+
 <!-- Date cards — inline layout: date and counter on the same row, with
      `whitespace-nowrap` + `.truncate` so the content never wraps to a second
      line. Height is matched to the pipeline bar row above. -->
@@ -761,7 +799,7 @@ try {
                contam com ISSUE_TYPES = 6 (2+4) e EXTRA_COLS = 5 (3+2) — se essas listas
                mudarem de tamanho em pages/controlpanel.py, ajustar aqui também. -->
           <tr class="text-[9px]">
-            <th rowspan="2" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 w-[140px] tracking-wide align-bottom normal-case text-gray-500">Empresa</th>
+            <th rowspan="2" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 {% if panel_mode == 'template_sla' %}w-[190px]{% else %}w-[140px]{% endif %} tracking-wide align-bottom normal-case text-gray-500">{% if panel_mode == 'template_sla' %}Empresa · data SLA{% else %}Empresa{% endif %}</th>
             <th colspan="2" class="px-1 py-1 text-center font-semibold tracking-wide bg-slate-100 text-slate-500 border-r-2 border-white" title="Carteira precisa existir e ter posição bruta carregada antes de qualquer outra etapa.">Pré-requisito</th>
             <th colspan="4" class="px-1 py-1 text-center font-semibold tracking-wide bg-blue-50 text-blue-500 border-r-2 border-white" title="Ativos precisam estar mapeados, classificados e com preço antes do processamento da posição.">Processamento das Carteiras</th>
             <th colspan="1" class="px-1 py-1 text-center font-semibold tracking-wide bg-purple-50 text-purple-500 border-r-2 border-white" title="Transações não identificadas — checagem em paralelo, não bloqueia o resto da esteira.">Reconciliação</th>
@@ -880,7 +918,7 @@ try {
 <div id="process-txn-modal" class="fixed inset-0 bg-black/40 flex items-center justify-center"
      style="display:none;z-index:60"
      onclick="if(event.target===this) closeProcessTxnModal()">
-  <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+  <div class="bg-white rounded-xl shadow-xl w-full {% if panel_mode %}max-w-4xl{% else %}max-w-lg{% endif %} max-h-[85vh] flex flex-col">
     <div class="flex items-center justify-between px-5 py-3 border-b flex-shrink-0">
       <h3 class="font-semibold text-sm text-gray-700">Processar Transações</h3>
       <button onclick="closeProcessTxnModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
@@ -889,6 +927,11 @@ try {
       <p class="text-xs text-gray-500 mb-3">
         Roda a heurística de identificação de transações (POST /data-science/heuristics)
         para a entidade e data escolhidas.
+        {% if panel_mode %}
+        <br><span class="text-indigo-600">A heurística roda na entidade inteira (a API não filtra por carteira), mas o
+        resultado abaixo mostra só as transações das carteiras do TemplateCarteiras{% if panel_mode == 'template_sla' %}
+        com data de SLA na data escolhida{% endif %}.</span>
+        {% endif %}
       </p>
       <label class="block text-[11px] text-gray-500 mb-1">Entidade</label>
       <select id="ptx-entity" class="ec-input w-full mb-3">
@@ -899,6 +942,10 @@ try {
       <div id="ptx-msg" class="text-xs mb-2"></div>
       <div class="flex justify-end gap-2">
         <button onclick="closeProcessTxnModal()" class="ec-btn ec-btn-muted text-xs">Fechar</button>
+        {% if panel_mode %}
+        <button onclick="_ptxViewSelected()" class="ec-btn ec-btn-muted text-xs"
+                title="Lista as transações da entidade/data escolhidas, só das carteiras do Template (sem processar)">Ver transações do Template</button>
+        {% endif %}
         <button id="ptx-run-btn" onclick="_runProcessTxn()" class="ec-btn ec-btn-primary text-xs">Processar</button>
       </div>
 
@@ -915,6 +962,11 @@ try {
         </div>
         <div id="ptx-all-progress" class="text-xs"></div>
       </div>
+      {% if panel_mode %}
+      <!-- Painéis Template: transações da(s) entidade(s) processada(s) SÓ das
+           carteiras do Template — preenchido por _ptxShowTemplateTxns. -->
+      <div id="ptx-result" class="border-t mt-4 pt-4 text-xs" style="display:none"></div>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -1318,7 +1370,63 @@ try {
   let _mappingRows = [];           // cached rows for filtering
   let _c3Rows     = [];           // cached rows for C3 export
   let _gridRows   = [];           // last /api/controlpanel/rows response — feeds o Quadro da Esteira
-  let _gridTxnByCompany = {};     // companyId -> contagem de TXN não identificada (chega depois, via /txn-counts)
+  let _gridTxnByCompany = {};     // rowKey -> contagem de TXN não identificada (chega depois, via /txn-counts)
+
+  // ── Painéis Template Carteiras ──────────────────────────────────────────
+  // _gridDate = data do card selecionado (a do grid). _currentDate = data "em
+  // foco" que os drill-downs/modais usam. No painel normal e no Template as
+  // duas são sempre iguais. No Somente SLA cada linha é (empresa, data de SLA):
+  // _gridDate é a data de EXECUÇÃO e, ao interagir com uma linha, _currentDate
+  // passa a ser a data de SLA daquela linha — assim todos os modais/ações
+  // existentes funcionam sem mudança, com a data certa. rowKey identifica a
+  // linha (= companyId, ou "companyId|data" no SLA).
+  const PANEL_MODE = window.__SWAT_PANEL_MODE__ || "";
+  const IS_SLA     = PANEL_MODE === "template_sla";
+  let _gridDate    = null;
+  let _gridSeq     = 0;           // descarta respostas de /txn-counts de um carregamento anterior
+  const _rowKeyOf = r => r.rowKey || r.companyId;
+  function _focusRowDate(date) { if (date) _currentDate = date; }
+  function _fmtBr(iso) { return iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : ""; }
+
+  const ScopeBar = {
+    _key() { return "controlpanel.scopeCompany." + PANEL_MODE; },
+    async init() {
+      if (!PANEL_MODE) return;
+      const sel = document.getElementById("scope-company");
+      const src = document.getElementById("scope-source");
+      try {
+        const r = await fetch("/api/controlpanel/scope-info");
+        const info = await r.json();
+        if (!r.ok) throw new Error(info.error || `HTTP ${r.status}`);
+        const saved = window.__SWAT_SCOPE__.companyId || "";
+        sel.innerHTML = `<option value="">Todas as empresas (${info.totalCarteiras} carteiras)</option>` +
+          (info.empresas || []).map(e =>
+            `<option value="${_escHtml(e.id)}">${_escHtml(e.name)} (${e.count})</option>`).join("");
+        if (saved && !(info.empresas || []).some(e => e.id === saved)) {
+          this.setCompany("");          // empresa salva saiu do Template
+        } else {
+          sel.value = saved;
+        }
+        const orfas = info.orfas ? ` · ${info.orfas} walletId(s) do Template sem carteira no Beehus` : "";
+        src.textContent = `Fonte: TemplateCarteiras.xlsx${info.atualizadoEmTexto ? " · alterado em " + info.atualizadoEmTexto : ""}${orfas}`;
+        src.title = info.arquivo || "";
+        if (!info.totalCarteiras) {
+          src.textContent = "Nenhuma carteira do Template encontrada no Beehus — confira o token e clique em Reiniciar.";
+          src.className = "text-red-500 ml-auto";
+        }
+      } catch (e) {
+        src.textContent = "Erro ao carregar o TemplateCarteiras: " + e.message;
+        src.className = "text-red-500 ml-auto";
+      }
+    },
+    setCompany(companyId) {
+      window.__SWAT_SCOPE__.companyId = companyId || "";
+      try { localStorage.setItem(this._key(), companyId || ""); } catch (e) {}
+      const sel = document.getElementById("scope-company");
+      if (sel && sel.value !== (companyId || "")) sel.value = companyId || "";
+      if (_gridDate) selectDate(_gridDate);
+    },
+  };
 
   // Extras-column keys backed by /api/controlpanel/cell-detail. Kept in
   // sync with `_CELL_DETAIL_COLS` in pages/controlpanel.py — when a key
@@ -1350,18 +1458,21 @@ try {
   // depois por /api/controlpanel/txn-counts. Mantém o conjunto de empresas
   // correto: empresas que só têm transações pendentes (ausentes da grade inicial)
   // são ANEXADAS quando esta rota retorna.
-  function _txnCellHtml(companyId, companyName, tx) {
+  function _txnCellHtml(companyId, companyName, tx, rowKey, date) {
     // tx === null → estado "carregando" ("…"); senão {count, label, cls}.
     // border-r sempre presente: TXN é a "estação" Reconciliação inteira (1
     // coluna só), separada do Processamento/NAV que vem depois.
-    const data = `data-txn-company="${_escHtml(companyId)}" data-txn-name="${_escHtml(companyName)}"`;
+    // rowKey/date: linha do grid (no Somente SLA, empresa × data de SLA).
+    rowKey = rowKey || companyId;
+    date   = date || _gridDate || "";
+    const data = `data-txn-company="${_escHtml(companyId)}" data-txn-name="${_escHtml(companyName)}" data-txn-row="${_escHtml(rowKey)}" data-txn-date="${_escHtml(date)}"`;
     if (!tx) {
       return `<td class="px-1 py-1.5 text-center text-gray-400 col-extras-first border-r-2 border-gray-200 js-txn-cell" ${data}><span class="opacity-40">…</span></td>`;
     }
     if (tx.count > 0) {
       return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first border-r-2 border-gray-200 cursor-pointer hover:opacity-75 js-open-txn js-txn-cell" ${data}
-                data-company-id="${_escHtml(companyId)}" data-date="${_escHtml(_currentDate || '')}"
-                title="Abrir Identificar Transações para ${_escHtml(companyName)} em ${_escHtml(_currentDate || '')}">${_escHtml(tx.label)}</td>`;
+                data-company-id="${_escHtml(companyId)}" data-date="${_escHtml(date)}"
+                title="Abrir Identificar Transações para ${_escHtml(companyName)} em ${_escHtml(date)}">${_escHtml(tx.label)}</td>`;
     }
     return `<td class="px-1 py-1.5 text-center ${tx.cls} col-extras-first border-r-2 border-gray-200 js-txn-cell" ${data}>${_escHtml(tx.label)}</td>`;
   }
@@ -1384,21 +1495,22 @@ try {
     </tr>`;
   }
 
-  function _loadTxnCounts(date) {
+  function _loadTxnCounts(date, seq) {
     fetch(`/api/controlpanel/txn-counts?date=${encodeURIComponent(date)}`)
       .then(r => r.json())
       .then(({ items }) => {
-        if (date !== _currentDate) return;   // usuário trocou de data — descarta
+        if (seq !== _gridSeq) return;   // usuário trocou de data/empresa — descarta
         const byId = {};
-        (items || []).forEach(it => { byId[it.companyId] = it; });
+        (items || []).forEach(it => { byId[_rowKeyOf(it)] = it; });
         // 1) Atualiza as células TXN das linhas já renderizadas.
         document.querySelectorAll("#tbody .js-txn-cell").forEach(cell => {
           const cid  = cell.dataset.txnCompany;
           const name = cell.dataset.txnName || cid;
-          const it   = byId[cid];
+          const key  = cell.dataset.txnRow || cid;
+          const it   = byId[key];
           const tx   = it ? it.txn : {count: 0, label: "—", cls: "text-gray-400"};
-          cell.outerHTML = _txnCellHtml(cid, name, tx);
-          delete byId[cid];                  // consumida
+          cell.outerHTML = _txnCellHtml(cid, name, tx, key, cell.dataset.txnDate);
+          delete byId[key];                  // consumida
         });
         // 2) Empresas que só têm transações pendentes (não vieram do /rows) →
         //    anexa linhas "vazias" com a coluna TXN preenchida.
@@ -1413,7 +1525,7 @@ try {
         }
         // TXN chega depois do resto — só agora dá pra saber com certeza quem
         // está 100% liberado (linha verde) e o total de TXN pendente (totais).
-        (items || []).forEach(it => { _gridTxnByCompany[it.companyId] = it.txn?.count || 0; });
+        (items || []).forEach(it => { _gridTxnByCompany[_rowKeyOf(it)] = it.txn?.count || 0; });
         _markClearRows();
         _renderTotalsRow();
       })
@@ -1447,13 +1559,13 @@ try {
       if (e.total == null) { if (e.count > 0) return false; }        // GAP
       else if (e.total > 0 && e.count < e.total) return false;        // ratio parcial
     }
-    if (_gridTxnByCompany[r.companyId] > 0) return false;
+    if (_gridTxnByCompany[_rowKeyOf(r)] > 0) return false;
     return true;
   }
 
   function _markClearRows() {
-    document.querySelectorAll("#tbody tr[data-company-id]").forEach(tr => {
-      const r = _gridRows.find(row => row.companyId === tr.dataset.companyId);
+    document.querySelectorAll("#tbody tr[data-row-key]").forEach(tr => {
+      const r = _gridRows.find(row => _rowKeyOf(row) === tr.dataset.rowKey);
       tr.classList.toggle("row-clear", _isRowClear(r));
     });
   }
@@ -1492,6 +1604,11 @@ try {
 
   function selectDate(date) {
     _currentDate = date;
+    _gridDate    = date;
+    const seq    = ++_gridSeq;
+    // Painéis Template: a data do card é a data de execução do escopo (vale
+    // também para as ferramentas em iframe, que leem o escopo a cada chamada).
+    if (window.__SWAT_SCOPE__) window.__SWAT_SCOPE__.runDate = date;
     _gridTxnByCompany = {};   // TXN é por data — descarta contagens da data anterior
 
     // highlight active card
@@ -1507,10 +1624,28 @@ try {
     const th = document.getElementById("threshold-input")?.value;
     if (th !== undefined && th !== "") params.set("threshold", th);
     fetch(`/api/controlpanel/rows?${params}`).then(r => r.json()).then(({ rows }) => {
+      if (seq !== _gridSeq) return;   // chegou resposta de um carregamento anterior
+      rows = rows || [];
       _gridRows = rows;
-      document.getElementById("tbody").innerHTML = rows.map(r =>
-        `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(r.company.toLowerCase())}" data-company-id="${_escHtml(r.companyId)}">
-          <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(r.company)}">${_bottleneckBadge(r)}${_escHtml(r.company)}</td>
+      if (!rows.length && PANEL_MODE) {
+        // (Painel normal segue igual: a coluna TXN ainda pode anexar linhas.)
+        const msg = document.getElementById("msg");
+        msg.textContent = "Nenhuma carteira do TemplateCarteiras nesta seleção.";
+        msg.style.display = "block";
+        document.getElementById("table").style.display = "none";
+        return;
+      }
+      document.getElementById("tbody").innerHTML = rows.map(r => {
+        const rowDate = r.date || date;
+        // Somente SLA: 1 linha por (empresa, data de SLA) — rótulo com a
+        // defasagem e a data que aquela linha avalia.
+        // Nome trunca, etiqueta de SLA nunca (é o que diferencia as linhas).
+        const nameCell = IS_SLA
+          ? `<div class="flex items-center min-w-0">${_bottleneckBadge(r)}<span class="truncate">${_escHtml(r.company)}</span>
+               <span class="ml-1 flex-shrink-0 px-1.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-semibold" title="Carteiras ${_escHtml(r.slaLabel || "")} avaliadas em ${_escHtml(rowDate)}">${_escHtml(r.slaLabel || "")} · ${_escHtml(_fmtBr(rowDate))}</span></div>`
+          : `${_bottleneckBadge(r)}${_escHtml(r.company)}`;
+        return `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(r.company.toLowerCase())}" data-company-id="${_escHtml(r.companyId)}" data-row-key="${_escHtml(_rowKeyOf(r))}" data-date="${_escHtml(rowDate)}">
+          <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(r.company)}${IS_SLA ? " — " + _escHtml(r.slaLabel || "") + " · " + _escHtml(rowDate) : ""}">${nameCell}</td>
           ${r.cells.map((c, i) => {
             // Divisor de "estação da esteira" — depois da Posição (fim de
             // Pré-requisito) e depois da última (Preço para o dia, fim de
@@ -1525,7 +1660,7 @@ try {
           }).join("")}
           ${/* TXN: placeholder "…" — preenchido depois por _loadTxnCounts (G é
                 o endpoint mais caro, carregado após a tela renderizar). */
-            _txnCellHtml(r.companyId, r.company, null)}
+            _txnCellHtml(r.companyId, r.company, null, _rowKeyOf(r), rowDate)}
           ${(r.extras || []).map((e, i) => {
             const sep = i === 0 ? " col-extras-first" : "";
             // Divisor de estação depois do GAP — fim de "Processamento / NAV",
@@ -1541,11 +1676,12 @@ try {
                         data-company-id="${_escHtml(r.companyId)}"
                         data-company-name="${_escHtml(r.company)}"
                         data-column="${_escHtml(e.key)}"
-                        title="Ver detalhes de ${_escHtml(r.company)} em ${_escHtml(_currentDate || '')}">${_escHtml(e.label)}</td>`;
+                        title="Ver detalhes de ${_escHtml(r.company)} em ${_escHtml(rowDate)}">${_escHtml(e.label)}</td>`;
             }
             return `<td class="px-1 py-1.5 text-center ${e.cls}${sep}${div}">${_escHtml(e.label)}</td>`;
           }).join("")}
-        </tr>`).join("");
+        </tr>`;
+      }).join("");
 
       document.getElementById("msg").style.display   = "none";
       document.getElementById("table").style.display = "";
@@ -1555,7 +1691,7 @@ try {
 
       // Tela já visível com E + /results; agora busca a coluna TXN (endpoint G,
       // o mais caro) em segundo plano e preenche os "…".
-      _loadTxnCounts(date);
+      _loadTxnCounts(date, seq);
     });
   }
 
@@ -1583,7 +1719,7 @@ try {
             return;
           }
           // Refresh the active date so the GAP column reflects the new threshold.
-          if (_currentDate) selectDate(_currentDate);
+          if (_gridDate) selectDate(_gridDate);
         } catch (e) {
           console.warn("threshold save error:", e);
         }
@@ -1596,6 +1732,10 @@ try {
   // path. Reading from data-* via dataset avoids both (HTML parser decodes
   // attributes, JS never re-parses them as strings).
   document.getElementById("tbody").addEventListener("click", e => {
+    // Data da linha em foco (no Somente SLA, a data de SLA daquela linha) —
+    // todos os drill-downs abaixo leem _currentDate.
+    const rowTr = e.target.closest("tr[data-row-key]");
+    if (rowTr) _focusRowDate(rowTr.dataset.date);
     // Progress-column drill-down (Posições Processadas / NAV Wallet /
     // NAV Grouping / Published): open the cell-detail modal with the
     // grouping/wallet breakdown.
@@ -1632,7 +1772,10 @@ try {
   ]);
   document.getElementById("table").querySelector("thead").addEventListener("click", e => {
     const th = e.target.closest("th[data-column]");
-    if (!th || !_currentDate) return;
+    if (!th || !_gridDate) return;
+    // Visão cruzada = a data do grid (no Somente SLA, a de execução — o backend
+    // expande para as datas de SLA de cada carteira).
+    _focusRowDate(_gridDate);
     const column = th.dataset.column, label = th.textContent.trim();
     if (_ISSUE_TYPE_KEYS.has(column)) openModalAllCompanies(column, label);
     else                              openAllCompaniesModal(column, label);
@@ -1688,7 +1831,7 @@ try {
         <tbody>
           ${rows.map(r => `
             <tr class="border-b last:border-0">
-              <td class="px-2 py-1.5 text-gray-700">${r.company}</td>
+              <td class="px-2 py-1.5 text-gray-700">${r.company}${r.date ? ` <span class="text-[10px] text-indigo-600">· ${_escHtml(r.date)}</span>` : ""}</td>
               <td class="px-2 py-1.5 text-gray-600">${r.walletName || "—"}</td>
               ${isNavWallet ? `
               <td class="px-2 py-1.5 ${r.detail === 'pendente' ? 'text-amber-600' : 'text-green-600'}">${r.detail}</td>
@@ -1749,7 +1892,11 @@ try {
     const msg    = document.getElementById("ptx-msg");
     msg.textContent = "";
     dateEl.value = _currentDate || "";
-    if (!_ptxAllRunning) document.getElementById("ptx-all-progress").innerHTML = "";
+    if (!_ptxAllRunning) {
+      document.getElementById("ptx-all-progress").innerHTML = "";
+      const res = document.getElementById("ptx-result");
+      if (res) { res.style.display = "none"; res.innerHTML = ""; }
+    }
     select.innerHTML = `<option value="">Carregando…</option>`;
     modal.style.display = "flex";
     try {
@@ -1811,6 +1958,7 @@ try {
         return;
       }
       msg.innerHTML = `<span class="text-green-600">Processamento disparado com sucesso.</span>`;
+      if (PANEL_MODE) _ptxShowTemplateTxns([{ companyId, entityId, entityName: opt.textContent }], date);
     } finally {
       btn.disabled = false;
       btn.textContent = orig;
@@ -1877,9 +2025,9 @@ try {
           entityId: entity.id, companyId: entity.companyId, date,
         });
         const data = r.body || {};
-        results.push(r.ok ? { ok: true, label } : { ok: false, label, error: data.error || `HTTP ${r.status}` });
+        results.push(r.ok ? { ok: true, label, entity } : { ok: false, label, entity, error: data.error || `HTTP ${r.status}` });
       } catch (e) {
-        results.push({ ok: false, label, error: String(e) });
+        results.push({ ok: false, label, entity, error: String(e) });
       }
     }
     render(null);
@@ -1888,6 +2036,135 @@ try {
     runSingleBtn.disabled = false;
     cancelBtn.style.display = "none";
     _ptxAllRunning = false;
+
+    // Painéis Template: resultado só das carteiras do Template, das entidades
+    // que o processamento alcançou.
+    const processed = results.filter(r => r.ok).map(r => ({
+      companyId: r.entity.companyId, entityId: r.entity.id,
+      entityName: r.entity.name, companyName: r.entity.companyName,
+    }));
+    if (PANEL_MODE && processed.length) _ptxShowTemplateTxns(processed, date);
+  }
+
+  // ── Resultado do Processar Transações nos painéis Template ──────────────
+  // A heurística roda na entidade inteira (a API não aceita recorte por
+  // carteira); a TELA mostra só o que é do Template: as transações da data
+  // (liquidação) das entidades processadas, via /api/beehus/transactions/search
+  // — que já recorta às carteiras do Template (e, no Somente SLA, às que têm
+  // SLA na data) pelo cabeçalho de escopo. Uma busca por empresa.
+  const _PTX_MAX_ROWS = 500;
+  let _ptxLast = null;   // {targets, date, rows, onlyPending}
+
+  function _ptxViewSelected() {
+    const select = document.getElementById("ptx-entity");
+    const opt    = select.selectedOptions[0];
+    const date   = document.getElementById("ptx-date").value;
+    if (!select.value || !opt) { document.getElementById("ptx-msg").innerHTML = `<span class="text-red-500">Selecione uma entidade.</span>`; return; }
+    if (!date)                 { document.getElementById("ptx-msg").innerHTML = `<span class="text-red-500">Selecione uma data.</span>`; return; }
+    _ptxShowTemplateTxns([{ companyId: opt.dataset.companyId, entityId: select.value, entityName: opt.textContent }], date);
+  }
+
+  async function _ptxShowTemplateTxns(targets, date) {
+    const box = document.getElementById("ptx-result");
+    if (!box || !targets.length) return;
+    box.style.display = "";
+    box.innerHTML = `<p class="text-gray-500">Buscando transações das carteiras do Template em ${_escHtml(date)}…</p>`;
+    const byCompany = {};
+    targets.forEach(t => (byCompany[t.companyId] ??= []).push(t.entityId));
+    const companyNames = {};
+    (_ptxEntities || []).forEach(e => { companyNames[e.companyId] = e.companyName; });
+    const rows = [], errors = [];
+    await Promise.all(Object.entries(byCompany).map(async ([companyId, entityIds]) => {
+      const r = await api("POST", "/api/beehus/transactions/search", {
+        companyId, initialDate: date, finalDate: date, entityIds,
+      });
+      if (!r.ok) { errors.push(`${companyNames[companyId] || companyId}: ${r.body?.error || `HTTP ${r.status}`}`); return; }
+      (r.body?.transactions || []).forEach(t => rows.push({ ...t, companyId, companyName: companyNames[companyId] || companyId }));
+    }));
+    rows.sort((a, b) => (a.companyName || "").localeCompare(b.companyName || "")
+                     || (a.entityName || "").localeCompare(b.entityName || "")
+                     || (a.walletName || "").localeCompare(b.walletName || ""));
+    _ptxLast = { targets, date, rows, errors, onlyPending: _ptxLast?.onlyPending || false };
+    _ptxRenderTemplateTxns();
+  }
+
+  function _ptxTogglePending(checked) {
+    if (!_ptxLast) return;
+    _ptxLast.onlyPending = checked;
+    _ptxRenderTemplateTxns();
+  }
+
+  function _ptxOpenIdentify(companyId) {
+    if (!_ptxLast) return;
+    closeProcessTxnModal();
+    closeAllCompaniesModal();
+    Funcoes.openIdentifyWith(companyId, _ptxLast.date);
+  }
+
+  function _ptxRenderTemplateTxns() {
+    const box = document.getElementById("ptx-result");
+    const { rows, date, errors, onlyPending } = _ptxLast;
+    const pending = rows.filter(t => !t.type);
+    const shown   = onlyPending ? pending : rows;
+    const multiCompany = new Set(rows.map(t => t.companyId)).size > 1;
+    const fmtVal = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const scopeNote = IS_SLA ? " com SLA nesta data" : "";
+    const companies = [...new Set(rows.map(t => t.companyId))];
+    const openBtns = companies.map(cid => {
+      const name = rows.find(t => t.companyId === cid)?.companyName || cid;
+      return `<button onclick="_ptxOpenIdentify('${_escJs(cid)}')" class="ec-btn ec-btn-muted text-[11px]"
+                title="Abrir Transações (Identificar) em ${_escHtml(date)} — já recortado ao Template">Abrir em Transações${multiCompany ? ` · ${_escHtml(name)}` : ""}</button>`;
+    }).join("");
+    const errHtml = errors.length
+      ? `<p class="text-red-500 mb-2">Falha na busca: ${errors.map(_escHtml).join(" · ")}</p>` : "";
+    const header = `
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <span class="font-semibold text-gray-700">Transações das carteiras do Template${scopeNote} em ${_escHtml(date)}:</span>
+        <span class="text-gray-700">${rows.length}</span>
+        <span class="text-gray-400">·</span>
+        <span class="text-green-600">${rows.length - pending.length} identificada(s)</span>
+        <span class="text-gray-400">·</span>
+        <span class="${pending.length ? "text-amber-600 font-medium" : "text-gray-400"}">${pending.length} não identificada(s)</span>
+        <label class="flex items-center gap-1 text-gray-600 ml-auto select-none">
+          <input type="checkbox" ${onlyPending ? "checked" : ""} onchange="_ptxTogglePending(this.checked)"> só não identificadas
+        </label>
+        <button onclick="_ptxShowTemplateTxns(_ptxLast.targets, _ptxLast.date)" class="ec-btn ec-btn-muted text-[11px]">Atualizar</button>
+        ${openBtns}
+      </div>`;
+    if (!shown.length) {
+      box.innerHTML = errHtml + header + `<p class="text-gray-400 py-3 text-center">${
+        rows.length ? "Nenhuma transação não identificada." :
+        `Nenhuma transação de carteira do Template${scopeNote} para esta(s) entidade(s) em ${_escHtml(date)}.`}</p>`;
+      return;
+    }
+    const capped = shown.slice(0, _PTX_MAX_ROWS);
+    box.innerHTML = errHtml + header + `
+      <div class="max-h-80 overflow-y-auto border rounded">
+        <table class="w-full text-[11px]">
+          <thead class="bg-gray-50 text-gray-400 uppercase text-[9px] sticky top-0">
+            <tr>
+              ${multiCompany ? `<th class="px-2 py-1 text-left">Empresa</th>` : ""}
+              <th class="px-2 py-1 text-left">Entidade</th>
+              <th class="px-2 py-1 text-left">Carteira</th>
+              <th class="px-2 py-1 text-left">Descrição</th>
+              <th class="px-2 py-1 text-right">Valor</th>
+              <th class="px-2 py-1 text-left">Tipo</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${capped.map(t => `
+              <tr class="border-t border-gray-100">
+                ${multiCompany ? `<td class="px-2 py-1 text-gray-600">${_escHtml(t.companyName)}</td>` : ""}
+                <td class="px-2 py-1 text-gray-600">${_escHtml(t.entityName || "")}</td>
+                <td class="px-2 py-1 text-gray-700">${_escHtml(t.walletName || t.walletId || "")}</td>
+                <td class="px-2 py-1 text-gray-500 max-w-[320px] truncate" title="${_escHtml(t.description || "")}">${_escHtml(t.description || "")}</td>
+                <td class="px-2 py-1 text-right font-mono text-gray-700">${fmtVal(t.balance)}</td>
+                <td class="px-2 py-1 ${t.type ? "text-green-700" : "text-amber-600 font-medium"}">${_escHtml(t.type || "não identificada")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${shown.length > capped.length ? `<p class="text-gray-400 mt-1">Mostrando ${capped.length} de ${shown.length} — use "Abrir em Transações" para ver todas.</p>` : ""}`;
   }
 
   // ── Processar Range de Datas ─────────────────────────────────────────────
@@ -1906,8 +2183,8 @@ try {
     const end   = document.getElementById("prange-end");
     if (!_prangeRunning) {
       document.getElementById("prange-progress").innerHTML = "";
-      end.value   = _currentDate || "";
-      start.value = _currentDate || "";
+      end.value   = _gridDate || "";
+      start.value = _gridDate || "";
     }
     modal.style.display = "flex";
   }
@@ -2009,7 +2286,7 @@ try {
 
     // Se a data em foco no grid está dentro do range processado, atualiza a
     // tela pra já mostrar o que apareceu.
-    if (_currentDate && dates.includes(_currentDate)) selectDate(_currentDate);
+    if (_gridDate && dates.includes(_gridDate)) selectDate(_gridDate);
   }
 
   // ── TXN → Identificar Transações drill-down ────────────────────────────
@@ -5910,6 +6187,9 @@ try {
       });
   }
 
+  // Painéis Template: barra de escopo (seletor de empresa + fonte do cadastro).
+  ScopeBar.init();
+
   // auto-select today − default_delay business days
   const cards = document.querySelectorAll(".date-card");
   if (cards.length) {
@@ -6028,10 +6308,15 @@ try {
   }
 
   async function processAllWallets() {
-    if (!_currentDate) { alert("Selecione uma data primeiro."); return; }
+    if (!_gridDate) { alert("Selecione uma data primeiro."); return; }
+    const scopeText = !PANEL_MODE
+      ? `em todas as empresas visíveis, na data ${_gridDate}`
+      : IS_SLA
+        ? `SÓ das carteiras do TemplateCarteiras, cada uma na sua data de SLA (execução ${_gridDate} − Defasagem)`
+        : `SÓ das carteiras do TemplateCarteiras${window.__SWAT_SCOPE__.companyId ? " da empresa selecionada" : ""}, na data ${_gridDate}`;
     if (!confirm(
       `Processar as carteiras que têm posição bruta pronta e ainda não foram processadas, ` +
-      `em todas as empresas visíveis, na data ${_currentDate}?\n\n` +
+      `${scopeText}?\n\n` +
       `Empresas sem nada pendente pra processar são puladas automaticamente. ` +
       `Esta ação chama POST no processamento de posições da API Beehus, empresa por empresa, ` +
       `e não é reversível por esta tela.`
@@ -6043,7 +6328,7 @@ try {
     btn.innerHTML = `<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Processando…`;
 
     try {
-      const r = await api("POST", "/api/controlpanel/process-all-wallets", { date: _currentDate });
+      const r = await api("POST", "/api/controlpanel/process-all-wallets", { date: _gridDate });
       const data = r.body || {};
       if (r.status === 401) {
         alert(
@@ -6074,7 +6359,7 @@ try {
         msg += `\n\nFalhas:\n${preview}${more}`;
       }
       alert(msg);
-      selectDate(_currentDate);
+      selectDate(_gridDate);
     } finally {
       btn.disabled = false;
       btn.innerHTML = orig;
@@ -6131,7 +6416,8 @@ try {
   function openEsteiraModal() {
     const modal = document.getElementById("esteira-modal");
     const body  = document.getElementById("esteira-body");
-    document.getElementById("esteira-date").textContent = _currentDate || "";
+    document.getElementById("esteira-date").textContent =
+      IS_SLA ? `execução ${_gridDate || ""} (cada card na sua data de SLA)` : (_gridDate || "");
     modal.style.display = "flex";
     if (!_gridRows.length) {
       body.innerHTML = '<p class="text-xs text-gray-400 py-6 text-center">Carregue uma data primeiro.</p>';
@@ -6149,26 +6435,29 @@ try {
         if (_esteiraPending(row, stage)) byStage.get(stage.key).push(row);
       });
       const gapExtra = (row.extras || []).find(e => e.key === "gap");
-      if (gapExtra && gapExtra.count > 0) gapByCompany[row.companyId] = gapExtra.count;
+      if (gapExtra && gapExtra.count > 0) gapByCompany[_rowKeyOf(row)] = gapExtra.count;
     });
     const done = _gridRows.filter(row => !_ESTEIRA_STAGES.some(stage => _esteiraPending(row, stage)));
 
     const cardHtml = (row, stage) => {
+      // Somente SLA: o card abre o drill-down na data de SLA da própria linha.
+      const focus = `_focusRowDate('${_escJs(row.date || _gridDate || "")}');`;
       const onclick = stage
         ? (stage.kind === "issue"
-            ? `openModal('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`
-            : `openCellDetail('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`)
+            ? `${focus}openModal('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`
+            : `${focus}openCellDetail('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`)
         : "";
-      const gap = gapByCompany[row.companyId];
+      const gap = gapByCompany[_rowKeyOf(row)];
       const gapBadge = gap ? `<span class="text-amber-500 flex-shrink-0" title="${gap} carteira(s) com GAP">⚠</span>` : "";
       const countLine = stage
         ? `<span class="block text-[10px] text-gray-400 mt-0.5">${_escHtml(_esteiraCountLabel(row, stage))}</span>` : "";
+      const label = IS_SLA ? `${row.company} · ${row.slaLabel || ""} ${_fmtBr(row.date)}` : row.company;
       return `
         <button ${onclick ? `onclick="${onclick}"` : "disabled"}
           class="w-full text-left px-2 py-1.5 bg-white border border-gray-200 rounded text-[11px] text-gray-700 ${onclick ? "hover:border-blue-300 hover:bg-blue-50 cursor-pointer" : "cursor-default"}"
-          title="${_escHtml(row.company)}">
+          title="${_escHtml(label)}">
           <span class="flex items-center justify-between gap-1">
-            <span class="truncate font-medium">${_escHtml(row.company)}</span>${gapBadge}
+            <span class="truncate font-medium">${_escHtml(label)}</span>${gapBadge}
           </span>
           ${countLine}
         </button>`;
