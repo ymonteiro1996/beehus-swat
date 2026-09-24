@@ -136,10 +136,17 @@ def _scope_restrict(requested, permitted):
 
 
 def _scope_empty_error(kind):
+    """400 com `scopeEmpty: true` — as ferramentas de faixa de datas
+    (makeDatesPipeline em beehus_console.html) tratam isso como dia IGNORADO,
+    não como falha: no Somente SLA é o normal na maioria dos dias de uma faixa
+    (cada carteira só tem uma data de SLA), e parar o laço ali impediria os
+    dias seguintes de rodarem."""
     return jsonify({
         "error": f"Nenhum(a) {kind} do TemplateCarteiras nesta seleção "
                  "(empresa/data) — o painel Template só atua nas carteiras do cadastro"
                  " (no Somente SLA, só na data de SLA de cada carteira).",
+        "scopeEmpty": True,
+        "scopeKind": kind,
     }), 400
 
 

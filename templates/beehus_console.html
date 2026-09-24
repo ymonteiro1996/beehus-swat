@@ -7814,6 +7814,16 @@ function makeDatesPipeline(cfg) {
         const ms = Math.round(performance.now() - t0);
         Token.refresh();
         if (!r.ok) {
+          // Painéis Template: dia sem carteira/agrupamento do escopo (no
+          // Somente SLA, sem nenhuma selecionada com SLA nesse dia) é pulado,
+          // não interrompe a faixa — ver _scope_empty_error no backend.
+          if (r.body && r.body.scopeEmpty) {
+            const noun = r.body.scopeKind === 'agrupamento' ? 'agrupamento' : 'carteira';
+            this._setDayStep(day, 'skipped', `${day} · nenhum(a) ${noun} do Template com SLA nesta data`);
+            this._setDayElapsed(day, performance.now() - dayT0);
+            totalSkipped++;
+            continue;
+          }
           // Pipeline-specific "soft errors" — treated as a skip, not a stop.
           // Each pipeline opts in via cfg.skipOnError(body) → {skip, reason}|null.
           const skip = cfg.skipOnError && cfg.skipOnError(r.body);
