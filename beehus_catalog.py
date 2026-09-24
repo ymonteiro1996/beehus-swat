@@ -1555,11 +1555,17 @@ def _normalize_txn(t):
 
 def transactions_search(company_id, *, initial_date, final_date, wallet_ids=None,
                         security_ids=None, grouping_ids=None, entity_ids=None,
-                        date_type="liquidation"):
+                        date_type="liquidation", raise_on_error=False):
     """Transações no range [initial,final] por `date_type`, filtradas por
     empresa + carteiras/agrupamentos/entidades/securities. Normalizadas; [] se a
-    API falhar (a UI não mostra). Para data exata use initial==final. Filtros
-    extras (balance/type/_id) e ordenação: aplicar no cliente sobre o resultado.
+    API falhar (a UI não mostra) — a menos que `raise_on_error=True`, em cujo
+    caso a falha (incl. timeout num range largo/empresa com muitas carteiras)
+    propaga em vez de virar silenciosamente uma lista vazia. Passe `True`
+    quando "0 resultados" e "a busca falhou" precisam ser distinguíveis pelo
+    caller (ex.: uma tela que lista pendências — um erro engolido aqui faria o
+    operador ler "nada pendente" quando na verdade a busca nem completou).
+    Para data exata use initial==final. Filtros extras (balance/type/_id) e
+    ordenação: aplicar no cliente sobre o resultado.
 
     `company_id` é resolvido de uma única carteira (quando omitido) p/ habilitar
     a API; sem ele e com várias carteiras, retorna [] (não há chamada à API)."""
@@ -1575,8 +1581,10 @@ def transactions_search(company_id, *, initial_date, final_date, wallet_ids=None
                 security_ids=security_ids, date_type=date_type)
             if isinstance(out, list):
                 return [_normalize_txn(t) for t in out if isinstance(t, dict)]
-        except (BeehusAPIError, BeehusAuthError, Exception):  # noqa: BLE001
-            pass
+        except (BeehusAPIError, BeehusAuthError, Exception) as exc:  # noqa: BLE001
+            if raise_on_error:
+                raise
+            _log.warning("transactions_search(%s) failed (%s).", company_id, exc)
     return []
 
 

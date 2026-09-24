@@ -25,7 +25,7 @@ from requests.adapters import HTTPAdapter
 
 from .exceptions import BeehusAPIError, BeehusAuthError
 
-BASE_URL = "https://controladoria.beehus.com.br"
+BASE_URL = "https://api.controladoria.beehus.com.br"
 DEFAULT_TIMEOUT = 30  # seconds
 
 _lock = threading.Lock()

@@ -3,7 +3,8 @@
   "_description": "Rule dictionary for beehusTransactionType classification. Used by funcoes > identificar transactions. Hybrid model: rules evaluated first, ML fallback for unmatched rows.",
   "_changelog": {
     "0.2.0-draft": "Coverage validation against transactions_base.json (6056 rows). Added prefix-override rules for IR-/Custos Despesas/Ganho Rendimento/Ajuste contrib/Fee-, fixed dividend_en (English Dividend → coupon, US ETF convention), flipped resgate_cdb to buySell to match data, added BTC remuneration / matured bond / aplicacao fundos / debito CC / wired funds / interest income / pagamento juros BDA / pending card / sold-bought.",
-    "0.1.0-draft": "Initial draft from previous chat patterns."
+    "0.1.0-draft": "Initial draft from previous chat patterns.",
+    "unreleased": "Added dividend_reinvestment_en prefix override — 'Dividend Reinvestment' → buySell (not dividend), security kept as parsed from the description text. Must fire before dividend_en."
   },
   "_schema": {
     "rules": "Array evaluated top-to-bottom; first matching rule wins. Order = priority. Most specific rules MUST come before generic ones.",
@@ -160,6 +161,10 @@
     { "id": "dividendo_pt",                "type": "dividend",                       "match": "regex",      "pattern": "\\bDIVIDENDOS?\\b",
       "examples": ["DIVIDENDO PETR4", "DIVIDENDOS PAGOS"],
       "notes": "PT form: DIVIDENDO / DIVIDENDOS. Distinct from English 'Dividend' which → coupon." },
+
+    { "id": "dividend_reinvestment_en",    "type": "buySell",                        "match": "startswith",  "pattern": "DIVIDEND REINVESTMENT",
+      "examples": ["Dividend Reinvestment STATE STREET SPDR S&P 500 ETF @ 1.993368 PER SHARE SPY", "Dividend Reinvestment|MORGAN-STANLEY|VOO"],
+      "notes": "PREFIX OVERRIDE — CONFIRMED by user. A dividend reinvestment is the purchase of new units with the dividend proceeds, not the dividend itself — classified as buySell. The security is kept as parsed from the description text (no override), same as any other buySell row. Must fire BEFORE dividend_en, which would otherwise catch the 'DIVIDEND' token." },
 
     { "id": "dividend_en",                 "type": "dividend",                       "match": "regex",      "pattern": "\\bDIVIDEND\\b",
       "examples": ["Dividend STATE STREET SPDR S&P 500 ETF @ 1.993368 PER SHARE SPY", "Dividend|STATE STREET SPDR S&P 500 ETF|SPY|78462F103"],
