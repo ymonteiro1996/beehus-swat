@@ -42,6 +42,10 @@ rotas: wallet_scope.carteiras(companyId, data[, data_final]) / agrupamentos(...)
   `pages/beehus_console.py`); pedido 100% fora do escopo → 400.
 - Publicar "todos" com escopo também tira agrupamentos com carteira
   "Deve Publicar = Não".
+- Publicação (listar disponíveis, rentabilidade dos agrupamentos, publicar,
+  despublicar) **não segue a Defasagem**, nem no Somente SLA: recorta só por
+  "agrupamento de carteira do Template", em qualquer data — como no painel
+  Template (`_agrupamentos_publicacao` em `pages/beehus_console.py`).
 - `wallet_scope` depende do contexto da requisição: resolva tudo **antes** de
   um fan-out em threads (as threads não têm `flask.g`).
 

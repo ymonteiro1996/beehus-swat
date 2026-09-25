@@ -150,6 +150,16 @@ def _scope_empty_error(kind):
     }), 400
 
 
+def _agrupamentos_publicacao(company_id):
+    """Recorte da Publicação (listar/publicar/despublicar) nos painéis Template.
+    [2026-09-25, pedido do usuário] Publicação NÃO segue a Defasagem — também
+    no Somente SLA vale só "agrupamento de carteira do TemplateCarteiras", em
+    qualquer data, igual ao painel Template. Por isso a data não é passada a
+    wallet_scope.agrupamentos (sem data, o modo SLA não recorta por data de
+    SLA). None = sem escopo (painel normal)."""
+    return wallet_scope.agrupamentos(company_id)
+
+
 # ── Token ─────────────────────────────────────────────────────────────────────
 
 @bp.route("/api/beehus/token", methods=["GET"])
@@ -354,7 +364,7 @@ def filter_groupings_by_publish_state():
     # indevida, não esconder o que já foi publicado incorretamente (isso é
     # trabalho pra Despublicar mesmo, sem restrição a mais).
     wallets_bloqueadas = wallets_bloqueadas_para_publicacao() if not published else set()
-    permitted = wallet_scope.agrupamentos(company_id, position_date)
+    permitted = _agrupamentos_publicacao(company_id)
     items = []
     for gid in eligible:
         g = gindex.get(gid)
@@ -448,7 +458,7 @@ def filter_grouping_return_deltas():
             cur["rnps"], cur["rc"], cur["deltaAbs"] = rnps, rc, delta_abs
 
     gindex = get_grouping_index()
-    permitted = wallet_scope.agrupamentos(company_id, position_date)
+    permitted = _agrupamentos_publicacao(company_id)
     items = []
     for gid, info in by_grouping.items():
         if permitted is not None and gid not in permitted:
@@ -987,7 +997,7 @@ def nav_publish():
         # lista do escopo, aplica aqui também a regra do Deve Publicar = Não
         # (que no painel normal só existe na listagem de candidatos).
         grouping_ids, _out = _scope_restrict(
-            grouping_ids, wallet_scope.agrupamentos(company_id, position_date))
+            grouping_ids, _agrupamentos_publicacao(company_id))
         bloqueadas = wallets_bloqueadas_para_publicacao()
         gindex = get_grouping_index()
         grouping_ids = [g for g in grouping_ids
@@ -1031,7 +1041,7 @@ def nav_unpublish():
     if not isinstance(grouping_ids, list) or not all(isinstance(g, str) for g in grouping_ids):
         return jsonify({"error": "groupingIds must be a list of strings"}), 400
     grouping_ids, _out = _scope_restrict(
-        grouping_ids, wallet_scope.agrupamentos(company_id, position_date))
+        grouping_ids, _agrupamentos_publicacao(company_id))
     if wallet_scope.ativo() and not grouping_ids:
         return _scope_empty_error("agrupamento")
 
