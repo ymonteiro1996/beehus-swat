@@ -50,7 +50,12 @@ rotas: wallet_scope.carteiras(companyId, data[, data_final]) / agrupamentos(...)
 - `template_carteiras.py` — leitura do Excel (cache por mtime). Caminho:
   biblioteca do SharePoint sincronizada
   (`~/Beehus Tecnologia Ltda/Beehus Tecnologia Ltda - Documentos/SWAT/ControleCargas/prototype/data`),
-  override `TEMPLATE_CARTEIRAS_PATH`; o clone Git irmão é só último recurso.
+  override `TEMPLATE_CARTEIRAS_PATH`; não achando, busca variantes do nome da
+  biblioteca (pastas com "beehus" na pasta do usuário/OneDrive, até 2 níveis —
+  mesma regra do ControleCargas `utils/caminhos.py`); o clone Git irmão é só
+  último recurso. **Sem arquivo o escopo fica vazio e o painel não mostra
+  nenhuma carteira/transação** — a barra de escopo avisa em vermelho (e em
+  âmbar quando está lendo a cópia do clone).
 - `wallet_scope.py` — escopo, datas de SLA, recortes.
 - `pages/controlpanel.py` — `_scoped_rows`, `_scoped_unidentified_txn_counts`,
   `_scoped_detail_all`, `_scoped_process_all_wallets` + recortes nos drill-downs.

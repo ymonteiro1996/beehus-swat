@@ -72,7 +72,8 @@ def _candidatos():
          grafias que o OneDrive usa ("- Documentos" / "- Documents").
       3. A mesma biblioteca dentro do OneDrive corporativo pessoal
          (OneDriveCommercial/OneDrive e a pasta-pai delas).
-      4. O clone Git irmão (cópia local, pode estar desatualizada).
+      4. O clone Git irmão (cópia local, pode estar desatualizada) — antes
+         dele, caminho_template() tenta a busca por variantes.
     """
     caminhos = []
     override = os.environ.get("TEMPLATE_CARTEIRAS_PATH")
@@ -92,9 +93,75 @@ def _candidatos():
     return caminhos
 
 
+# Marca das pastas onde o OneDrive sincroniza a biblioteca do time.
+_MARCA_PASTA_BIBLIOTECA = "beehus"
+# Só o achado é memorizado: não achando, a próxima chamada procura de novo
+# (a pessoa pode sincronizar a biblioteca com o app no ar).
+_variante_encontrada = {"caminho": None}
+
+
+def _procurar_variante():
+    """Contexto:
+    [CORRIGIDO 2026-09-25, relato do usuário: "uma colega de time está
+    rodando, em Painel - Template (SLA) não está aparecendo as transações"]
+    Os caminhos fixos de _candidatos() são os nomes que o OneDrive dá à
+    biblioteca NESTA máquina; em outra eles mudam (Windows em inglês,
+    biblioteca no OneDrive pessoal "OneDrive - Beehus .../SWAT/...", pasta
+    renomeada). Sem achar o arquivo, carteiras_template() devolvia {}, o
+    escopo dos painéis Template virava um conjunto VAZIO e toda transação
+    era filtrada — sem erro na tela. Mesma busca que o ControleCargas faz em
+    utils/caminhos.py::_procurar_data_dir_compartilhado (achado de 22/09).
+
+    Pseudocódigo:
+      1. Bases: pasta do usuário e as raízes OneDrive/OneDriveCommercial
+         (e os pais delas — a biblioteca fica AO LADO do OneDrive pessoal).
+      2. Em cada base, só as subpastas com "beehus" no nome (listagem curta,
+         nunca varre o disco — pasta "só na nuvem" custaria download).
+      3. Testa <pasta>/SWAT/... e, não achando, 1 nível abaixo
+         (<pasta>/<biblioteca>/SWAT/...). Primeiro arquivo que existir vence.
+    """
+    if _variante_encontrada["caminho"] is not None:
+        return _variante_encontrada["caminho"]
+    bases = [Path.home()]
+    for variavel in ("OneDriveCommercial", "OneDrive"):
+        raiz = os.environ.get(variavel)
+        if raiz:
+            bases.extend([Path(raiz), Path(raiz).parent])
+    vistas = set()
+    for base in bases:
+        chave = str(base).casefold()
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        try:
+            pastas = [p for p in base.iterdir()
+                      if p.is_dir() and _MARCA_PASTA_BIBLIOTECA in p.name.casefold()]
+        except OSError:
+            continue
+        for pasta in pastas:
+            try:
+                niveis = [pasta] + [p for p in pasta.iterdir() if p.is_dir()]
+            except OSError:
+                niveis = [pasta]
+            for nivel in niveis:
+                caminho = nivel / _SUFIXO_BIBLIOTECA
+                try:
+                    if caminho.is_file():
+                        _variante_encontrada["caminho"] = caminho
+                        return caminho
+                except OSError:
+                    continue
+    return None
+
+
 def caminho_template():
-    """Primeiro candidato de _candidatos() que existe em disco, ou None."""
+    """Primeiro candidato de _candidatos() que existe em disco, ou None. Antes
+    do clone (último recurso) tenta a busca por variantes de _procurar_variante()."""
     for caminho in _candidatos():
+        if caminho == _CAMINHO_CLONE:
+            variante = _procurar_variante()
+            if variante is not None:
+                return str(variante)
         if caminho.is_file():
             if caminho == _CAMINHO_CLONE:
                 logger.warning(
@@ -215,9 +282,18 @@ def carteiras_template():
 
 
 def info_arquivo():
-    """{caminho, mtime} do arquivo em uso (para a tela mostrar a fonte)."""
+    """{caminho, mtime, origem} do arquivo em uso (para a tela mostrar a
+    fonte). origem: "compartilhada" | "clone" (cópia local, pode estar
+    desatualizada) | None (arquivo não encontrado nesta máquina)."""
     carteiras_template()
-    return {"caminho": _cache["caminho"], "mtime": _cache["mtime"]}
+    caminho = _cache["caminho"]
+    if not caminho:
+        origem = None
+    elif Path(caminho) == _CAMINHO_CLONE:
+        origem = "clone"
+    else:
+        origem = "compartilhada"
+    return {"caminho": caminho, "mtime": _cache["mtime"], "origem": origem}
 
 
 def wallets_bloqueadas_para_publicacao():

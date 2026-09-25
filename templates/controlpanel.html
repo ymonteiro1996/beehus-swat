@@ -1410,9 +1410,17 @@ try {
         const orfas = info.orfas ? ` · ${info.orfas} walletId(s) do Template sem carteira no Beehus` : "";
         src.textContent = `Fonte: TemplateCarteiras.xlsx${info.atualizadoEmTexto ? " · alterado em " + info.atualizadoEmTexto : ""}${orfas}`;
         src.title = info.arquivo || "";
-        if (!info.totalCarteiras) {
+        if (!info.arquivo) {
+          // Sem arquivo o escopo fica vazio e TODA transação/carteira some do painel.
+          src.textContent = "TemplateCarteiras.xlsx não encontrado nesta máquina — sincronize a biblioteca " +
+            "\"Beehus Tecnologia Ltda - Documentos\" no OneDrive (pasta SWAT) ou defina TEMPLATE_CARTEIRAS_PATH e reinicie o SWAT.";
+          src.className = "text-red-500 ml-auto";
+        } else if (!info.totalCarteiras) {
           src.textContent = "Nenhuma carteira do Template encontrada no Beehus — confira o token e clique em Reiniciar.";
           src.className = "text-red-500 ml-auto";
+        } else if (info.arquivoOrigem === "clone") {
+          src.textContent += " · ATENÇÃO: usando a cópia do clone Git (pode estar desatualizada), não a pasta compartilhada";
+          src.className = "text-amber-600 ml-auto";
         }
       } catch (e) {
         src.textContent = "Erro ao carregar o TemplateCarteiras: " + e.message;

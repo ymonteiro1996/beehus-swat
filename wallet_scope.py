@@ -353,5 +353,6 @@ def resumo(modo, data_execucao=None):
         "porEmpresa": por_empresa,
         "orfas": len(orfas),
         "arquivo": arquivo.get("caminho"),
+        "arquivoOrigem": arquivo.get("origem"),
         "atualizadoEm": arquivo.get("mtime"),
     }
