@@ -52,11 +52,13 @@ import beehus_catalog
 from flask import Blueprint, render_template, jsonify, make_response, request
 
 from template_carteiras import wallets_bloqueadas_para_publicacao
+import publicacao_divergencia
 import wallet_scope
 
 from beehus_api import (
     BeehusAPIError,
     BeehusAuthError,
+    get_nav_results,
     calculate_nav_groupings,
     calculate_nav_wallets,
     create_execution_price,
@@ -388,23 +390,26 @@ def filter_groupings_by_publish_state():
 
 @bp.route("/api/beehus/filters/grouping-return-deltas")
 def filter_grouping_return_deltas():
-    """Per-grouping `|returnNavPerShare - returnContribution|` from navPackages.
+    """Per-grouping worst `|returnNavPerShare - returnContribution|` on a date.
 
-    Returns one row per grouping (matching the requested `published` state),
-    aggregated as the **worst wallet** within that grouping — i.e., the
-    navPackage doc whose `|returnNavPerShare - returnContribution|` is
-    largest. The reported `returnNavPerShare` / `returnContribution` come
-    from that worst-wallet doc; this is the most actionable signal for
-    deciding whether the grouping is safe to publish.
+    [2026-09-25, SWAT-05] Agora é de fato a **pior carteira**: antes esta rota
+    dizia isso, mas iterava o documento do AGRUPAMENTO (1 por data), e um
+    agrupamento com |Δ| pequeno escondia carteira com |Δ| acima do limite. O
+    cálculo é o MESMO da trava do servidor em `nav_publish`
+    (`publicacao_divergencia.pior_divergencia_do_agrupamento`): pior |Δ| entre
+    o agrupamento e as carteiras dele na data. `returnNavPerShare` /
+    `returnContribution` vêm da entidade pior; `worstWalletId`/`worstWallet`
+    dizem quem é (None = o próprio agrupamento). `semDelta` = alguma entidade
+    sem Δ calculado — a trava bloqueia esses (`semDeltaWallet` diz qual).
 
     Query params:
         companyId    (str, required)
         positionDate (str, required, YYYY-MM-DD)
-        published    (str, optional — 'true'/'false', default 'false')
+        published    (str, optional — 'true'/'false'/'all', default 'false')
 
-    Returns: [{groupingId, groupingName,
-               returnNavPerShare, returnContribution, deltaAbs}]
-    Sorted by `deltaAbs` desc (None values last).
+    Returns: [{groupingId, groupingName, returnNavPerShare, returnContribution,
+               deltaAbs, worstWalletId, worstWallet, semDelta, semDeltaWallet}]
+             (+ `published` quando `all`). Sorted by `deltaAbs` desc (None last).
     """
     company_id    = request.args.get("companyId", "")
     position_date = request.args.get("positionDate", "")
@@ -416,62 +421,36 @@ def filter_grouping_return_deltas():
     if not company_visible(company_id) or not position_date:
         return jsonify([])
 
-    # navPackages de nível agrupamento via cache consolidado da empresa (1 doc
-    # por agrupamento/data em produção, validado). Não-trashed já garantido;
-    # quando não é `all`, filtra pelo estado `published` (estrito como o Mongo).
-    cursor = []
-    for d in beehus_catalog.nav_grouping_docs(company_id, position_date):
-        if not fetch_all:
-            pub = d.get("published")
-            if pub is None or bool(pub) != published:
-                continue
-        cursor.append(d)
-
-    # For each grouping, keep the wallet doc with the largest |Δ|. A grouping
-    # with at least one numeric pair wins over one with only None pairs (so
-    # the response prefers actionable rows when both exist). When fetch_all,
-    # a grouping is considered published if ANY of its navPackage docs is.
-    by_grouping: dict[str, dict] = {}
-    for d in cursor:
-        gid  = str(d.get("groupingId") or "")
-        if not gid:
-            continue
-        rnps = d.get("returnNavPerShare")
-        rc   = d.get("returnContribution")
-        pub  = bool(d.get("published")) if fetch_all else None
-        delta_abs = None
-        if isinstance(rnps, (int, float)) and isinstance(rc, (int, float)):
-            delta_abs = abs(float(rnps) - float(rc))
-
-        cur = by_grouping.get(gid)
-        if cur is None:
-            by_grouping[gid] = {"rnps": rnps, "rc": rc, "deltaAbs": delta_abs, "published": pub}
-            continue
-        # any published wallet → grouping is published
-        if fetch_all and pub:
-            cur["published"] = True
-        # Prefer rows with a known delta; among those, keep the largest.
-        cur_delta = cur["deltaAbs"]
-        if delta_abs is None:
-            continue
-        if cur_delta is None or delta_abs > cur_delta:
-            cur["rnps"], cur["rc"], cur["deltaAbs"] = rnps, rc, delta_abs
-
+    # /results consolidado da empresa na data (1 chamada, ao vivo; {} se a API
+    # falhar — a UI mostra vazio, como antes). Quando não é `all`, filtra pelo
+    # estado `published` do agrupamento (estrito como o Mongo).
+    resultados = beehus_catalog.nav_results(company_id, position_date)
+    indexados = publicacao_divergencia.indexar_resultados(resultados)
     gindex = get_grouping_index()
+    wallet_names = get_wallet_names()
     permitted = _agrupamentos_publicacao(company_id)
     items = []
-    for gid, info in by_grouping.items():
+    for gid, linha in indexados["agrupamentos"].items():
+        pub = linha.get("published")
+        if not fetch_all and (pub is None or bool(pub) != published):
+            continue
         if permitted is not None and gid not in permitted:
             continue
+        pior = publicacao_divergencia.pior_divergencia_do_agrupamento(
+            gid, indexados, gindex, position_date, wallet_names)
         item: dict = {
             "groupingId":         gid,
             "groupingName":       (gindex.get(gid) or {}).get("name", "") or gid,
-            "returnNavPerShare":  info["rnps"],
-            "returnContribution": info["rc"],
-            "deltaAbs":           info["deltaAbs"],
+            "returnNavPerShare":  pior["returnNavPerShare"],
+            "returnContribution": pior["returnContribution"],
+            "deltaAbs":           pior["deltaAbs"],
+            "worstWalletId":      pior["walletId"],
+            "worstWallet":        pior["carteira"],
+            "semDelta":           pior["semDelta"],
+            "semDeltaWallet":     pior["semDeltaCarteira"],
         }
         if fetch_all:
-            item["published"] = bool(info.get("published"))
+            item["published"] = bool(pub)
         items.append(item)
     items.sort(key=lambda x: (x["deltaAbs"] is None, -(x["deltaAbs"] or 0.0)))
     return jsonify(items)
@@ -972,8 +951,19 @@ def nav_publish():
         companyId    (str, required)
         positionDate (str, required, YYYY-MM-DD)
         groupingIds  (list[str], optional) — restricts publication to
-                     these grouping ids. Empty list means "all groupings
-                     in the company" per the upstream API contract.
+                     these grouping ids. Empty list = the groupings NOT yet
+                     published on that date (resolved here — an empty list
+                     is never forwarded, since upstream reads it as "all").
+        maxDeltaAbs  (number, optional) — limite |Δ| em DECIMAL
+                     (0.0002 = 0,02%). Ausente -> data/publicacao_config.json.
+
+    [2026-09-25, SWAT-05] Trava de divergência NO SERVIDOR, para esta data:
+    cada agrupamento pedido só é publicado se o pior |returnNavPerShare −
+    returnContribution| entre ele e as carteiras dele for < limite e ninguém
+    estiver sem Δ (ver publicacao_divergencia.py). Os barrados voltam em
+    `blocked: [{groupingId, nome, walletId, carteira, delta, motivo}]`
+    (motivo "acima_limite" | "sem_delta"); os enviados em `publishedIds`.
+    Não há "forçar" (D6 do escopo de set/2026).
 
     The upstream API expects a PATCH with a JSON body
     (`companyId`, `positionDate`, `groupingIds[]`); this route forwards the
@@ -992,6 +982,34 @@ def nav_publish():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(grouping_ids, list) or not all(isinstance(g, str) for g in grouping_ids):
         return jsonify({"error": "groupingIds must be a list of strings"}), 400
+    # [2026-09-25, SWAT-05] A trava de |Δ| é do servidor. `maxDeltaAbs` é
+    # decimal (0,02% -> 0.0002); ausente -> limite padrão de
+    # data/publicacao_config.json; presente e inválido/<= 0 -> 400.
+    if data.get("maxDeltaAbs") is None:
+        limite, limite_origem = publicacao_divergencia.carregar_limite_padrao_decimal(), "padrao"
+    else:
+        limite, limite_origem = publicacao_divergencia.interpretar_limite(data.get("maxDeltaAbs")), "requisicao"
+        if limite is None:
+            return jsonify({"error": "maxDeltaAbs deve ser um número maior que zero "
+                                     "(limite |Δ| em decimal, ex.: 0.0002 = 0,02%)"}), 400
+
+    # Resultados NAV DESTA data — chamada direta (não o nav_results do
+    # catálogo, que engole erro e devolveria {} = tudo "sem Δ"): token vencido
+    # tem que aparecer como 401, não como 100% bloqueado.
+    try:
+        resultados = get_nav_results(company_id=company_id, position_date=position_date)
+    except BeehusAPIError as e:
+        return _api_error_response(e)
+
+    # Lista vazia = "todas da empresa" no upstream: resolve aqui os não
+    # publicados da data, para nunca mandar [] adiante depois da trava. (Não
+    # pode seguir vazia: no escopo Template, _scope_restrict([]) viraria
+    # "todos do escopo".)
+    if not grouping_ids:
+        grouping_ids = publicacao_divergencia.agrupamentos_nao_publicados(resultados)
+        if not grouping_ids:
+            return jsonify(_resumo_publicacao_vazio(limite, limite_origem, [])), 200
+    gindex = get_grouping_index()
     if wallet_scope.ativo():
         # Painéis Template: só agrupamentos do cadastro; e como "todos" vira a
         # lista do escopo, aplica aqui também a regra do Deve Publicar = Não
@@ -999,18 +1017,28 @@ def nav_publish():
         grouping_ids, _out = _scope_restrict(
             grouping_ids, _agrupamentos_publicacao(company_id))
         bloqueadas = wallets_bloqueadas_para_publicacao()
-        gindex = get_grouping_index()
         grouping_ids = [g for g in grouping_ids
                         if not bloqueadas.intersection((gindex.get(g) or {}).get("walletIds") or [])]
         if not grouping_ids:
             return _scope_empty_error("agrupamento")
 
+    liberados, bloqueados = publicacao_divergencia.avaliar_publicacao(
+        grouping_ids, resultados, gindex, position_date, limite, get_wallet_names())
+    if bloqueados:
+        logging.getLogger(__name__).warning("[publicação] %s %s: %d bloqueado(s) pela trava |Δ| (limite %.6f, %s): %s",
+                     company_id, position_date, len(bloqueados), limite, limite_origem,
+                     ", ".join(f"{b['groupingId']}:{b['motivo']}" for b in bloqueados))
+    if not liberados:
+        return jsonify(_resumo_publicacao_vazio(limite, limite_origem, bloqueados)), 200
+
     summary = _run_publish_in_chunks(
         publish_nav,
         company_id=company_id,
         position_date=position_date,
-        grouping_ids=grouping_ids,
+        grouping_ids=liberados,
     )
+    summary.update(publishedIds=liberados, blocked=bloqueados,
+                   maxDeltaAbs=limite, maxDeltaAbsOrigem=limite_origem)
     # Mesmo em sucesso parcial, chunks publicados mudaram o estado `published`
     # → invalida o cache (filtros de publicação leem de nav_packages).
     beehus_catalog.invalidate_nav(company_id)
@@ -1020,6 +1048,24 @@ def nav_publish():
     # failures. The chunk summary preserves upstream_status/body for the log.
     code = 401 if summary.get("upstream_status") == 401 else 502
     return jsonify(summary), code
+
+
+def _resumo_publicacao_vazio(limite, limite_origem, bloqueados):
+    """Contexto:
+    Resposta de `nav_publish` quando nada passou pela trava (ou não havia nada
+    a publicar). Nenhuma chamada ao Beehus foi feita. Retorna o dict da resposta
+    no mesmo formato do resumo de publicação normal.
+
+    Pseudocódigo:
+      1. Monta ok=True com 0 publicados.
+      2. Anexa a lista de bloqueados e o limite usado, para a tela explicar.
+    """
+    return {
+        "ok": True, "totalGroupings": 0, "chunkSize": _PUBLISH_CHUNK_SIZE,
+        "chunkCount": 0, "chunksSucceeded": 0, "chunkResults": [],
+        "publishedIds": [], "blocked": bloqueados,
+        "maxDeltaAbs": limite, "maxDeltaAbsOrigem": limite_origem,
+    }
 
 
 @bp.route("/api/beehus/nav/unpublish", methods=["POST"])

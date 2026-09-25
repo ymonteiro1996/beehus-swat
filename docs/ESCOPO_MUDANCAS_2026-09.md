@@ -47,8 +47,8 @@ A ordem prioriza o que pode gerar **dado errado no Beehus**. Depois vêm o token
 
 | Onda | ID | Projeto | Item | Esforço | Depende de | Status |
 |---|---|---|---|---|---|---|
-| 0 | PREP | todos | Preparação: branch, commit do que está pendente, conferir host da API | P | — | pendente |
-| 1 | SWAT-05 | swat | Publicação publica acima da divergência: checar por data e por carteira no servidor | M | — | pendente |
+| 0 | PREP | todos | Preparação: branch, commit do que está pendente, conferir host da API | P | — | feito (swat: branch `onda-1/escopo-2026-09`) |
+| 1 | SWAT-05 | swat | Publicação publica acima da divergência: checar por data e por carteira no servidor | M | — | em teste — testado com API simulada (30 checks servidor + 18 na tela); falta o teste no Beehus real com empresa de teste. A confirmar: limite padrão 0,02% no atalho "Publicar" do drill-down do Painel (caminho que o escopo não listava) |
 | 1 | CONC-01 | conciliacao | Colar valor na transação perde o decimal (manda valor errado ao Beehus) | M | — | pendente |
 | 1 | TRV-02 | todos | Modal fecha ao arrastar a seleção de texto (transação, token e outros) | P | — | pendente |
 | 1 | CC-04 | ControleCargas | Instituição "XP" aparece como "P" na matriz | P | — | pendente |

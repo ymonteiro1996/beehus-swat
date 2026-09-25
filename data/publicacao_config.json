@@ -1,0 +1,4 @@
+{
+  "_comentario": "Trava de divergência da Publicação (SWAT-05). limitePadraoDeltaPct, em %, vale quando o POST /api/beehus/nav/publish não traz maxDeltaAbs (ex.: atalho Publicar do drill-down do Painel). Mesmo padrão do campo Limite |Δ| (%) da tela.",
+  "limitePadraoDeltaPct": 0.02
+}

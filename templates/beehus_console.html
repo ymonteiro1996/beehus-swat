@@ -116,6 +116,11 @@
   html.dark .day-grid .day-date { color: #d1d5db; }
   .day-grid .step-row  { display: inline-flex; gap: 0.4rem; }
   .day-grid .step-row .step-icon { font-size: 0.75rem; }
+  /* SWAT-05: bloqueados pela trava |Δ| do servidor, embaixo da linha do dia. */
+  .day-grid .day-blocked { grid-column: 1 / -1; color: #991b1b; }
+  .day-grid .day-blocked summary { cursor: pointer; }
+  .day-grid .day-blocked ul { margin: 0.25rem 0 0.25rem 1rem; list-style: disc; }
+  html.dark .day-grid .day-blocked { color: #fca5a5; }
   .table-wrap   { max-height: 50vh; overflow: auto; }
   /* The Identificar Transações result table is the page's main work surface
      once a search returns rows; let it consume the rest of the viewport so
@@ -170,6 +175,11 @@
   .picker-row-delta { color: #6b7280; font-variant-numeric: tabular-nums; min-width: 6rem; text-align: right; }
   html.dark .picker-row-delta { color: #9ca3af; }
   .picker-row.highlighted .picker-row-delta { color: inherit; }
+  /* SWAT-05: sem Δ (bloqueado, não clicável) e selecionado que a trava vai barrar. */
+  .picker-row-bloqueado { opacity: 0.55; cursor: not-allowed; font-style: italic; }
+  .picker-row-bloqueado:hover { background: transparent; }
+  .picker-row-vai-bloquear .picker-row-delta { color: #b91c1c; font-weight: 600; }
+  html.dark .picker-row-vai-bloquear .picker-row-delta { color: #fca5a5; }
 
   /* Segmented date-mode toggle in the Identificar Transações filters. */
   .seg-toggle { display: inline-flex; border: 1px solid #d1d5db; border-radius: 0.375rem; overflow: hidden; }
@@ -1101,7 +1111,9 @@
             útil, só serão publicados os agrupamentos que estiverem elegíveis
             (não publicados) E na seleção. Lista "Selecionadas" vazia =
             publica TODOS os agrupamentos elegíveis em cada dia. A coluna
-            |Δ| usa a pior wallet do agrupamento na data inicial.
+            |Δ| é o pior entre o agrupamento e as carteiras dele <strong>na data
+            inicial</strong>; os demais dias da faixa são checados pelo servidor
+            na hora de publicar. "sem Δ" = bloqueado em qualquer limite.
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -1109,7 +1121,7 @@
             Limite |Δ| (%)
             <input id="pbd-threshold" type="number" step="0.01" min="0" value="0.02"
                    class="input ml-1" style="width: 5.5rem"
-                   title="|returnNavPerShare − returnContribution| em pontos percentuais. 'Disponíveis' mostra apenas agrupamentos com |Δ| < este limite. Use 0 para mostrar todos."
+                   title="|returnNavPerShare − returnContribution| em pontos percentuais. 'Disponíveis' mostra apenas agrupamentos com |Δ| < este limite, e o servidor bloqueia na publicação, dia a dia, quem estiver ≥ limite. 0 mostra todos no seletor, mas não publica: a publicação exige limite > 0."
                    onchange="PublishDates.onThresholdChange()" />
           </label>
           <label id="pbd-prev-day-wrap" class="text-[11px] text-gray-600 flex items-center gap-1 cursor-pointer select-none"
@@ -7598,6 +7610,9 @@ function makeDatesPipeline(cfg) {
       const ini = $('initialDate').value;
       const fin = $('finalDate').value;
       if (!cid) { alert('Selecione uma empresa.'); return; }
+      // Pipeline pode vetar a execução (ex.: Publicação sem limite |Δ| > 0).
+      const erroValidacao = _resolveCfg('validateRun', null);
+      if (erroValidacao) { alert(erroValidacao); return; }
 
       const explicit = this._useDateList && this._selectedDates.size > 0;
       if (!explicit) {
@@ -7731,6 +7746,33 @@ function makeDatesPipeline(cfg) {
       const li = document.querySelector(`#${id('days')} li[data-day="${day}"]`);
       if (li) li.querySelector('.day-elapsed').textContent = `${(ms / 1000).toFixed(1)}s`;
     },
+    /* Contexto:
+       Lista, embaixo da linha do dia, os agrupamentos que a trava de |Δ| do
+       servidor barrou naquela data (SWAT-05). Chamado pelo run() depois de
+       cada POST de publicação. Não retorna nada.
+
+       Pseudocódigo:
+         1. Sem bloqueados -> não mostra nada.
+         2. Monta um <details> fechado com uma linha por agrupamento: nome,
+            carteira responsável e o motivo (|Δ| vs limite, ou "sem Δ").
+         3. Anexa à linha do dia, ocupando a largura toda da grade. */
+    _setDayBlocked(day, blocked, limite) {
+      const li = document.querySelector(`#${id('days')} li[data-day="${day}"]`);
+      if (!li || !blocked || !blocked.length) return;
+      const pct = (v) => (v === null || v === undefined || !isFinite(v)) ? '—'
+        : (v * 100).toLocaleString('pt-BR', {minimumFractionDigits: 4, maximumFractionDigits: 4}) + '%';
+      const linhas = blocked.map(b => {
+        const quem = b.carteira ? `carteira ${_escDP(b.carteira)}` : 'o próprio agrupamento';
+        const motivo = (b.motivo === 'sem_delta')
+          ? `sem Δ calculado (${quem})`
+          : `|Δ| ${pct(b.delta)} ≥ limite ${pct(limite)} (${quem})`;
+        return `<li><strong>${_escDP(b.nome || b.groupingId)}</strong> — ${motivo}</li>`;
+      }).join('');
+      const box = document.createElement('details');
+      box.className = 'day-blocked';
+      box.innerHTML = `<summary>ver ${blocked.length} bloqueado(s) pela trava |Δ|</summary><ul>${linhas}</ul>`;
+      li.appendChild(box);
+    },
     _scrollDayIntoView(day) {
       const li = document.querySelector(`#${id('days')} li[data-day="${day}"]`);
       if (li) li.scrollIntoView({block: 'nearest'});
@@ -7739,6 +7781,10 @@ function makeDatesPipeline(cfg) {
     async run() {
       this.cancelConfirm();
       if (this._running) return;
+      // Revalida aqui também: o confirm() do modo "data única" de alguns
+      // add-ons não passa pelo confirm() da fábrica.
+      const erroValidacao = _resolveCfg('validateRun', null);
+      if (erroValidacao) { $('status').textContent = erroValidacao; alert(erroValidacao); return; }
       this._running = true;
       $('run-btn').disabled = true;
       $('reset-btn').disabled = true;
@@ -7763,9 +7809,12 @@ function makeDatesPipeline(cfg) {
       // `published=false`, unpublishing needs `published=true`. Default
       // preserves the legacy publish-only behavior.
       const eligPub     = _resolveCfg('eligibilityPublished', 'false');
+      // Campos extras do POST de cada dia (Publicação: maxDeltaAbs, a trava
+      // de divergência que o SERVIDOR aplica dia a dia). Congelado por run.
+      const extraPayload = _resolveCfg('extraPayload', null) || {};
 
       let stoppedAt = null;
-      let totalSkipped = 0, totalRun = 0;
+      let totalSkipped = 0, totalRun = 0, totalBlocked = 0;
       outer: for (const day of days) {
         const dayT0 = performance.now();
         this._scrollDayIntoView(day);
@@ -7809,7 +7858,7 @@ function makeDatesPipeline(cfg) {
 
         this._setDayStep(day, 'running', `${day} · ${stepLabel}…`);
         const t0 = performance.now();
-        const payload = {companyId: cid, positionDate: day, [cfg.payloadKey]: ids};
+        const payload = {companyId: cid, positionDate: day, [cfg.payloadKey]: ids, ...extraPayload};
         const r = await api('POST', endpoint, payload);
         const ms = Math.round(performance.now() - t0);
         Token.refresh();
@@ -7837,18 +7886,25 @@ function makeDatesPipeline(cfg) {
           stoppedAt = {day};
           break outer;
         }
+        // Publicação: o servidor devolve o que publicou e o que a trava de
+        // |Δ| barrou NESTE dia (publishedIds/blocked). Despublicar não tem trava.
+        const blocked = (r.body && Array.isArray(r.body.blocked)) ? r.body.blocked : [];
+        const nPub = (r.body && Array.isArray(r.body.publishedIds)) ? r.body.publishedIds.length : ids.length;
         const detail = (cfg.kind === 'publish')
-          ? `${day} · ${ids.length} ${verbPast}(s) (${ms}ms)`
+          ? `${day} · ${nPub} ${verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '') + ` (${ms}ms)`
           : `${day} concluído (${ms}ms)`;
-        this._setDayStep(day, 'done', detail);
+        this._setDayStep(day, (nPub === 0 && blocked.length) ? 'skipped' : 'done', detail);
+        this._setDayBlocked(day, blocked, r.body && r.body.maxDeltaAbs);
         this._setDayElapsed(day, performance.now() - dayT0);
+        totalBlocked += blocked.length;
         totalRun++;
       }
 
       if (stoppedAt) {
         status.textContent = `Interrompido em ${stoppedAt.day} — veja o Log.`;
       } else if (cfg.kind === 'publish') {
-        status.textContent = `Concluído — ${totalRun} dia(s) ${verbPast}(s), ${totalSkipped} ignorado(s).`;
+        status.textContent = `Concluído — ${totalRun} dia(s) ${verbPast}(s), ${totalSkipped} ignorado(s)` +
+          (totalBlocked ? `, ${totalBlocked} agrupamento(s) bloqueado(s) pela trava |Δ| (veja cada dia).` : '.');
       } else if (totalSkipped > 0) {
         status.textContent = `Concluído — ${totalRun} dia(s), ${totalSkipped} ignorado(s).`;
       } else {
@@ -8526,6 +8582,19 @@ const PublishDates = makeDatesPipeline({
   actionVerbPast() {
     return (PublishDates._action === 'unpublish') ? 'despublicado' : 'publicado';
   },
+  // [2026-09-25, SWAT-05] A trava de |Δ| é aplicada pelo SERVIDOR em cada dia
+  // (nav_publish); a tela só manda o limite. Limite vazio/0 não publica mais:
+  // antes "0" desligava o filtro, o que deixava publicar sem trava nenhuma.
+  validateRun() {
+    if (PublishDates._action === 'unpublish') return null;
+    return (PublishDates._thresholdDecimal() > 0) ? null
+      : 'Informe um "Limite |Δ| (%)" maior que zero. A publicação sempre passa ' +
+        'pela trava de divergência do servidor (dia a dia, carteira a carteira).';
+  },
+  extraPayload() {
+    if (PublishDates._action === 'unpublish') return null;
+    return {maxDeltaAbs: PublishDates._thresholdDecimal()};
+  },
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -8582,13 +8651,18 @@ const PublishDates = makeDatesPipeline({
           'final. Dias sem agrupamentos elegíveis são ignorados. A picker abaixo ' +
           'usa a data inicial como referência — em modo faixa, só serão ' +
           'publicados os agrupamentos elegíveis em cada dia E na seleção (lista ' +
-          'vazia = todos os elegíveis).',
+          'vazia = todos os elegíveis). <strong>Trava de divergência:</strong> ' +
+          'em CADA dia o servidor bloqueia o agrupamento cujo pior |Δ| (ele ou ' +
+          'qualquer carteira dele) seja ≥ o limite, ou que tenha carteira sem Δ ' +
+          'calculado — os bloqueados aparecem na linha do dia.',
         pickerHint:
           'Lista carregada para a <strong>data inicial</strong>. Em cada dia ' +
           'útil, só serão publicados os agrupamentos que estiverem elegíveis ' +
           '(não publicados) E na seleção. Lista "Selecionadas" vazia = ' +
           'publica TODOS os agrupamentos elegíveis em cada dia. A coluna ' +
-          '|Δ| usa a pior wallet do agrupamento na data inicial.',
+          '|Δ| é o pior entre o agrupamento e as carteiras dele <strong>na data ' +
+          'inicial</strong>; os demais dias da faixa são checados pelo servidor ' +
+          'na hora de publicar. "sem Δ" = bloqueado em qualquer limite.',
         emptyBadge:    'nenhum agrupamento não publicado',
         emptyBadgeTitle:
           'Não há agrupamentos com navPackage não-publicado nesta data — ' +
@@ -8792,6 +8866,33 @@ const PublishDates = makeDatesPipeline({
 
     onThresholdChange() { this._renderPickerPanes(); },
 
+    /* Contexto:
+       Regra do seletor espelhando a trava do servidor (SWAT-05): devolve
+       {passa(g), semDelta(g), linha(g)} para o limite atual. Usada no
+       desenho das listas e nos botões → / ». Não altera estado.
+
+       Pseudocódigo:
+         1. Indexa os |Δ| carregados (pior carteira, data inicial) por grouping.
+         2. semDelta = sem linha, |Δ| nulo ou alguma entidade sem Δ (o servidor
+            bloqueia sempre, com qualquer limite).
+         3. passa = não é semDelta e (limite <= 0 ou |Δ| < limite).
+         4. Despublicar não tem trava nem |Δ| carregado: tudo passa. */
+    _regraTrava() {
+      const threshold  = this._thresholdDecimal();
+      const deltaByGid = new Map();
+      for (const d of this._groupingDeltas) deltaByGid.set(d.groupingId, d);
+      const linha = (g) => deltaByGid.get(g.id) || null;
+      if (this._action === 'unpublish') {
+        return {threshold, linha, semDelta: () => false, passa: () => true};
+      }
+      const semDelta = (g) => {
+        const d = linha(g);
+        return !d || d.semDelta || d.deltaAbs === null || d.deltaAbs === undefined;
+      };
+      const passa = (g) => !semDelta(g) && (threshold <= 0 || linha(g).deltaAbs < threshold);
+      return {threshold, linha, semDelta, passa};
+    },
+
     _prevBusinessDay(dateStr) {
       const d = new Date(dateStr + 'T12:00:00');
       do { d.setDate(d.getDate() - 1); } while (d.getDay() === 0 || d.getDay() === 6);
@@ -8891,23 +8992,33 @@ const PublishDates = makeDatesPipeline({
       const sel   = $$('pkr-selected');
       if (!avail || !sel) return;
 
-      const threshold  = this._thresholdDecimal();
-      const deltaByGid = new Map();
-      for (const d of this._groupingDeltas) deltaByGid.set(d.groupingId, d);
+      // [2026-09-25, SWAT-05] Mesma regra da trava do servidor (_regraTrava).
+      const regra = this._regraTrava();
+      const threshold = regra.threshold;
+      const passes = regra.passa;
 
-      const passes = (g) => {
-        if (threshold <= 0) return true;
-        const d = deltaByGid.get(g.id);
-        if (!d || d.deltaAbs === null || d.deltaAbs === undefined) return false;
-        return d.deltaAbs < threshold;
-      };
-
-      const rowHTML = (g, hlSet) => {
-        const d    = deltaByGid.get(g.id);
+      // Linha do seletor. `bloqueado` = agrupamento sem Δ: aparece (antes
+      // sumia da lista — hipótese B do SWAT-04), mas sem data-id, então não
+      // é clicável. Em "Selecionadas", quem não passa na trava ganha o aviso.
+      const rowHTML = (g, hlSet, bloqueado = false) => {
+        const d    = regra.linha(g);
         const dval = d ? d.deltaAbs : null;
-        const tag  = (dval === null || dval === undefined) ? '—' : this._fmtPct(dval);
-        const cls  = 'picker-row' + (hlSet.has(g.id) ? ' highlighted' : '');
-        return `<div class="${cls}" data-id="${this._esc(g.id)}" title="${this._esc(g.name)}">
+        const tag  = bloqueado ? 'sem Δ'
+          : (dval === null || dval === undefined) ? '—' : this._fmtPct(dval);
+        const quem = d && d.worstWallet ? ` · pior: ${d.worstWallet}` : '';
+        if (bloqueado) {
+          const alvo = d && d.semDeltaWallet ? ` (carteira ${d.semDeltaWallet})` : '';
+          return `<div class="picker-row picker-row-bloqueado"
+                       title="${this._esc(g.name)} — bloqueado na publicação: sem Δ calculado${this._esc(alvo)}">
+                    <span class="picker-row-name">${this._esc(g.name)}</span>
+                    <span class="picker-row-delta">${tag}</span>
+                  </div>`;
+        }
+        const vaiBloquear = (this._action !== 'unpublish') && !passes(g);
+        const cls  = 'picker-row' + (hlSet.has(g.id) ? ' highlighted' : '') +
+                     (vaiBloquear ? ' picker-row-vai-bloquear' : '');
+        const dica = vaiBloquear ? ' — será BLOQUEADO na publicação (|Δ| acima do limite ou sem Δ)' : '';
+        return `<div class="${cls}" data-id="${this._esc(g.id)}" title="${this._esc(g.name + quem + dica)}">
                   <span class="picker-row-name">${this._esc(g.name)}</span>
                   <span class="picker-row-delta">${tag}</span>
                 </div>`;
@@ -8915,6 +9026,9 @@ const PublishDates = makeDatesPipeline({
 
       const available = this._availableGroupings.filter(g =>
         !this._selectedIds.has(g.id) && passes(g) &&
+        (!this._prevDayFilter || this._prevDayIds.has(g.id)));
+      const semDeltaVisiveis = this._availableGroupings.filter(g =>
+        !this._selectedIds.has(g.id) && regra.semDelta(g) &&
         (!this._prevDayFilter || this._prevDayIds.has(g.id)));
       const selected  = this._availableGroupings.filter(g => this._selectedIds.has(g.id));
 
@@ -8925,7 +9039,8 @@ const PublishDates = makeDatesPipeline({
         if (!selected.find(g => g.id === id)) this._selHighlighted.delete(id);
       }
 
-      avail.innerHTML = available.map(g => rowHTML(g, this._availHighlighted)).join('');
+      avail.innerHTML = available.map(g => rowHTML(g, this._availHighlighted)).join('') +
+                        semDeltaVisiveis.map(g => rowHTML(g, this._availHighlighted, true)).join('');
       sel.innerHTML   = selected .map(g => rowHTML(g, this._selHighlighted)).join('');
 
       $$('pkr-available-count').textContent = available.length;
@@ -9002,17 +9117,10 @@ const PublishDates = makeDatesPipeline({
     },
 
     addPickerSelected() {
-      const threshold = this._thresholdDecimal();
-      const deltaByGid = new Map();
-      for (const d of this._groupingDeltas) deltaByGid.set(d.groupingId, d);
-      const passes = (g) => {
-        if (threshold <= 0) return true;
-        const d = deltaByGid.get(g.id);
-        if (!d || d.deltaAbs === null || d.deltaAbs === undefined) return false;
-        return d.deltaAbs < threshold;
-      };
-      // If user explicitly highlighted rows, add only those (always allowed
-      // — Ctrl-click bypasses the threshold filter on intent). Otherwise no-op.
+      const passes = this._regraTrava().passa;
+      // If user explicitly highlighted rows, add only those. (Highlighted rows
+      // come from "Disponíveis", which already passed the rule; whatever ends
+      // up in "Selecionadas" is still checked day by day by the server.)
       if (this._availHighlighted.size > 0) {
         for (const id of this._availHighlighted) this._selectedIds.add(id);
         this._availHighlighted.clear();
@@ -9024,15 +9132,7 @@ const PublishDates = makeDatesPipeline({
       this._renderPickerPanes();
     },
     addPickerAll() {
-      const threshold = this._thresholdDecimal();
-      const deltaByGid = new Map();
-      for (const d of this._groupingDeltas) deltaByGid.set(d.groupingId, d);
-      const passes = (g) => {
-        if (threshold <= 0) return true;
-        const d = deltaByGid.get(g.id);
-        if (!d || d.deltaAbs === null || d.deltaAbs === undefined) return false;
-        return d.deltaAbs < threshold;
-      };
+      const passes = this._regraTrava().passa;
       for (const g of this._availableGroupings) {
         if (passes(g)) this._selectedIds.add(g.id);
       }

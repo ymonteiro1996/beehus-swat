@@ -2646,6 +2646,21 @@ try {
         btn.innerHTML = orig;
         return;
       }
+      // [2026-09-25, SWAT-05] O servidor aplica a trava de |Δ| também aqui
+      // (sem limite na tela, usa o padrão de data/publicacao_config.json).
+      // 200 com o agrupamento em `blocked` = NÃO publicou.
+      const bloqueio = ((r.body || {}).blocked || []).find(b => b.groupingId === groupingId);
+      if (bloqueio) {
+        const pct = (v) => (v == null) ? '—' : (v * 100).toLocaleString('pt-BR', {minimumFractionDigits: 4, maximumFractionDigits: 4}) + '%';
+        const quem = bloqueio.carteira ? `carteira ${bloqueio.carteira}` : 'o próprio agrupamento';
+        alert(`Não publicado — bloqueado pela trava de divergência:\n` +
+              (bloqueio.motivo === 'sem_delta'
+                ? `sem Δ calculado (${quem}).`
+                : `|Δ| ${pct(bloqueio.delta)} ≥ limite ${pct(r.body.maxDeltaAbs)} (${quem}).`));
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        return;
+      }
       btn.textContent = "Publicado ✓";
       btn.classList.remove("ec-btn-primary");
       btn.classList.add("bg-green-100", "text-green-700");
