@@ -625,15 +625,24 @@ def wallet_pairs():
 # `walletId` POPULADO da API quanto o id cru do Mongo — um builder serve aos dois.
 
 def _grouping_entry(g):
-    """`{name, companyId, trashed, walletIds}` a partir de um doc de agrupamento
-    (API populado OU Mongo cru — `_idstr` cobre os dois)."""
+    """`{name, companyId, trashed, walletIds, members}` a partir de um doc de
+    agrupamento (API populado OU Mongo cru — `_idstr` cobre os dois).
+
+    `members` [2026-09-25, SWAT-05] repete as carteiras com a vigência de cada
+    uma no agrupamento (`ini`/`fim` = initialDateOnGrouping/finalDateOnGrouping,
+    AAAA-MM-DD ou None) — a trava de divergência da Publicação precisa saber
+    quem era membro NAQUELA data. Chave nova; quem só lê `walletIds` não muda."""
+    membros = [w for w in (g.get("wallets") or [])
+               if isinstance(w, dict) and _idstr(w.get("walletId"))]
     return {
         "name": (g.get("name") or ""),
         "companyId": _idstr(g.get("companyId")),
         "trashed": bool(g.get("trashed")),
-        "walletIds": [_idstr(w.get("walletId"))
-                      for w in (g.get("wallets") or [])
-                      if isinstance(w, dict) and _idstr(w.get("walletId"))],
+        "walletIds": [_idstr(w.get("walletId")) for w in membros],
+        "members": [{"walletId": _idstr(w.get("walletId")),
+                     "ini": str(w.get("initialDateOnGrouping") or "")[:10] or None,
+                     "fim": str(w.get("finalDateOnGrouping") or "")[:10] or None}
+                    for w in membros],
     }
 
 

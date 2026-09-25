@@ -89,7 +89,7 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 | `GET /api/beehus/filters/securities` | Security catalog |
 | `GET /api/beehus/filters/wallets-with-position?companyId=&positionDate=` | Wallets that have a `processedPosition` for that company + date — drives the Excluir Posições "Disponíveis" pane in **data única** mode (range mode skips this pre-filter and lets the upstream resolve eligibility per day) |
 | `GET /api/beehus/filters/groupings-by-publish-state?companyId=&positionDate=&published=true\|false` | Groupings whose `navPackages.published` matches — drives Publicar / Despublicar Agrupamentos |
-| `GET /api/beehus/filters/grouping-return-deltas?companyId=&positionDate=&published=true\|false` | Per-grouping `{groupingId, groupingName, returnNavPerShare, returnContribution, deltaAbs}` from `navPackages` for that company + date. Aggregated as the **worst wallet** in each grouping (the navPackage doc with the largest `|returnNavPerShare − returnContribution|`); reported `returnNavPerShare`/`returnContribution` come from that worst-wallet doc. Sorted by `deltaAbs` desc, nulls last. Drives the Publicar Agrupamentos "Agrupamentos — diferença ≥ limite" table. `published` defaults to `false` |
+| `GET /api/beehus/filters/grouping-return-deltas?companyId=&positionDate=&published=true\|false\|all` | Per-grouping `{groupingId, groupingName, returnNavPerShare, returnContribution, deltaAbs, worstWalletId, worstWallet, semDelta, semDeltaWallet}` from `/results` for that company + date. **[2026-09-25, SWAT-05] De fato a pior carteira**: pior `|returnNavPerShare − returnContribution|` entre o agrupamento e as carteiras dele na data — mesmo cálculo da trava do servidor (`publicacao_divergencia.py`); antes a rota dizia "worst wallet" mas usava o doc do agrupamento. `semDelta` = alguma entidade sem Δ (a trava bloqueia). Sorted by `deltaAbs` desc, nulls last. Drives the Publicar picker and the month matrix. `published` defaults to `false` |
 
 **Schema notes (verified against production):**
 
@@ -126,7 +126,7 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 | `POST /api/beehus/nav/calculate-wallets` | `POST /beehus/consolidation/nav-contribution-calculation/wallets` | Body field `wallets` |
 | `POST /api/beehus/nav/explosion-proportions` | `POST /beehus/consolidation/nav-contribution-calculation/explosion-proportions` | Body field `groupings` |
 | `POST /api/beehus/nav/calculate-groupings` | `POST /beehus/consolidation/nav-contribution-calculation/groupings` | Body field `groupings` |
-| `POST /api/beehus/nav/publish` | `PATCH /beehus/consolidation/nav-contribution-calculation/publish` | Upstream takes a JSON body `{companyId, positionDate, groupingIds[]}`. Local route forwards the same shape; long lists are split into 50-id batches for partial-success granularity and bounded per-call latency |
+| `POST /api/beehus/nav/publish` | `PATCH /beehus/consolidation/nav-contribution-calculation/publish` | Upstream takes a JSON body `{companyId, positionDate, groupingIds[]}`. Local route forwards the same shape; long lists are split into 50-id batches for partial-success granularity and bounded per-call latency. **[2026-09-25, SWAT-05] Trava de divergência no servidor** — body aceita `maxDeltaAbs` (decimal, `0.0002` = 0,02%; ausente → `data/publicacao_config.json`; `<= 0`/inválido → 400). Só publica o que passa; resposta traz `publishedIds` e `blocked: [{groupingId, nome, walletId, carteira, delta, motivo}]`. `groupingIds` vazio vira "não publicados da data" — nunca é repassado vazio. Ver "Trava de divergência da Publicação" abaixo |
 | `POST /api/beehus/nav/unpublish` | `PATCH /beehus/consolidation/nav-contribution-calculation/unpublish` | Same JSON-body shape as `/publish` |
 | `POST /api/controlpanel/apply-mapping` | `PATCH /beehus/financial/security-mappings/{id}` | Painel de Controle route: maps the selected unprocessed→security pairs into Beehus directly. Body: `{companyId, mappingsToInclude:[{from,to}…]}`. The route looks up `securityMappings._id` server-side from `companyId` (so the client cannot tamper with it) and only forwards `mappingsToInclude` (exclusions are out of scope here). 401/403 → 401, anything else upstream → 502 |
 
@@ -564,10 +564,15 @@ Fluxo diário / Reverter dia / Fluxo por datas / Reverter por datas — foi
   **Disponíveis** pane to only show groupings whose `|Δ|` is
   `< threshold` — i.e. the "safe to publish" ones. Groupings with `|Δ|
   ≥ threshold` (or with no delta data) are hidden so the user can't
-  accidentally publish unreconciled numbers. Set the threshold to `0`
-  to disable the filter and see everything. The filter never hides
+  accidentally publish unreconciled numbers. Threshold `0` shows
+  everything in the picker, **but no longer publishes**: since SWAT-05
+  (2026-09-25) the run requires a limit `> 0`, because the server always
+  applies it (see "Trava de divergência da Publicação"). Groupings with
+  no Δ show at the bottom of Disponíveis as **"sem Δ"** (greyed, not
+  clickable) instead of disappearing. The filter never hides
   items already in **Selecionadas** — once the user picks something it
-  stays visible regardless of threshold edits. A small badge on the
+  stays visible regardless of threshold edits; rows there that won't
+  pass the rule get their |Δ| in red ("será BLOQUEADO"). A small badge on the
   Disponíveis header reports `X/Y < L%` while the filter is active.
   Threshold edits filter client-side only; company/date changes
   refetch deltas. When empresa + data are set but the eligibility
@@ -605,6 +610,36 @@ Fluxo diário / Reverter dia / Fluxo por datas / Reverter por datas — foi
 - **Despublicar Agrupamentos** — mirror of Publicar but
   `published=true`. Action button is red/danger.
 
+#### Trava de divergência da Publicação (SWAT-05, 2026-09-25)
+
+Pedido: "BUG Publicação, permitindo publicar carteiras com divergência maior
+do que o selecionado" + "verificação melhor por data e diferença em cada data".
+
+- **Quem decide é o servidor** (`nav_publish` → `publicacao_divergencia.py`,
+  funções puras). Para **cada `positionDate`** recebido, busca o `/results`
+  daquela data (chamada direta a `get_nav_results`: token vencido vira 401,
+  não "tudo sem Δ") e, para cada agrupamento pedido, calcula o **pior
+  |rnps − rc|** entre o agrupamento e as carteiras dele.
+- **Carteiras do agrupamento na data** = as que o `/results` lista sob o
+  `groupingId` ∪ as membras do cadastro **ativas na data**
+  (`initialDateOnGrouping..finalDateOnGrouping`, guardadas em
+  `grouping_index()[gid]["members"]`). A membra ativa sem linha no `/results`
+  conta como "sem Δ".
+- **Bloqueia** se o pior |Δ| for `>=` limite (`acima_limite` — mesma régua do
+  seletor, que só mostra `< limite`) ou se alguém estiver sem Δ (`sem_delta`,
+  decisão do usuário). Publica só o resto; se nada passar, **não chama o
+  Beehus** (lista vazia no upstream = "todos").
+- **Limite**: a tela manda `maxDeltaAbs` (o campo "Limite |Δ| (%)" ÷ 100) em
+  todo POST de publicação. Sem o campo (ex.: botão "Publicar" do drill-down
+  "Posições Processadas" do Painel), vale `limitePadraoDeltaPct` de
+  `data/publicacao_config.json` (0,02%). Não há "forçar" (D6).
+- **Ordem**: escopo Template + "Deve Publicar = Não" primeiro, trava depois.
+- **Tela**: cada dia mostra `N publicado(s) · M bloqueado(s)` e um "ver
+  bloqueados" com agrupamento, carteira responsável e |Δ| vs limite; o status
+  final soma os bloqueados. O |Δ| do seletor continua sendo o da **data
+  inicial** — os outros dias da faixa são checados na hora de publicar.
+- **Despublicar** não tem trava.
+
 ### Pipelines "por datas" (single-step)
 
 > **Removido (jun/2026):** as pipelines multi-step **Fluxo diário**, **Reverter
@@ -626,7 +661,7 @@ dispara uma chamada upstream por dia. Step icons: `·` pending, `⟳` running,
 | **Processar por datas** | Processar Posições only | Single-step variant. Iterated over business days (or an explicit date list). Optional **Groupings (opcional)** two-pane transfer (mirrors the Transações picker) above the wallet picker — selecting groupings filters available wallets to the union of their `walletIds`; if no wallet is moved to "Selecionadas" but at least one grouping is, the upstream call is restricted to that wallet union. Empty groupings + empty wallets ⇒ "all wallets". |
 | **NAV Wallets por datas** | Calcular NAV Wallets only | Same shape as Processar por datas, different endpoint — including the optional **Groupings (opcional)** dual-pane transfer with the same union-fallback semantics (if no wallet picked but groupings are, union of grouping walletIds is sent). **Skip-on-error**: days where upstream replies *"Nenhuma posição processada foi encontrada para as carteiras e a data informada"* are marked `—` and the loop continues to the next date (common when the range spans days that haven't been processed yet). |
 | **NAV Groupings por datas** | Calcular NAV Groupings only | Single-step variant with a grouping picker (no wallet/grouping derivation). Empty selection ⇒ "all groupings". Iterated over business days or explicit date list. |
-| **Publicar Agrupamentos por datas** | Publicar (per-day eligibility) | No picker. **Per day** looks up groupings with `navPackages.published=false` and publishes those. Days with nothing eligible are marked `—` (skipped) and the loop continues. Iterated over business days or explicit date list. |
+| **Publicar Agrupamentos por datas** | Publicar (per-day eligibility) | No picker. **Per day** looks up groupings with `navPackages.published=false` and publishes those **that pass the server-side |Δ| lock** (SWAT-05). Days with nothing eligible are marked `—` (skipped) and the loop continues; days where everything was blocked are also `—`, with the blocked list under the row. Iterated over business days or explicit date list. |
 
 The four "single-step por datas" pipelines share a single JS builder
 (`makeDatesPipeline` in `templates/beehus_console.html`) parametrized by
@@ -636,6 +671,9 @@ no picker and runs a per-day eligibility lookup before each upstream call).
 Optional `skipOnError(body) → {reason}|null` lets a pipeline classify
 specific upstream errors as a per-day skip instead of a hard stop (used by
 NAV Wallets por datas to ignore days without processed positions).
+Optional `validateRun() → string|null` vetoes the run (checked in `confirm()`
+and again in `run()`), and `extraPayload() → object|null` adds fields to every
+per-day POST — both used by Publicação for the |Δ| lock (SWAT-05).
 
 **Bulk-upload groupings (Processar / NAV Wallets / NAV Groupings por datas
 + Publicar Agrupamentos)** — each of those views has a "⬆ Subir Excel de
