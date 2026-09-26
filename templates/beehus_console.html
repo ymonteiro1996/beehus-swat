@@ -1344,15 +1344,15 @@
           </div>
         </div>
 
-        <!-- Aviso do lote de 500 — visível apenas em modo "faixa" (toggled em
+        <!-- Aviso do lote de 250 — visível apenas em modo "faixa" (toggled em
              onModeChange). A faixa pode cobrir milhares de transações; a
              busca sempre carrega no máximo BATCH_LIMIT por vez. -->
         <div id="i-range-cap-note" class="hidden mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
           <div class="text-[11px] font-semibold text-amber-800 mb-1">
-            Faixa de datas — carga em lotes de 500
+            Faixa de datas — carga em lotes de 250
           </div>
           <div class="text-[11px] text-amber-700 leading-relaxed">
-            O intervalo selecionado pode retornar até <strong>500 transações por vez</strong>,
+            O intervalo selecionado pode retornar até <strong>250 transações por vez</strong>,
             começando pelas mais antigas. Se houver mais pendências na faixa, elas entram no
             lote seguinte conforme você for identificando e implementando as atuais.
           </div>
@@ -1488,7 +1488,7 @@
     <section id="i-result" class="section-card mt-3 hidden">
       <!-- Aviso de lote pendente. Preenchido por _renderBatchNotice() quando o
            backend reporta hasMore (mais transações no range além deste lote
-           de 500). Mesmo padrão visual do aviso de faixa acima. -->
+           de 250). Mesmo padrão visual do aviso de faixa acima. -->
       <div id="i-batch-warning" class="hidden mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
         <div class="text-[11px] font-semibold text-amber-800 mb-1">
           Mais transações pendentes nesta faixa
@@ -3242,8 +3242,9 @@ const IdentifyTxn = {
   // servidor. `_batch` guarda o que o backend reportou na última busca —
   // `total` vem `null` quando o backend não escaneou a faixa inteira (range
   // grande, ainda sobra trabalho fora deste lote). `_renderBatchNotice()` usa
-  // isso para avisar quando há mais pendências além das 500 exibidas.
-  BATCH_LIMIT: 500,
+  // isso para avisar quando há mais pendências além das 250 exibidas.
+  // [2026-09-25, SWAT-07, pedido do usuário: "Limitar 250 transações por consulta"] era 500.
+  BATCH_LIMIT: 250,
   _batch: { total: null, returned: 0, hasMore: false, identified: 'false' },
 
   // Field metadata for the edit configurator. `txnKey` is the property on the
@@ -3553,7 +3554,7 @@ const IdentifyTxn = {
       this._execEdits = {};
     }
     // The old "(truncado em 10000)" indicator is obsolete now that this view
-    // always requests a 500-row batch — `_renderBatchNotice()` (driven by
+    // always requests a 250-row batch — `_renderBatchNotice()` (driven by
     // `_batch`) replaces it with a more informative banner.
     this._truncated = false;
     // A new result set is a fresh selection: select every row. Subsequent
@@ -4769,7 +4770,7 @@ const IdentifyTxn = {
     return rows;
   },
 
-  // Aviso do lote de 500. Só aparece quando o backend disse que sobrou algo
+  // Aviso do lote de 250. Só aparece quando o backend disse que sobrou algo
   // no range (`_batch.hasMore`); `_batch.total` é sempre exato (o backend faz
   // 1 fetch do range inteiro e corta em Python — ver comentário em
   // `_TXN_SEARCH_CAP` no backend sobre por que NÃO é dividido em janelas de
@@ -6466,7 +6467,7 @@ const IdentifyTxn = {
     this._txns = this._txns.filter(t => !idSet.has(t.id));
     // Pruned locally (no re-search), so the batch counters from the last
     // search response would overstate what's left — bring them down by the
-    // same amount so the "500 de N" / pending-batch banner stays accurate.
+    // same amount so the "250 de N" / pending-batch banner stays accurate.
     this._batch.total -= deletedCount;
     this._batch.returned -= deletedCount;
     this._batch.hasMore = this._batch.total > this._batch.returned;
