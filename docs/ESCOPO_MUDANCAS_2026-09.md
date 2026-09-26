@@ -52,7 +52,7 @@ A ordem prioriza o que pode gerar **dado errado no Beehus**. Depois vêm o token
 | 1 | CONC-01 | conciliacao | Colar valor na transação perde o decimal (manda valor errado ao Beehus) | M | — | pendente |
 | 1 | TRV-02 | todos | Modal fecha ao arrastar a seleção de texto (transação, token e outros) | P | — | pendente |
 | 1 | CC-04 | ControleCargas | Instituição "XP" aparece como "P" na matriz | P | — | pendente |
-| 1 | SWAT-04 | swat | Groupings não aparecem | P–M | reprodução do usuário | pendente |
+| 1 | SWAT-04 | swat | Groupings não aparecem | P–M | reprodução do usuário | feito — D7 respondido (Painel normal → Publicação, Eté): diagnóstico = todos já publicados na data (comportamento correto). Melhoria: rotas da Publicação não escondem mais falha da API como lista vazia (selo "falha ao consultar"). Hipóteses A e C não se aplicaram |
 | 2 | TRV-01 | todos | Token expirado abre o pop-up de colar token na hora | M | PREP | pendente |
 | 2 | TRV-03 | swat, conciliacao | Campo token começa vazio | P | TRV-02 | pendente |
 | 3 | SWAT-07 | swat | Lote do Identificar Transações: 500 → 250 | P | — | pendente |
