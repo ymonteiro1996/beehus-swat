@@ -412,6 +412,22 @@ const res = await fetch('/api/my-feature/save', {
 });
 ```
 
+### Modais: fundo que fecha × arrastar seleção (TRV-02, 2026-09-25)
+
+- Fundo que fecha no clique segue o padrão `onclick="if(event.target===this) fechar()"`.
+  Mouse que desce num campo e sobe no fundo gera um `click` no fundo (ancestral comum) e fechava
+  o modal no meio da seleção. **`static/js/utils/guarda_arrasto.js`** (fase de captura, carregado
+  no `<head>` do `base.html` — as 14 páginas — **e** do `shell.html`, que é outro documento)
+  cancela só esse clique: começou em `input/textarea/select/[contenteditable]` ou selecionou texto
+  durante o arrasto, alvo diferente, e o alvo do click contém o do mousedown. Clique normal
+  (inclusive botão com `<span>`) passa. Mesmo arquivo nos 3 projetos (conciliacao, ControleCargas).
+  Modal novo não precisa de nada: basta o padrão acima.
+- A guarda local de `.modal-overlay` que já existia em `beehus_console.html` e o `_guardedClose` de
+  `precificacao.html` continuam lá (cobrem o mesmo caso; não conflitam).
+- **D12:** modais de **token** (shell, Funções, Painel, Correções) e de **edição de transação**
+  (Funções: editar tipo / security / campo; Conciliação mov.: transação, provisão, preço de execução)
+  **não fecham com clique no fundo** — só pelos botões ou **Esc**. Os demais mantêm o clique no fundo.
+
 ### Colour coding conventions
 
 | Meaning | Tailwind classes |

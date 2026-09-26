@@ -6,6 +6,8 @@
   <title>Operações - Beehus</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- TRV-02: o shell é outro documento (as páginas rodam em iframe) — carrega a guarda também. -->
+  <script src="/static/js/utils/guarda_arrasto.js"></script>
 
   <style>
     .nav-link[data-active="true"] { background: rgba(255,255,255,0.1); color: white; font-weight: 500; }
@@ -204,8 +206,8 @@
   <!-- ── Modal: Bearer Token ──────────────────────────────────────────────────
        O shell gerencia o token diretamente via /api/beehus/token (process-global
        no servidor), então funciona em qualquer tela hospedada no iframe. -->
-  <div id="token-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4"
-       onclick="if(event.target===this) Token.close()">
+  <!-- TRV-02/D12: o modal de token não fecha com clique no fundo — só Fechar ou Esc. -->
+  <div id="token-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
     <div class="bg-white rounded-lg shadow-xl w-full max-w-md text-gray-800" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200">
         <h3 class="font-semibold text-sm text-gray-700">Bearer Token (diário)</h3>

@@ -303,7 +303,8 @@
 </div>
 
 <!-- ─── Modal: Bearer Token ────────────────────────────────────────────────── -->
-<div id="token-modal" class="modal-overlay" onclick="if(event.target===this) Token.close()">
+<!-- TRV-02/D12: modal de token não fecha com clique no fundo — só Fechar ou Esc. -->
+<div id="token-modal" class="modal-overlay">
   <div class="modal-card" style="width: min(640px, 90vw)">
     <div class="px-5 py-3 border-b flex items-center justify-between">
       <h3 class="font-semibold text-sm text-gray-700">Bearer Token (diário)</h3>

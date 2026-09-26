@@ -2054,6 +2054,8 @@ function _afterTxnWrite(wid, d, okMsg) {
     _detStatus(okMsg, "ok");
   });
 }
+// [2026-09-25, TRV-02/D12] Os 3 modais de escrita (transação, provisão, preço de execução) não
+// fecham mais com clique no fundo — só Cancelar ou Esc. Arrasto de seleção: static/js/utils/guarda_arrasto.js.
 function _closeTxnModal() { const m = document.getElementById("txn-crud-modal"); if (m) m.remove(); }
 function _openTxnModal(wid, t) {
   _closeTxnModal();
@@ -2064,7 +2066,7 @@ function _openTxnModal(wid, t) {
   const fld = (label, inner) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:#374151">${label}${inner}</label>`;
   const inp = (id, val, attrs) => `<input id="${id}" value="${val == null ? "" : esc(String(val))}" ${attrs || ""} style="padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">`;
   const td = (_movResults[wid] || {}).targetDate || _targetDate();
-  const html = `<div id="txn-crud-modal" style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)_closeTxnModal()">
+  const html = `<div id="txn-crud-modal" style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center">
     <div style="background:#fff;border-radius:12px;padding:16px;width:460px;max-width:94vw;box-shadow:0 10px 40px rgba(0,0,0,.25)">
       <div style="font-weight:600;margin-bottom:10px">${editing ? "Editar transação" : "Incluir transação"}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2148,7 +2150,7 @@ function _openProvModal(wid, p) {
   const srcOpts = _PROV_SOURCE_OPTS.map(o => `<option value="${o}"${v.provisionSource === o ? " selected" : ""}>${o}</option>`).join("");
   const fld = (label, inner) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:#374151">${label}${inner}</label>`;
   const inp = (id, val, attrs) => `<input id="${id}" value="${val == null ? "" : esc(String(val))}" ${attrs || ""} style="padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">`;
-  const html = `<div id="txn-crud-modal" style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)_closeTxnModal()">
+  const html = `<div id="txn-crud-modal" style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center">
     <div style="background:#fff;border-radius:12px;padding:16px;width:460px;max-width:94vw;box-shadow:0 10px 40px rgba(0,0,0,.25)">
       <div style="font-weight:600;margin-bottom:10px">${editing ? "Editar provisão" : "Incluir provisão"}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2194,7 +2196,7 @@ function _openExecModal(wid, e) {
   const td = (_movResults[wid] || {}).targetDate || _targetDate();
   const fld = (label, inner) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:#374151">${label}${inner}</label>`;
   const inp = (id, val, attrs) => `<input id="${id}" value="${val == null ? "" : esc(String(val))}" ${attrs || ""} style="padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">`;
-  const html = `<div id="txn-crud-modal" style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)_closeTxnModal()">
+  const html = `<div id="txn-crud-modal" style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center">
     <div style="background:#fff;border-radius:12px;padding:16px;width:420px;max-width:94vw;box-shadow:0 10px 40px rgba(0,0,0,.25)">
       <div style="font-weight:600;margin-bottom:10px">${editing ? "Editar preço de execução" : "Incluir preço de execução"}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">

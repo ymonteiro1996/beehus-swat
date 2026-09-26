@@ -1630,7 +1630,7 @@
   </div>
 
   <!-- ─── Modal: Identificar Transações — Editar tipo ───────────────────────── -->
-  <div id="i-type-edit-modal" class="modal-overlay" onclick="if(event.target===this) IdentifyTxn.closeTypeEdit()">
+  <div id="i-type-edit-modal" class="modal-overlay"><!-- TRV-02/D12: só Fechar/Esc -->
     <div class="modal-card" style="width: min(640px, 90vw); max-height: 80vh">
       <div class="px-5 py-4 border-b flex items-center justify-between">
         <h3 class="font-semibold text-sm text-gray-700">Editar tipo</h3>
@@ -1643,7 +1643,7 @@
   </div>
 
   <!-- ─── Modal: Identificar Transações — Editar / escolher security ───────── -->
-  <div id="i-sec-edit-modal" class="modal-overlay" onclick="if(event.target===this) IdentifyTxn.closeSecEdit()">
+  <div id="i-sec-edit-modal" class="modal-overlay"><!-- TRV-02/D12: só Fechar/Esc -->
     <div class="modal-card" style="width: min(960px, 95vw); max-height: 92vh">
       <div class="px-5 py-4 border-b flex items-center justify-between">
         <h3 class="font-semibold text-sm text-gray-700">Editar security</h3>
@@ -2673,7 +2673,8 @@
 </div>
 
 <!-- ─── Modal: Bearer Token ────────────────────────────────────────────────── -->
-<div id="token-modal" class="modal-overlay" onclick="if(event.target===this) Token.close()">
+<!-- TRV-02/D12: não fecha com clique no fundo — só botão Fechar/Cancelar ou Esc. -->
+<div id="token-modal" class="modal-overlay">
   <div class="modal-card" style="width: min(640px, 90vw)">
     <div class="px-5 py-3 border-b flex items-center justify-between">
       <h3 class="font-semibold text-sm text-gray-700">Bearer Token (diário)</h3>
@@ -2735,8 +2736,7 @@
 </div>
 
 <!-- Modal: configurar edição — mapeamento de valores (tela unificada) -->
-<div id="i-edit-field-modal" class="modal-overlay"
-     onclick="if(event.target===this) IdentifyTxn.cancelEditField()">
+<div id="i-edit-field-modal" class="modal-overlay"><!-- TRV-02/D12: só Cancelar/Esc -->
   <div class="modal-card" style="width: min(720px, 92vw)">
     <div class="px-5 py-4 border-b">
       <h3 class="font-semibold text-sm text-gray-700">
