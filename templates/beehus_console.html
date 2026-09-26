@@ -125,10 +125,12 @@
   .day-grid .day-blocked ul { margin: 0.25rem 0 0.25rem 1rem; list-style: disc; }
   html.dark .day-grid .day-blocked { color: #fca5a5; }
   .table-wrap   { max-height: 50vh; overflow: auto; }
-  /* The Identificar Transações result table is the page's main work surface
-     once a search returns rows; let it consume the rest of the viewport so
-     the operator scrolls the table, not the page. */
-  #i-result .table-wrap { max-height: calc(100vh - 240px); }
+  /* [2026-09-25, SWAT-09, pedido do usuário: "há um Scroll bar dentro de outro Scroll bar… ficar
+     apenas no Scroll bar da tela"] A tabela de Transações não tem mais rolagem vertical própria:
+     só a horizontal fica na tabela e a vertical é a da página (mesmo modelo de Issues/Strip no
+     Painel). Antes: max-height calc(100vh - 240px) + a página do iframe passando da altura
+     fixa do #tool-view = duas barras. Efeito aceito: o cabeçalho deixa de grudar ao rolar. */
+  #i-result .table-wrap { max-height: none; overflow-x: auto; overflow-y: visible; }
   table.txn-table { width: 100%; border-collapse: collapse; font-size: 0.6875rem; }
   table.txn-table th, table.txn-table td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #e5e7eb; text-align: left; }
   html.dark table.txn-table th, html.dark table.txn-table td { border-color: #374151; }

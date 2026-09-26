@@ -695,6 +695,11 @@ Dia sem NAV continua `[]` com 200 (não é erro). Hipóteses A (company desatual
 painéis Template) e C (índice de agrupamentos parcial após 429) não eram a causa deste relato e não
 foram alteradas.
 
+> **[2026-09-25, SWAT-09] Transações com uma rolagem só.** A tabela de resultados do Identificar/Editar
+> (`#i-result .table-wrap`) não tem mais rolagem vertical própria (`max-height: none`, só `overflow-x`)
+> — a vertical é a da página, como Issues/Strip no Painel. O cabeçalho da tabela deixa de grudar ao
+> rolar (efeito aceito no escopo).
+
 ### Pipelines "por datas" (single-step)
 
 > **[2026-09-25, SWAT-08] Faixa padrão D-7 → D-1 (dias úteis ANBIMA).** Ao escolher "Faixa de

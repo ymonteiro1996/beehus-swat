@@ -57,7 +57,7 @@ A ordem prioriza o que pode gerar **dado errado no Beehus**. Depois vêm o token
 | 2 | TRV-03 | swat, conciliacao | Campo token começa vazio | P | TRV-02 | feito no swat (shell + modais avulsos de Funções/Painel/Correções limpam no open/close e têm os atributos anti-autopreenchimento; Playwright nos 4) |
 | 3 | SWAT-07 | swat | Lote do Identificar Transações: 500 → 250 | P | — | feito (branch `onda-3/escopo-2026-09`; Playwright: constante 250, busca envia limit=250, textos atualizados; `_TXN_SEARCH_CAP`/`_PTX_MAX_ROWS` intocados — D8) |
 | 3 | SWAT-08 | swat | Faixa de datas vem preenchida (D-7 a D-1) nos 5 executores | P | — | feito (dias úteis ANBIMA — padrão D4; Playwright nas 5 ferramentas: Faixa, troca de empresa, defaultValue; _isPristine ajustado; feriado conferido: de 03/11 → D-1 = 30/10) |
-| 3 | SWAT-09 | swat | Transações: um scroll só | P | — | pendente |
+| 3 | SWAT-09 | swat | Transações: um scroll só | P | — | feito (`#i-result .table-wrap`: sem max-height, só overflow-x; Playwright com 300 linhas largas: 1 barra vertical (a da página) + horizontal na tabela; com a regra antiga forçada o teste mostra as 2 barras). Efeito aceito: cabeçalho deixa de grudar |
 | 3 | CONC-03 | conciliacao | Botão de copiar o valor do GAP | P–M | CONC-01 | pendente |
 | 3 | CC-02 | ControleCargas | Renomear a aba atual para "Checklist Manual Cargas" | P | — | pendente |
 | 3 | CC-05 | ControleCargas | Pauta com contorno azul; vermelho se o D-1 não foi processado | P | — | pendente |
