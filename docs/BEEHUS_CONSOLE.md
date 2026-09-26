@@ -647,7 +647,8 @@ do que o selecionado" + "verificação melhor por data e diferença em cada data
   inicial** — os outros dias da faixa são checados na hora de publicar.
 - **Despublicar** não tem trava.
 - **Limite 0** [decisão do usuário, 25/09]: é um limite de verdade — **só publica |Δ| exatamente
-  zero**. Régua única `publicacao_divergencia.passa_no_limite`: passa se `|Δ| < limite` ou `|Δ| == 0`
+  zero**. Régua única `publicacao_divergencia.passa_no_limite`: passa se `|Δ| < limite` ou `|Δ| <= 1e-9`
+  (`TOLERANCIA_ZERO`: no teste com dados reais o Beehus devolveu 8e-12 onde a tela mostra 0,0000%)
   (espelhada na tela em `_passaNoLimite`: seletor, selo "X/Y < L%" e matriz do mês). Campo vazio,
   negativo ou inválido não publica (a tela avisa; o servidor devolve 400).
 
@@ -662,6 +663,11 @@ simulada — mesmo roteiro rodado no código novo, 0 de 6 vazam):**
 | S4 | Dia único, "»" (tudo que o seletor mostrava abaixo do limite) | idem S3 — o seletor aprovava pelo agrupamento |
 | S5 | Selecionar e depois **baixar** o limite (ou Excel / Ctrl-clique) | o selecionado, sem rechecar |
 | S6 | Atalho "Publicar" do drill-down do Painel | qualquer divergência (não havia limite) |
+
+**Confirmado com dados reais (Blue3, 26/09, só leitura):** em 21/09 havia **10 agrupamentos publicados
+com carteira acima de 0,02%** (carteiras entre 0,25% e 0,55%) — todos com o |Δ| do AGRUPAMENTO ≤ 0,0017%,
+ou seja, o caminho S3/S4. A trava nova, rodada contra o mesmo `/results` real com o `publish_nav` trocado
+por um falso (zero escrita), bloqueia os 10 pelo limite da carteira.
 
 #### Lista vazia × falha da consulta (SWAT-04, 2026-09-25)
 
