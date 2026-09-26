@@ -15,7 +15,8 @@ Agora a checagem é do SERVIDOR (`nav_publish` em pages/beehus_console.py), dia
 a dia e carteira a carteira, usando os resultados NAV daquela data:
   • pior |Δ| entre o próprio agrupamento e as carteiras dele;
   • bloqueia se esse pior |Δ| for >= limite (mesma régua do seletor, que só
-    deixa passar |Δ| < limite) ou se alguém não tiver Δ calculado (decisão do
+    deixa passar |Δ| < limite; |Δ| exatamente 0 sempre passa, e é só isso que
+    o limite 0 publica) ou se alguém não tiver Δ calculado (decisão do
     usuário: "sem Δ calculado não publica").
 
 Carteiras de um agrupamento numa data = união de
@@ -56,7 +57,8 @@ def carregar_limite_padrao_decimal():
 
     Pseudocódigo:
       1. Lê `limitePadraoDeltaPct` (em %) de data/publicacao_config.json.
-      2. Arquivo ausente, ilegível ou valor <= 0 -> usa 0,02%.
+      2. Arquivo ausente, ilegível ou valor negativo -> usa 0,02% (0 vale:
+         só publica divergência zero).
       3. Converte % em decimal e retorna.
     """
     percentual = _LIMITE_PADRAO_PCT
@@ -65,7 +67,7 @@ def carregar_limite_padrao_decimal():
             percentual = float(json.load(arquivo).get("limitePadraoDeltaPct", _LIMITE_PADRAO_PCT))
     except (OSError, ValueError, TypeError, AttributeError):
         percentual = _LIMITE_PADRAO_PCT
-    if not (percentual > 0) or math.isinf(percentual):
+    if math.isnan(percentual) or math.isinf(percentual) or percentual < 0:
         percentual = _LIMITE_PADRAO_PCT
     return percentual / 100.0
 
@@ -73,13 +75,14 @@ def carregar_limite_padrao_decimal():
 def interpretar_limite(valor):
     """Contexto:
     Valida o `maxDeltaAbs` (decimal) que a tela manda no POST de publicação.
-    Retorna float > 0, ou None se o valor for inválido.
+    Retorna float >= 0, ou None se o valor for inválido.
 
     Pseudocódigo:
       1. Recusa booleano (True viraria 1.0).
       2. Converte para float; falha -> None.
-      3. Aceita só número finito e > 0 (limite 0 publicaria só Δ exatamente 0,
-         e antes significava "sem filtro" na tela — não pode mais existir).
+      3. Aceita número finito e >= 0. [decisão do usuário, 25/09] Limite 0 é
+         válido e significa "só publica o que tem divergência ZERO" (antes, na
+         tela, 0 desligava o filtro — isso não existe mais).
     """
     if isinstance(valor, bool):
         return None
@@ -87,9 +90,22 @@ def interpretar_limite(valor):
         limite = float(valor)
     except (TypeError, ValueError):
         return None
-    if math.isnan(limite) or math.isinf(limite) or limite <= 0:
+    if math.isnan(limite) or math.isinf(limite) or limite < 0:
         return None
     return limite
+
+
+def passa_no_limite(delta, limite):
+    """Contexto:
+    Régua única da trava (servidor e, espelhada, a tela): um |Δ| passa se for
+    menor que o limite ou exatamente zero. Retorna boolean.
+
+    Pseudocódigo:
+      1. |Δ| == 0 -> passa (é o que "limite 0" deixa publicar).
+      2. Senão, passa só se |Δ| < limite (mesma régua do seletor, que só
+         mostra |Δ| < limite; |Δ| igual ao limite bloqueia).
+    """
+    return delta == 0 or delta < limite
 
 
 # ── Δ por entidade ────────────────────────────────────────────────────────────
@@ -256,7 +272,8 @@ def avaliar_publicacao(grouping_ids, resultados, indice_agrupamentos, data, limi
       1. Indexa os resultados NAV da data.
       2. Para cada agrupamento pedido, calcula a pior divergência.
       3. Alguém sem Δ -> bloqueia com motivo "sem_delta".
-      4. Pior |Δ| >= limite -> bloqueia com motivo "acima_limite".
+      4. Pior |Δ| não passa em `passa_no_limite` (>= limite e ≠ 0) ->
+         bloqueia com motivo "acima_limite".
       5. Senão, libera.
     """
     resultados_indexados = indexar_resultados(resultados)
@@ -270,7 +287,7 @@ def avaliar_publicacao(grouping_ids, resultados, indice_agrupamentos, data, limi
                                "walletId": resumo["semDeltaWalletId"],
                                "carteira": resumo["semDeltaCarteira"],
                                "delta": None, "motivo": MOTIVO_SEM_DELTA})
-        elif resumo["deltaAbs"] >= limite:
+        elif not passa_no_limite(resumo["deltaAbs"], limite):
             bloqueados.append({"groupingId": grouping_id, "nome": nome,
                                "walletId": resumo["walletId"], "carteira": resumo["carteira"],
                                "delta": resumo["deltaAbs"], "motivo": MOTIVO_ACIMA_LIMITE})

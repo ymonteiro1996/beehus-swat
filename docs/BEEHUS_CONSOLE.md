@@ -564,10 +564,10 @@ Fluxo diário / Reverter dia / Fluxo por datas / Reverter por datas — foi
   **Disponíveis** pane to only show groupings whose `|Δ|` is
   `< threshold` — i.e. the "safe to publish" ones. Groupings with `|Δ|
   ≥ threshold` (or with no delta data) are hidden so the user can't
-  accidentally publish unreconciled numbers. Threshold `0` shows
-  everything in the picker, **but no longer publishes**: since SWAT-05
-  (2026-09-25) the run requires a limit `> 0`, because the server always
-  applies it (see "Trava de divergência da Publicação"). Groupings with
+  accidentally publish unreconciled numbers. Threshold `0` is a real
+  limit since SWAT-05 (2026-09-25): only groupings with |Δ| exactly zero
+  pass (picker and server). Empty/negative/invalid → the run is refused, because
+  the server always applies the limit (see "Trava de divergência da Publicação"). Groupings with
   no Δ show at the bottom of Disponíveis as **"sem Δ"** (greyed, not
   clickable) instead of disappearing. The filter never hides
   items already in **Selecionadas** — once the user picks something it
@@ -639,6 +639,22 @@ do que o selecionado" + "verificação melhor por data e diferença em cada data
   final soma os bloqueados. O |Δ| do seletor continua sendo o da **data
   inicial** — os outros dias da faixa são checados na hora de publicar.
 - **Despublicar** não tem trava.
+- **Limite 0** [decisão do usuário, 25/09]: é um limite de verdade — **só publica |Δ| exatamente
+  zero**. Régua única `publicacao_divergencia.passa_no_limite`: passa se `|Δ| < limite` ou `|Δ| == 0`
+  (espelhada na tela em `_passaNoLimite`: seletor, selo "X/Y < L%" e matriz do mês). Campo vazio,
+  negativo ou inválido não publica (a tela avisa; o servidor devolve 400).
+
+**Por onde vazava antes (reproduzido no código anterior ao SWAT-05, commit `bcfbba7`, com a API
+simulada — mesmo roteiro rodado no código novo, 0 de 6 vazam):**
+
+| # | Cenário | Código antigo publicava |
+|---|---|---|
+| S1 | Faixa de datas com "Selecionadas" vazia; divergência só no último dia | o agrupamento no dia divergente (0,30%) — nenhum dia era checado |
+| S2 | Faixa; agrupamento escolhido no seletor (o |Δ| do seletor é o da **data inicial**) | o mesmo agrupamento nos dias seguintes, divergentes |
+| S3 | Dia único, seleção vazia; agrupamento limpo com **carteira** divergente, ou carteira sem Δ | tudo: o |Δ| usado era o do documento do agrupamento |
+| S4 | Dia único, "»" (tudo que o seletor mostrava abaixo do limite) | idem S3 — o seletor aprovava pelo agrupamento |
+| S5 | Selecionar e depois **baixar** o limite (ou Excel / Ctrl-clique) | o selecionado, sem rechecar |
+| S6 | Atalho "Publicar" do drill-down do Painel | qualquer divergência (não havia limite) |
 
 #### Lista vazia × falha da consulta (SWAT-04, 2026-09-25)
 
