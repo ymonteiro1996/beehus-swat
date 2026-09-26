@@ -317,7 +317,7 @@
         usado pelos botões <em>Enviar via API</em> de provisões e preços de execução.
       </p>
       <div class="flex gap-2">
-        <input id="token-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..."
+        <input id="token-input" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs..."
                class="flex-1 border rounded px-3 py-2 text-sm font-mono" />
         <button onclick="Token.save()"  class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded">Salvar</button>
         <button onclick="Token.clear()" class="text-gray-700 text-sm font-semibold px-4 py-2 rounded hover:bg-gray-100">Limpar</button>
@@ -438,10 +438,11 @@ function escHtml(s) {
 /* ── Bearer token (shared with /beehus Funções page) ─────────────────────── */
 const Token = {
   open()  {
+    document.getElementById('token-input').value = '';   // [TRV-03] sempre abre vazio
     document.getElementById('token-modal').classList.add('show');
     setTimeout(() => document.getElementById('token-input').focus(), 0);
   },
-  close() { document.getElementById('token-modal').classList.remove('show'); },
+  close() { document.getElementById('token-input').value = ''; document.getElementById('token-modal').classList.remove('show'); },   // [TRV-03] limpa ao fechar
 
   async refresh() {
     let s = {};

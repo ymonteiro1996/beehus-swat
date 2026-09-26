@@ -217,7 +217,7 @@
       </div>
       <div class="px-5 py-4 space-y-3">
         <p class="text-xs text-gray-500">Cole o Bearer Token do dia. Ele é compartilhado por todas as telas (Painel, Conciliação, Funções, etc.).</p>
-        <input id="token-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..."
+        <input id="token-input" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs..."
                class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300" />
         <div class="flex items-center gap-2">
           <button type="button" onclick="Token.save()"  class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded">Salvar</button>

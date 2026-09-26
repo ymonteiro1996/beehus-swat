@@ -445,6 +445,9 @@ const res = await fetch('/api/my-feature/save', {
   vazio e "Seu token expirou, cole um novo.". Página aberta fora do shell abre o próprio modal de
   token (Funções, Painel, Correções registram o seu). Não reabre com o modal aberto nem 20 s depois
   de fechado; depois de salvar, "Token salvo. Repita a ação." (nada é repetido sozinho — D11).
+- **Campo token sempre vazio** (TRV-03): shell e modais avulsos (Funções, Painel, Correções) limpam o
+  campo no abrir e no fechar e o input tem `autocomplete="new-password" data-lpignore data-1p-ignore
+  spellcheck="false"` — antes uma colagem que falhou reaparecia e o gerenciador de senha preenchia.
 - Saíram os 4 `alert("Token Beehus não está carregado…")` do Painel (atalho Publicar, aplicar
   mapeamento, cadastrar ativos, processar todas) — o pop-up cobre. Os laços que param no 1º 401
   (Identificar, Correções, Exceções, Strip) continuam parando.

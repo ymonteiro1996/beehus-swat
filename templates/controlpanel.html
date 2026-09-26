@@ -1337,7 +1337,7 @@ try {
         próximo restart. É o mesmo token usado na página Funções.
       </p>
       <div class="flex gap-2">
-        <input id="token-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..."
+        <input id="token-input" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs..."
                class="ec-input flex-1" />
         <button onclick="Token.save()"  class="ec-btn ec-btn-primary">Salvar</button>
         <button onclick="Token.clear()" class="ec-btn ec-btn-muted">Limpar</button>
@@ -6522,10 +6522,11 @@ try {
 
   const Token = {
     open()  {
+      document.getElementById('token-input').value = '';   // [TRV-03] sempre abre vazio
       document.getElementById('token-modal').classList.add('show');
       setTimeout(() => document.getElementById('token-input').focus(), 0);
     },
-    close() { document.getElementById('token-modal').classList.remove('show'); },
+    close() { document.getElementById('token-input').value = ''; document.getElementById('token-modal').classList.remove('show'); },   // [TRV-03] limpa ao fechar
     async refresh() {
       const r = await api('GET', '/api/beehus/token');
       const s = r.body || {};
