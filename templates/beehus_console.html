@@ -73,10 +73,13 @@
   .badge-ok    { background: #d1fae5; color: #065f46; }
   .badge-err   { background: #fee2e2; color: #991b1b; }
   .badge-info  { background: #dbeafe; color: #1e40af; }
+  /* SWAT-04: consulta ao Beehus falhou (não confundir com lista vazia). */
+  .badge-info.badge-erro { background: #fee2e2; color: #991b1b; }
   .badge-amber { background: #fef3c7; color: #92400e; }
   html.dark .badge-ok    { background: #064e3b; color: #d1fae5; }
   html.dark .badge-err   { background: #7f1d1d; color: #fee2e2; }
   html.dark .badge-info  { background: #1e3a8a; color: #dbeafe; }
+  html.dark .badge-info.badge-erro { background: #7f1d1d; color: #fee2e2; }
   html.dark .badge-amber { background: #78350f; color: #fef3c7; }
   /* Reusable badge sizing for the confidence column. */
   .conf-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; min-width: 44px; text-align: center; }
@@ -7110,7 +7113,11 @@ const UnpublishNav = {
                 `&positionDate=${encodeURIComponent(dt)}` +
                 `&published=true`;
     const r = await api('GET', url);
-    this._groupings = r.body || [];
+    // [SWAT-04] Falha da API chega como erro (não mais como []): avisa em vez
+    // de mostrar a lista vazia, que parecia "nada publicado nesta data".
+    this._groupings = (r.ok && Array.isArray(r.body)) ? r.body : [];
+    const status = document.getElementById('un-status');
+    if (status) status.textContent = r.ok ? '' : `Falha ao consultar o Beehus: ${(r.body && r.body.error) || 'HTTP ' + r.status} (veja o Log)`;
   },
 
   _renderPanes() {
@@ -7834,7 +7841,7 @@ function makeDatesPipeline(cfg) {
             `&published=${eligPub}`,
           );
           if (!lookup.ok) {
-            this._setDayStep(day, 'error', `lookup falhou em ${day}`);
+            this._setDayStep(day, 'error', `lookup falhou em ${day}: ${(lookup.body && lookup.body.error) || 'HTTP ' + lookup.status}`);
             stoppedAt = {day};
             break outer;
           }
@@ -8912,7 +8919,7 @@ const PublishDates = makeDatesPipeline({
         `?companyId=${encodeURIComponent(cid)}` +
         `&positionDate=${encodeURIComponent(prevDt)}` +
         `&published=true`);
-      this._prevDayIds = new Set((resp.body || []).map(g => g.id));
+      this._prevDayIds = new Set((resp.ok && Array.isArray(resp.body) ? resp.body : []).map(g => g.id));
     },
 
     async onPrevDayFilterChange() {
@@ -8932,6 +8939,7 @@ const PublishDates = makeDatesPipeline({
       // só faz sentido contra os navPackages do dia). Despublicar precisa
       // apenas da empresa — o picker lista TODOS os agrupamentos cadastrados
       // e o run() faz a interseção com os publicados por dia.
+      this._erroPicker = null;   // [SWAT-04] zera o erro da consulta anterior
       if (!cid || (!isUnpub && !dt)) {
         this._availableGroupings = [];
         this._groupingDeltas = [];
@@ -8961,8 +8969,13 @@ const PublishDates = makeDatesPipeline({
             `&positionDate=${encodeURIComponent(dt)}` +
             `&published=${pub}`),
         ]);
-        this._availableGroupings = (eligible.body || []);
-        this._groupingDeltas     = (deltas.body && Array.isArray(deltas.body)) ? deltas.body : [];
+        // [SWAT-04] Falha da API chega como erro (não mais como []): o
+        // seletor diz "falha ao consultar" em vez de "nenhum agrupamento não
+        // publicado" — antes as duas situações eram indistinguíveis.
+        const falha = !eligible.ok ? eligible : (!deltas.ok ? deltas : null);
+        this._erroPicker = falha ? `${(falha.body && falha.body.error) || 'HTTP ' + falha.status}` : null;
+        this._availableGroupings = (eligible.ok && Array.isArray(eligible.body)) ? eligible.body : [];
+        this._groupingDeltas     = (deltas.ok && Array.isArray(deltas.body)) ? deltas.body : [];
       }
 
       await this._fetchPrevDayIds();
@@ -9097,7 +9110,14 @@ const PublishDates = makeDatesPipeline({
         const empty = ready
                    && this._availableGroupings.length === 0
                    && this._selectedIds.size === 0;
-        allPub.classList.toggle('hidden', !empty);
+        // [SWAT-04] Consulta que FALHOU não pode aparecer como "nenhum
+        // agrupamento não publicado" (= tudo já publicado): diz que falhou.
+        const L = this.ACTION_LABELS[isUnpub ? 'unpublish' : 'publish'];
+        const falhou = !isUnpub && !!this._erroPicker;
+        allPub.textContent = falhou ? 'falha ao consultar o Beehus (veja o Log)' : L.emptyBadge;
+        allPub.title       = falhou ? this._erroPicker : L.emptyBadgeTitle;
+        allPub.classList.toggle('badge-erro', falhou);
+        allPub.classList.toggle('hidden', !(empty || falhou));
       }
     },
 

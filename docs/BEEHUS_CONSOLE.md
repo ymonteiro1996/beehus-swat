@@ -640,6 +640,24 @@ do que o selecionado" + "verificação melhor por data e diferença em cada data
   inicial** — os outros dias da faixa são checados na hora de publicar.
 - **Despublicar** não tem trava.
 
+#### Lista vazia × falha da consulta (SWAT-04, 2026-09-25)
+
+Relato: "somente para Eté Gestão não apareceu nenhum agrupamento" (Painel de Controle normal →
+Publicação). Diagnóstico com o usuário: `filters/groupings` da Eté vinha **com itens** e
+`groupings-by-publish-state?published=false` vinha `[]` — **todos os agrupamentos já estavam
+publicados** naquela data; o comportamento estava certo (a Publicação só lista os NÃO publicados).
+As outras ferramentas (NAV Groupings, Processar) usam `filters/groupings`, que respondia normal.
+
+O que ficou de lição e foi corrigido: `groupings-by-publish-state` e `grouping-return-deltas` liam o
+`/results` por `beehus_catalog.nav_results`, que **engole qualquer erro** (token vencido, 429,
+timeout) e devolve `{}` — a tela mostrava "nenhum agrupamento não publicado", **igual** a quando está
+tudo publicado. Agora as duas rotas usam `_resultados_nav_ou_erro` (chamada direta, 401/502 com a
+causa) e a tela distingue: selo vermelho **"falha ao consultar o Beehus (veja o Log)"** no seletor,
+aviso em `un-status` no Despublicar, e a causa na linha do dia do `run()` ("lookup falhou em …: …").
+Dia sem NAV continua `[]` com 200 (não é erro). Hipóteses A (company desatualizada no iframe dos
+painéis Template) e C (índice de agrupamentos parcial após 429) não eram a causa deste relato e não
+foram alteradas.
+
 ### Pipelines "por datas" (single-step)
 
 > **Removido (jun/2026):** as pipelines multi-step **Fluxo diário**, **Reverter

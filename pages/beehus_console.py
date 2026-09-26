@@ -321,6 +321,26 @@ def filter_wallets():
     return jsonify(items)
 
 
+def _resultados_nav_ou_erro(company_id, position_date):
+    """Contexto:
+    Busca o /results (NAV de carteiras e agrupamentos) da empresa na data para
+    as rotas da Publicação, SEM engolir erro. [2026-09-25, SWAT-04] O
+    `beehus_catalog.nav_results` devolve {} em qualquer falha (token vencido,
+    429, timeout), e a tela mostrava "nenhum agrupamento" — igual a quando já
+    está tudo publicado. Retorna (resultados, None) ou (None, resposta_de_erro).
+
+    Pseudocódigo:
+      1. Chama get_nav_results direto.
+      2. BeehusAPIError -> (None, 401/502 com a causa).
+      3. Resposta que não é dict -> {} (sem dados, não é erro).
+    """
+    try:
+        resultados = get_nav_results(company_id=company_id, position_date=position_date)
+    except BeehusAPIError as e:
+        return None, _api_error_response(e)
+    return (resultados if isinstance(resultados, dict) else {}), None
+
+
 @bp.route("/api/beehus/filters/groupings-by-publish-state")
 def filter_groupings_by_publish_state():
     """Groupings of `companyId` whose `navPackages` for `positionDate` match
@@ -341,13 +361,16 @@ def filter_groupings_by_publish_state():
     if not company_visible(company_id) or not position_date:
         return jsonify([])
 
-    # navPackages de nível agrupamento via cache consolidado da empresa. Em
-    # produção há 1 doc por agrupamento/data (validado), então `distinct` vira
-    # um set sobre os docs filtrados pelo estado `published`. O cache já é
-    # não-trashed. `published` casa estritamente (campo ausente/null não casa
-    # nem true nem false, igual ao Mongo).
+    # navPackages de nível agrupamento do /results da data (1 doc por
+    # agrupamento/data, validado). `published` casa estritamente (campo
+    # ausente/null não casa nem true nem false, igual ao Mongo).
+    # [2026-09-25, SWAT-04] Falha da API volta como erro (401/502), não como
+    # [] — antes "falhou" e "não há nada neste estado" eram indistinguíveis.
+    resultados, erro = _resultados_nav_ou_erro(company_id, position_date)
+    if erro:
+        return erro
     eligible = set()
-    for d in beehus_catalog.nav_grouping_docs(company_id, position_date):
+    for d in publicacao_divergencia.indexar_resultados(resultados)["agrupamentos"].values():
         pub = d.get("published")
         if pub is None or bool(pub) != published:
             continue
@@ -421,10 +444,12 @@ def filter_grouping_return_deltas():
     if not company_visible(company_id) or not position_date:
         return jsonify([])
 
-    # /results consolidado da empresa na data (1 chamada, ao vivo; {} se a API
-    # falhar — a UI mostra vazio, como antes). Quando não é `all`, filtra pelo
-    # estado `published` do agrupamento (estrito como o Mongo).
-    resultados = beehus_catalog.nav_results(company_id, position_date)
+    # /results consolidado da empresa na data (1 chamada, ao vivo). Falha da
+    # API volta como erro 401/502 [SWAT-04], não como lista vazia. Quando não
+    # é `all`, filtra pelo estado `published` do agrupamento (estrito).
+    resultados, erro = _resultados_nav_ou_erro(company_id, position_date)
+    if erro:
+        return erro
     indexados = publicacao_divergencia.indexar_resultados(resultados)
     gindex = get_grouping_index()
     wallet_names = get_wallet_names()
