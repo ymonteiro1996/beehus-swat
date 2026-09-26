@@ -126,7 +126,7 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 | `POST /api/beehus/nav/calculate-wallets` | `POST /beehus/consolidation/nav-contribution-calculation/wallets` | Body field `wallets` |
 | `POST /api/beehus/nav/explosion-proportions` | `POST /beehus/consolidation/nav-contribution-calculation/explosion-proportions` | Body field `groupings` |
 | `POST /api/beehus/nav/calculate-groupings` | `POST /beehus/consolidation/nav-contribution-calculation/groupings` | Body field `groupings` |
-| `POST /api/beehus/nav/publish` | `PATCH /beehus/consolidation/nav-contribution-calculation/publish` | Upstream takes a JSON body `{companyId, positionDate, groupingIds[]}`. Local route forwards the same shape; long lists are split into 50-id batches for partial-success granularity and bounded per-call latency. **[2026-09-25, SWAT-05] Trava de divergência no servidor** — body aceita `maxDeltaAbs` (decimal, `0.0002` = 0,02%; ausente → `data/publicacao_config.json`; `<= 0`/inválido → 400). Só publica o que passa; resposta traz `publishedIds` e `blocked: [{groupingId, nome, walletId, carteira, delta, motivo}]`. `groupingIds` vazio vira "não publicados da data" — nunca é repassado vazio. Ver "Trava de divergência da Publicação" abaixo |
+| `POST /api/beehus/nav/publish` | `PATCH /beehus/consolidation/nav-contribution-calculation/publish` | Upstream takes a JSON body `{companyId, positionDate, groupingIds[]}`. Local route forwards the same shape; long lists are split into 50-id batches for partial-success granularity and bounded per-call latency. **[2026-09-25, SWAT-05] Trava de divergência no servidor** — body aceita `maxDeltaAbsAgrupamento` e `maxDeltaAbsCarteira` (decimal, `0.0002` = 0,02%; ausente → o `maxDeltaAbs` antigo, se vier, senão `data/publicacao_config.json`; negativo/inválido → 400; 0 = só divergência zero). Só publica o que passa; resposta traz `publishedIds` e `blocked: [{groupingId, nome, walletId, carteira, delta, motivo}]`. `groupingIds` vazio vira "não publicados da data" — nunca é repassado vazio. Ver "Trava de divergência da Publicação" abaixo |
 | `POST /api/beehus/nav/unpublish` | `PATCH /beehus/consolidation/nav-contribution-calculation/unpublish` | Same JSON-body shape as `/publish` |
 | `POST /api/controlpanel/apply-mapping` | `PATCH /beehus/financial/security-mappings/{id}` | Painel de Controle route: maps the selected unprocessed→security pairs into Beehus directly. Body: `{companyId, mappingsToInclude:[{from,to}…]}`. The route looks up `securityMappings._id` server-side from `companyId` (so the client cannot tamper with it) and only forwards `mappingsToInclude` (exclusions are out of scope here). 401/403 → 401, anything else upstream → 502 |
 
@@ -618,21 +618,28 @@ do que o selecionado" + "verificação melhor por data e diferença em cada data
 - **Quem decide é o servidor** (`nav_publish` → `publicacao_divergencia.py`,
   funções puras). Para **cada `positionDate`** recebido, busca o `/results`
   daquela data (chamada direta a `get_nav_results`: token vencido vira 401,
-  não "tudo sem Δ") e, para cada agrupamento pedido, calcula o **pior
-  |rnps − rc|** entre o agrupamento e as carteiras dele.
+  não "tudo sem Δ") e, para cada agrupamento pedido, compara o |rnps − rc| do
+  **próprio agrupamento** com o **limite do agrupamento** e o de **cada
+  carteira** dele com o **limite da carteira** [pedido do usuário, 25/09: "dois
+  campos, um de limite por carteira e outro de limite por agrupamento", 0,02%
+  nos dois por padrão].
 - **Carteiras do agrupamento na data** = as que o `/results` lista sob o
   `groupingId` ∪ as membras do cadastro **ativas na data**
   (`initialDateOnGrouping..finalDateOnGrouping`, guardadas em
   `grouping_index()[gid]["members"]`). A membra ativa sem linha no `/results`
   conta como "sem Δ".
-- **Bloqueia** se o pior |Δ| for `>=` limite (`acima_limite` — mesma régua do
-  seletor, que só mostra `< limite`) ou se alguém estiver sem Δ (`sem_delta`,
-  decisão do usuário). Publica só o resto; se nada passar, **não chama o
-  Beehus** (lista vazia no upstream = "todos").
-- **Limite**: a tela manda `maxDeltaAbs` (o campo "Limite |Δ| (%)" ÷ 100) em
-  todo POST de publicação. Sem o campo (ex.: botão "Publicar" do drill-down
-  "Posições Processadas" do Painel), vale `limitePadraoDeltaPct` de
-  `data/publicacao_config.json` (0,02%). Não há "forçar" (D6).
+- **Bloqueia** se o agrupamento ou alguma carteira não passar no seu limite
+  (`acima_limite`, com `entidade` = `agrupamento` | `carteira` e o `limite`
+  usado) ou se alguém estiver sem Δ (`sem_delta`, decisão do usuário). Publica
+  só o resto; se nada passar, **não chama o Beehus** (lista vazia no upstream =
+  "todos").
+- **Limites**: a tela tem dois campos, **"Limite |Δ| agrupamento (%)"**
+  (`pbd-threshold`) e **"Limite |Δ| carteira (%)"** (`pbd-threshold-carteira`),
+  ambos 0,02 por padrão, e manda os dois (÷ 100) em todo POST. Sem eles (ex.:
+  botão "Publicar" do drill-down "Posições Processadas" do Painel), valem
+  `limitePadraoDeltaAgrupamentoPct` / `limitePadraoDeltaCarteiraPct` de
+  `data/publicacao_config.json`. O seletor mostra `A x% · C y%` (agrupamento ·
+  pior carteira) e o selo `N/M · A < a% · C < c%`. Não há "forçar" (D6).
 - **Ordem**: escopo Template + "Deve Publicar = Não" primeiro, trava depois.
 - **Tela**: cada dia mostra `N publicado(s) · M bloqueado(s)` e um "ver
   bloqueados" com agrupamento, carteira responsável e |Δ| vs limite; o status

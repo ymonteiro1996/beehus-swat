@@ -2657,7 +2657,7 @@ try {
         alert(`Não publicado — bloqueado pela trava de divergência:\n` +
               (bloqueio.motivo === 'sem_delta'
                 ? `sem Δ calculado (${quem}).`
-                : `|Δ| ${pct(bloqueio.delta)} ≥ limite ${pct(r.body.maxDeltaAbs)} (${quem}).`));
+                : `|Δ| ${pct(bloqueio.delta)} ≥ limite ${bloqueio.entidade === "carteira" ? "da carteira" : "do agrupamento"} ${pct(bloqueio.limite)} (${quem}).`));
         btn.disabled = false;
         btn.innerHTML = orig;
         return;
