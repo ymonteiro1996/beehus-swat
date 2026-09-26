@@ -669,6 +669,14 @@ com carteira acima de 0,02%** (carteiras entre 0,25% e 0,55%) — todos com o |�
 ou seja, o caminho S3/S4. A trava nova, rodada contra o mesmo `/results` real com o `publish_nav` trocado
 por um falso (zero escrita), bloqueia os 10 pelo limite da carteira.
 
+**Formato real do `/results` (visto em 26/09):** cada carteira aparece UMA vez em
+`walletsWithNavDetailed`, com UM `groupingId` — a carteira que pertence a dois agrupamentos (ex.:
+"… - 3XU75098" e "… - Offshore") fica listada só sob um deles. Por isso a trava soma as membras do
+CADASTRO ativas na data (`grouping_index()[gid]["members"]`); só pelo `/results` ela não veria a
+carteira no outro agrupamento. **Teste real (Blue3, autorizado):** despublicar+republicar pela tela
+nova restaurou o estado (o `publishedAt` original é mantido); tentar publicar um agrupamento com
+|Δ| 33% foi bloqueado e o Beehus confirmou que continuou não publicado.
+
 #### Lista vazia × falha da consulta (SWAT-04, 2026-09-25)
 
 Relato: "somente para Eté Gestão não apareceu nenhum agrupamento" (Painel de Controle normal →
