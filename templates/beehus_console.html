@@ -8906,10 +8906,12 @@ const PublishDates = makeDatesPipeline({
     },
 
     // Régua única (espelha publicacao_divergencia.passa_no_limite do servidor):
-    // passa se |Δ| < limite ou |Δ| == 0. Limite null (campo inválido) = sem régua.
+    // passa se |Δ| < limite ou |Δ| "zero" (<= 1e-9, mesma TOLERANCIA_ZERO do
+    // servidor — o Beehus devolve 8e-12 onde a tela mostra 0,0000%). Limite
+    // null (campo inválido) = sem régua.
     _passaNoLimite(deltaAbs, threshold) {
       if (threshold === null) return true;
-      return deltaAbs === 0 || deltaAbs < threshold;
+      return deltaAbs <= 1e-9 || deltaAbs < threshold;
     },
 
     onThresholdChange() { this._renderPickerPanes(); },

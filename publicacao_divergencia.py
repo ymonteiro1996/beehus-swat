@@ -50,6 +50,11 @@ ENTIDADE_CARTEIRA = "carteira"
 _CHAVE_CONFIG = {ENTIDADE_AGRUPAMENTO: "limitePadraoDeltaAgrupamentoPct",
                  ENTIDADE_CARTEIRA: "limitePadraoDeltaCarteiraPct"}
 
+# |Δ| abaixo disto é "zero" (0,0000001%). Achado no teste com dados reais da Blue3
+# (26/09): o Beehus devolve |Δ| como 8e-12 — ruído de ponto flutuante — em
+# agrupamentos que a tela mostra como 0,0000%; com limite 0 eles bloqueavam.
+TOLERANCIA_ZERO = 1e-9
+
 MOTIVO_ACIMA_LIMITE = "acima_limite"
 MOTIVO_SEM_DELTA = "sem_delta"
 
@@ -111,14 +116,15 @@ def interpretar_limite(valor):
 def passa_no_limite(delta, limite):
     """Contexto:
     Régua única da trava (servidor e, espelhada, a tela): um |Δ| passa se for
-    menor que o limite ou exatamente zero. Retorna boolean.
+    menor que o limite ou zero. Retorna boolean.
 
     Pseudocódigo:
-      1. |Δ| == 0 -> passa (é o que "limite 0" deixa publicar).
+      1. |Δ| <= TOLERANCIA_ZERO -> passa (é o que "limite 0" deixa publicar;
+         a tolerância absorve o ruído de ponto flutuante do Beehus).
       2. Senão, passa só se |Δ| < limite (mesma régua do seletor, que só
          mostra |Δ| < limite; |Δ| igual ao limite bloqueia).
     """
-    return delta == 0 or delta < limite
+    return delta <= TOLERANCIA_ZERO or delta < limite
 
 
 # ── Δ por entidade ────────────────────────────────────────────────────────────
