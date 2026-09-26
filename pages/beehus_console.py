@@ -78,6 +78,7 @@ from beehus_api import (
     verify_token,
 )
 from db import (
+    today_in_brt,
     atomic_write_json,
     biz_days_between,
     business_days_before,
@@ -3129,6 +3130,24 @@ def util_parse_strings_excel():
                 values.append(s)
 
     return jsonify({"values": values, "count": len(values)})
+
+
+@bp.route("/api/beehus/util/default-range")
+def util_default_range():
+    """Contexto:
+    [2026-09-25, SWAT-08, pedido do usuário: "Trazer as datas preenchidas na seleção faixa,
+    default data inicial como D-7 e data final como D-1"] Faixa padrão dos executores por
+    datas (Processar, NAV Wallets, NAV Groupings, Publicação, Transações), em DIAS ÚTEIS ANBIMA
+    (D4 do escopo) — o front só conhece segunda a sexta. Retorna {ini, fin, hoje} (AAAA-MM-DD).
+
+    Pseudocódigo:
+      1. Hoje em BRT.
+      2. ini = hoje − 7 du; fin = hoje − 1 du (wallet_scope.deslocar_du, calendário ANBIMA).
+    """
+    hoje = today_in_brt().isoformat()
+    return jsonify({"ini": wallet_scope.deslocar_du(hoje, -7),
+                    "fin": wallet_scope.deslocar_du(hoje, -1),
+                    "hoje": hoje})
 
 
 @bp.route("/api/beehus/util/parse-dates-excel", methods=["POST"])

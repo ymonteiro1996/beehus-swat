@@ -9655,6 +9655,81 @@ Token.refresh();
 // expose it explicitly.
 window.IdentifyTxn = IdentifyTxn;
 
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-25, SWAT-08, pedido do usuário: "Trazer as datas preenchidas na seleção
+   faixa, default data inicial como D-7 e data final como D-1 em Processar, NAV
+   Wallets, NAV Groupings, Publicação e Transação"] Faixa padrão D-7 → D-1 em DIAS
+   ÚTEIS ANBIMA (vem do servidor: /api/beehus/util/default-range — o front só conhece
+   seg–sex). Preenche ao escolher "Faixa de datas", no Limpar e ao trocar de empresa
+   (se a ferramenta estiver em faixa). Grava também o defaultValue, para o
+   _isPristine do Painel continuar tratando o campo como "intocado".
+═════════════════════════════════════════════════════════════════════════════ */
+const FaixaPadrao = {
+  _promessa: null,
+
+  /* Contexto: busca (1x por carregamento) a faixa padrão no servidor. Retorna
+     Promise<{ini, fin}|null>.
+     Pseudocódigo: 1. Reusa a promessa já feita. 2. Falha -> null (campos ficam como estão). */
+  obter() {
+    if (!this._promessa) {
+      this._promessa = fetch('/api/beehus/util/default-range')
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+    }
+    return this._promessa;
+  },
+
+  /* Contexto: preenche os campos inicial/final de uma ferramenta com a faixa padrão.
+     `aoPreencher` (opcional) roda depois (ex.: Publicação recarrega o seletor).
+     Não retorna nada.
+     Pseudocódigo: 1. Obtém a faixa. 2. Escreve value e defaultValue nos dois campos.
+       3. Chama aoPreencher. */
+  async aplicar(idInicial, idFinal, aoPreencher) {
+    const faixa = await this.obter();
+    if (!faixa || !faixa.ini || !faixa.fin) return;
+    for (const [id, valor] of [[idInicial, faixa.ini], [idFinal, faixa.fin]]) {
+      const el = document.getElementById(id);
+      if (el) { el.value = valor; el.defaultValue = valor; }
+    }
+    if (typeof aoPreencher === 'function') aoPreencher();
+  },
+};
+
+/* Contexto: liga a faixa padrão nas 4 ferramentas de datas (makeDatesPipeline) e no
+   Transações (IdentifyTxn), envolvendo onModeChange / reset / onCompanyChange depois
+   que todos os add-ons já se instalaram. Não retorna nada.
+   Pseudocódigo:
+     1. Para cada ferramenta, guarda os métodos originais.
+     2. onModeChange('range') -> aplica a faixa padrão.
+     3. reset / onCompanyChange -> se a ferramenta estiver em faixa, aplica de novo. */
+(function _instalarFaixaPadrao() {
+  const ferramentas = [
+    [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
+    [typeof NavWalletsDates   !== 'undefined' ? NavWalletsDates   : null, 'nwd'],
+    [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
+    [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
+    [typeof IdentifyTxn       !== 'undefined' ? IdentifyTxn       : null, 'i'],
+  ];
+  for (const [obj, prefixo] of ferramentas) {
+    if (!obj) continue;
+    const emFaixa = () => (prefixo === 'i')
+      ? !document.getElementById('i-finalDate-wrap').classList.contains('hidden')
+      : obj._mode === 'range';
+    const preencher = () => FaixaPadrao.aplicar(`${prefixo}-initialDate`, `${prefixo}-finalDate`,
+      // Publicação: recarregar o seletor para a data inicial nova (esperado — ver escopo SWAT-08).
+      () => { if (obj.onRangeChange) obj.onRangeChange(); });
+    for (const metodo of ['onModeChange', 'reset', 'onCompanyChange']) {
+      if (typeof obj[metodo] !== 'function') continue;
+      const original = obj[metodo].bind(obj);
+      obj[metodo] = function (...args) {
+        const retorno = original(...args);
+        const querFaixa = (metodo === 'onModeChange') ? args[0] === 'range' : emFaixa();
+        if (querFaixa) preencher();
+        return retorno;
+      };
+    }
+  }
+})();
+
 const _initialView = location.hash.slice(1);
 const _allowed = ['identify', 'delete-prov', 'delete-pos', 'explosion-prop', 'unpublish-nav', 'process-dates', 'nav-wallets-dates', 'nav-groupings-dates', 'publish-dates'];
 const _bootView = _allowed.includes(_initialView) ? _initialView : 'identify';

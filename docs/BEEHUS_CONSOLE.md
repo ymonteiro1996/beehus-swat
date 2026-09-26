@@ -697,6 +697,16 @@ foram alteradas.
 
 ### Pipelines "por datas" (single-step)
 
+> **[2026-09-25, SWAT-08] Faixa padrão D-7 → D-1 (dias úteis ANBIMA).** Ao escolher "Faixa de
+> datas", no Limpar e ao trocar de empresa (se em faixa), Processar, NAV Wallets, NAV Groupings,
+> Publicação e Transações preenchem inicial = hoje − 7 du e final = hoje − 1 du, calculados no
+> servidor (`GET /api/beehus/util/default-range` → `wallet_scope.deslocar_du`, calendário ANBIMA —
+> o front só conhece seg–sex). Um único envelope (`_instalarFaixaPadrao`, fim do script) envolve
+> `onModeChange`/`reset`/`onCompanyChange` das 5 ferramentas depois dos add-ons. O padrão é gravado
+> também em `defaultValue`, e o `Funcoes._isPristine` do Painel passou a tratar valor == padrão como
+> intocado (senão a limpeza de iframes ociosos pararia). Na Publicação o preenchimento dispara o
+> `onRangeChange` (o seletor recarrega — esperado).
+
 > **Removido (jun/2026):** as pipelines multi-step **Fluxo diário**, **Reverter
 > dia**, **Fluxo por datas** e **Reverter por datas** (grupo "Rotina Diária")
 > foram **removidas** — views (`daily-flow`/`revert-flow`/`flow-dates`/

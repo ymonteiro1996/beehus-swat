@@ -6806,7 +6806,9 @@ try {
           'input[type=text], input[type=number], input[type=date], input[type=search], input[type=email], input[type=tel], textarea'
         );
         for (const el of textInputs) {
-          if ((el.value || '').trim()) return false;
+          // [SWAT-08] valor igual ao padrão (defaultValue — ex.: a faixa D-7→D-1
+          // pré-preenchida) conta como intocado.
+          if ((el.value || '').trim() && el.value !== el.defaultValue) return false;
         }
         // Selects: any non-default selection
         for (const sel of doc.querySelectorAll('select')) {
