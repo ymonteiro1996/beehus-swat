@@ -984,7 +984,7 @@ def nav_publish():
 
     [2026-09-25, SWAT-05] Trava de divergência NO SERVIDOR, para esta data:
     cada agrupamento pedido só é publicado se o pior |returnNavPerShare −
-    returnContribution| entre ele e as carteiras dele for < limite e ninguém
+    returnContribution| entre ele e as carteiras dele for < limite (ou = 0) e ninguém
     estiver sem Δ (ver publicacao_divergencia.py). Os barrados voltam em
     `blocked: [{groupingId, nome, walletId, carteira, delta, motivo}]`
     (motivo "acima_limite" | "sem_delta"); os enviados em `publishedIds`.
@@ -1009,13 +1009,14 @@ def nav_publish():
         return jsonify({"error": "groupingIds must be a list of strings"}), 400
     # [2026-09-25, SWAT-05] A trava de |Δ| é do servidor. `maxDeltaAbs` é
     # decimal (0,02% -> 0.0002); ausente -> limite padrão de
-    # data/publicacao_config.json; presente e inválido/<= 0 -> 400.
+    # data/publicacao_config.json; presente e inválido/negativo -> 400. 0 vale:
+    # só publica |Δ| exatamente zero (decisão do usuário, 25/09).
     if data.get("maxDeltaAbs") is None:
         limite, limite_origem = publicacao_divergencia.carregar_limite_padrao_decimal(), "padrao"
     else:
         limite, limite_origem = publicacao_divergencia.interpretar_limite(data.get("maxDeltaAbs")), "requisicao"
         if limite is None:
-            return jsonify({"error": "maxDeltaAbs deve ser um número maior que zero "
+            return jsonify({"error": "maxDeltaAbs deve ser um número >= 0 "
                                      "(limite |Δ| em decimal, ex.: 0.0002 = 0,02%)"}), 400
 
     # Resultados NAV DESTA data — chamada direta (não o nav_results do

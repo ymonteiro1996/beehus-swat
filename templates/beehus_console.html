@@ -8590,13 +8590,14 @@ const PublishDates = makeDatesPipeline({
     return (PublishDates._action === 'unpublish') ? 'despublicado' : 'publicado';
   },
   // [2026-09-25, SWAT-05] A trava de |Δ| é aplicada pelo SERVIDOR em cada dia
-  // (nav_publish); a tela só manda o limite. Limite vazio/0 não publica mais:
-  // antes "0" desligava o filtro, o que deixava publicar sem trava nenhuma.
+  // (nav_publish); a tela só manda o limite. Limite 0 = só publica |Δ| zero
+  // (decisão do usuário); vazio/negativo/inválido não publica — antes o "0"
+  // desligava o filtro e deixava publicar sem trava nenhuma.
   validateRun() {
     if (PublishDates._action === 'unpublish') return null;
-    return (PublishDates._thresholdDecimal() > 0) ? null
-      : 'Informe um "Limite |Δ| (%)" maior que zero. A publicação sempre passa ' +
-        'pela trava de divergência do servidor (dia a dia, carteira a carteira).';
+    return (PublishDates._thresholdDecimal() !== null) ? null
+      : 'Informe um "Limite |Δ| (%)" válido (0 ou maior; 0 = só divergência zero). ' +
+        'A publicação sempre passa pela trava de divergência do servidor (dia a dia, carteira a carteira).';
   },
   extraPayload() {
     if (PublishDates._action === 'unpublish') return null;
@@ -8860,15 +8861,23 @@ const PublishDates = makeDatesPipeline({
       }
     },
 
+    // Limite do campo "Limite |Δ| (%)" em DECIMAL (0,02% -> 0.0002), ou null
+    // quando vazio/negativo/inválido. [SWAT-05] 0 é um limite de verdade (só
+    // |Δ| zero passa), não mais "sem filtro". Despublicar não tem trava: null.
     _thresholdDecimal() {
-      // For "Despublicar", the |Δ| safety filter has no meaning — there's no
-      // "safe to despublicar" notion, so we bypass it entirely. The threshold
-      // input is also hidden in unpublish mode (see _applyActionLabels).
-      if (this._action === 'unpublish') return 0;
+      if (this._action === 'unpublish') return null;
       const raw = (($$('threshold')?.value) ?? '').toString().replace(',', '.').trim();
-      const pct = parseFloat(raw);
-      if (!isFinite(pct) || pct < 0) return 0;
+      if (!raw) return null;
+      const pct = Number(raw);
+      if (!isFinite(pct) || pct < 0) return null;
       return pct / 100;
+    },
+
+    // Régua única (espelha publicacao_divergencia.passa_no_limite do servidor):
+    // passa se |Δ| < limite ou |Δ| == 0. Limite null (campo inválido) = sem régua.
+    _passaNoLimite(deltaAbs, threshold) {
+      if (threshold === null) return true;
+      return deltaAbs === 0 || deltaAbs < threshold;
     },
 
     onThresholdChange() { this._renderPickerPanes(); },
@@ -8882,7 +8891,7 @@ const PublishDates = makeDatesPipeline({
          1. Indexa os |Δ| carregados (pior carteira, data inicial) por grouping.
          2. semDelta = sem linha, |Δ| nulo ou alguma entidade sem Δ (o servidor
             bloqueia sempre, com qualquer limite).
-         3. passa = não é semDelta e (limite <= 0 ou |Δ| < limite).
+         3. passa = não é semDelta e (|Δ| < limite ou |Δ| == 0; campo inválido = sem régua).
          4. Despublicar não tem trava nem |Δ| carregado: tudo passa. */
     _regraTrava() {
       const threshold  = this._thresholdDecimal();
@@ -8896,7 +8905,7 @@ const PublishDates = makeDatesPipeline({
         const d = linha(g);
         return !d || d.semDelta || d.deltaAbs === null || d.deltaAbs === undefined;
       };
-      const passa = (g) => !semDelta(g) && (threshold <= 0 || linha(g).deltaAbs < threshold);
+      const passa = (g) => !semDelta(g) && this._passaNoLimite(linha(g).deltaAbs, threshold);
       return {threshold, linha, semDelta, passa};
     },
 
@@ -9061,7 +9070,7 @@ const PublishDates = makeDatesPipeline({
 
       const filterBadge = $$('pkr-filter-summary');
       if (filterBadge) {
-        if (threshold > 0 && this._availableGroupings.length > 0) {
+        if (threshold !== null && this._availableGroupings.length > 0) {
           const safe = this._availableGroupings.filter(passes).length;
           const limitPct = (threshold * 100).toLocaleString('pt-BR', {
             minimumFractionDigits: 2, maximumFractionDigits: 4,
@@ -9378,8 +9387,9 @@ const PublishDates = makeDatesPipeline({
         if (!cell) return 5;
         const { deltaAbs, published } = cell;
         const hasData = deltaAbs !== null && deltaAbs !== undefined && isFinite(deltaAbs);
-        const above = threshold > 0 && hasData && deltaAbs >= threshold;
-        const below = threshold > 0 && hasData && deltaAbs < threshold;
+        const passaLim = threshold !== null && hasData && this._passaNoLimite(deltaAbs, threshold);   // [SWAT-05] mesma régua do servidor
+        const above = threshold !== null && hasData && !passaLim;
+        const below = passaLim;
         if (below &&  published) return 0;
         if (below && !published) return 1;
         if (above &&  published) return 2;
@@ -9454,8 +9464,9 @@ const PublishDates = makeDatesPipeline({
             if (cell) {
               const { deltaAbs, published } = cell;
               const hasData = deltaAbs !== null && deltaAbs !== undefined && isFinite(deltaAbs);
-              const above   = threshold > 0 && hasData && deltaAbs >= threshold;
-              const below   = threshold > 0 && hasData && deltaAbs < threshold;
+              const passaLim = threshold !== null && hasData && this._passaNoLimite(deltaAbs, threshold);   // [SWAT-05] mesma régua do servidor
+              const above = threshold !== null && hasData && !passaLim;
+              const below = passaLim;
               if      (below &&  published) { bg = 'bg-green-200';  txt = 'text-green-800 font-semibold'; }
               else if (below && !published) { bg = 'bg-purple-100 border-l border-r border-purple-200'; txt = 'text-purple-700'; }
               else if (above &&  published) { bg = 'bg-yellow-200'; txt = 'text-yellow-800 font-semibold'; }
