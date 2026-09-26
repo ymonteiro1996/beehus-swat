@@ -484,6 +484,17 @@ const Token = {
     this.refresh();
   },
 };
+// [2026-09-25, TRV-01] Página aberta FORA do shell (janela de cima): o beehus_token_guard.js
+// abre ESTE modal quando uma resposta vem com X-Beehus-Token: expired. Dentro do shell, quem
+// abre é o modal do shell. Campo sempre vazio; fechar liga a espera de 20 s (anti-loop).
+if (window.top === window && window.BeehusTokenGuard && document.getElementById('token-modal')) {
+  const _fecharTokenOriginal = Token.close.bind(Token);
+  Token.close = function () { _fecharTokenOriginal(); BeehusTokenGuard.marcarFechado(); };
+  BeehusTokenGuard.registrarModal({
+    abrir: () => { const campo = document.getElementById('token-input'); if (campo) campo.value = ''; Token.open(); },
+    estaAberto: () => document.getElementById('token-modal').classList.contains('show'),
+  });
+}
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.getElementById('token-modal').classList.contains('show')) {

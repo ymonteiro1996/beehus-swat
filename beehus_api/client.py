@@ -29,7 +29,7 @@ BASE_URL = "https://api.controladoria.beehus.com.br"
 DEFAULT_TIMEOUT = 30  # seconds
 
 _lock = threading.Lock()
-# `rejected`: set True whenever the upstream answers 401/403 (token missing on
+# `rejected`: set True whenever the upstream answers 401 (token missing on
 # the server side, expired, or wrong), cleared on the next 2xx and whenever a
 # new token is pasted/cleared. Lets the UI distinguish "server rejected this
 # token" from a locally-valid-looking JWT — the local `exp` decode can't.
@@ -207,7 +207,7 @@ def token_status() -> dict:
         "age_seconds": (time.time() - set_at) if set_at else None,
         "exp": exp,
         "expired": expired,
-        # True when the upstream last answered 401/403 — catches a token the
+        # True when the upstream last answered 401 — catches a token the
         # server rejects even though its local `exp` still looks valid.
         "rejected": bool(_state.get("rejected")),
     }
@@ -217,7 +217,7 @@ def verify_token() -> None:
     """Probe the API with the current token via a cheap authenticated GET.
 
     Returns None on success; raises BeehusAuthError if the token is missing or
-    rejected (401/403), or BeehusAPIError on any other upstream failure. Used by
+    rejected (401), or BeehusAPIError on any other upstream failure. Used by
     the token-save route to validate a pasted token immediately instead of
     letting later page reads fail silently."""
     request("GET", "/beehus/partners/companies")
@@ -239,7 +239,7 @@ def _headers(*, json_body: bool = True) -> dict:
 def request(method: str, path: str, *, json=None, params=None, timeout: int | None = None):
     """Send a request to the Beehus API and return the parsed JSON body.
 
-    Raises BeehusAuthError on 401/403, BeehusAPIError on any other non-2xx.
+    Raises BeehusAuthError on 401, BeehusAPIError on any other non-2xx.
     """
     url = f"{BASE_URL}{path}"
     # Retry on 429 (rate limit) with backoff — the bulk warm of the navPackages
@@ -276,7 +276,10 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
             continue
         break
 
-    if r.status_code in (401, 403):
+    # [2026-09-25, TRV-01] Só 401 é token rejeitado. Medido contra a API: token com
+    # assinatura inválida, ausente ou lixo -> 401. 403 é falta de PERMISSÃO — tratá-lo
+    # como token vencido abriria o pop-up "cole um token novo" à toa.
+    if r.status_code == 401:
         _state["rejected"] = True  # atomic dict set under the GIL
         raise BeehusAuthError(
             f"Token rejected ({r.status_code}). Re-paste today's token on /beehus.",
@@ -328,7 +331,10 @@ def request_multipart(method: str, path: str, *, files, data=None,
         _record_timing(method, path, params, r.status_code,
                        (time.monotonic() - _t0) * 1000.0)
 
-    if r.status_code in (401, 403):
+    # [2026-09-25, TRV-01] Só 401 é token rejeitado. Medido contra a API: token com
+    # assinatura inválida, ausente ou lixo -> 401. 403 é falta de PERMISSÃO — tratá-lo
+    # como token vencido abriria o pop-up "cole um token novo" à toa.
+    if r.status_code == 401:
         _state["rejected"] = True  # atomic dict set under the GIL
         raise BeehusAuthError(
             f"Token rejected ({r.status_code}). Re-paste today's token on /beehus.",

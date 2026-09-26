@@ -62,6 +62,11 @@ app.register_blueprint(carteira_bp)
 app.register_blueprint(repetir_posicoes_bp)
 app.register_blueprint(precificacao_bp)
 
+# [2026-09-25, TRV-01] Toda resposta /api/* avisa (cabeçalho X-Beehus-Token) quando o token Beehus
+# está vencido/ausente — o front (beehus_token_guard.js) abre o pop-up de colar token na hora.
+import token_expirado  # noqa: E402
+token_expirado.instalar(app)
+
 
 @app.route("/")
 def index():

@@ -2632,10 +2632,7 @@ try {
         companyId: data.companyId, positionDate: data.date, groupingIds: [groupingId],
       });
       if (r.status === 401) {
-        alert(
-          "Token Beehus não está carregado ou foi rejeitado.\n" +
-          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
-        );
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         btn.disabled = false;
         btn.innerHTML = orig;
         return;
@@ -3671,10 +3668,7 @@ try {
           });
       const data = r.body || {};
       if (r.status === 401) {
-        alert(
-          "Token Beehus não está carregado ou foi rejeitado.\n" +
-          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
-        );
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         return;
       }
       if (!r.ok) {
@@ -5039,7 +5033,7 @@ try {
       const r = await api("POST", "/api/controlpanel/create-securities",
         { companyId: _currentCompanyId || "", items });
       if (r.status === 401) {
-        alert("Token Beehus não está carregado ou foi rejeitado.\nClique no badge \"Token\" no topo desta página e cole o token do dia.");
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         return;
       }
       if (!r.ok) {
@@ -6355,10 +6349,7 @@ try {
       const r = await api("POST", "/api/controlpanel/process-all-wallets", { date: _gridDate });
       const data = r.body || {};
       if (r.status === 401) {
-        alert(
-          "Token Beehus não está carregado ou foi rejeitado.\n" +
-          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
-        );
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         return;
       }
       if (!r.ok) {
@@ -6587,6 +6578,17 @@ try {
       this.refresh();
     },
   };
+  // [2026-09-25, TRV-01] Página aberta FORA do shell (janela de cima): o beehus_token_guard.js
+  // abre ESTE modal quando uma resposta vem com X-Beehus-Token: expired. Dentro do shell, quem
+  // abre é o modal do shell. Campo sempre vazio; fechar liga a espera de 20 s (anti-loop).
+  if (window.top === window && window.BeehusTokenGuard && document.getElementById('token-modal')) {
+    const _fecharTokenOriginal = Token.close.bind(Token);
+    Token.close = function () { _fecharTokenOriginal(); BeehusTokenGuard.marcarFechado(); };
+    BeehusTokenGuard.registrarModal({
+      abrir: () => { const campo = document.getElementById('token-input'); if (campo) campo.value = ''; Token.open(); },
+      estaAberto: () => document.getElementById('token-modal').classList.contains('show'),
+    });
+  }
 
   // ESC closes the new beehus modals before falling through to the Painel
   // de Controle modal stack — listener is a separate one (capture phase) so it runs

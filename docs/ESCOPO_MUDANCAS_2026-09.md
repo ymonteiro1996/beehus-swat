@@ -53,7 +53,7 @@ A ordem prioriza o que pode gerar **dado errado no Beehus**. Depois vêm o token
 | 1 | TRV-02 | todos | Modal fecha ao arrastar a seleção de texto (transação, token e outros) | P | — | feito no swat (Playwright no servidor real isolado: shell, Funções, Painel, Correções e Conciliação mov., com e sem a guarda; D12 aplicado). Obs.: `beehus_console.html` já tinha guarda local p/ `.modal-overlay` — mantida |
 | 1 | CC-04 | ControleCargas | Instituição "XP" aparece como "P" na matriz | P | — | pendente |
 | 1 | SWAT-04 | swat | Groupings não aparecem | P–M | reprodução do usuário | feito — D7 respondido (Painel normal → Publicação, Eté): diagnóstico = todos já publicados na data (comportamento correto). Melhoria: rotas da Publicação não escondem mais falha da API como lista vazia (selo "falha ao consultar"). Hipóteses A e C não se aplicaram |
-| 2 | TRV-01 | todos | Token expirado abre o pop-up de colar token na hora | M | PREP | pendente |
+| 2 | TRV-01 | todos | Token expirado abre o pop-up de colar token na hora | M | PREP | feito no swat (branch `onda-2/escopo-2026-09`; 13 checks Playwright: iframe, iframe aninhado, página fora do shell, 401 local, 20 s, token inválido/válido, 70 s parado; 4 alerts de 401 removidos) |
 | 2 | TRV-03 | swat, conciliacao | Campo token começa vazio | P | TRV-02 | pendente |
 | 3 | SWAT-07 | swat | Lote do Identificar Transações: 500 → 250 | P | — | pendente |
 | 3 | SWAT-08 | swat | Faixa de datas vem preenchida (D-7 a D-1) nos 5 executores | P | — | pendente |

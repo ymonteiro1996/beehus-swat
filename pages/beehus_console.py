@@ -111,6 +111,8 @@ def _api_error_response(e: BeehusAPIError):
         "error": str(e),
         "upstream_status": e.status,
         "upstream_body": e.body,
+        # [TRV-01] código estável p/ o front reconhecer token vencido sem depender do texto.
+        **({"error_code": "BEEHUS_TOKEN_EXPIRED"} if isinstance(e, BeehusAuthError) else {}),
     }), status
 
 
@@ -184,7 +186,7 @@ def token_set():
         verify_token()
     except BeehusAuthError as e:
         return jsonify({
-            "error": "Token rejeitado pela API (401/403). Verifique se copiou o token de hoje por completo.",
+            "error": "Token rejeitado pela API (401). Verifique se copiou o token de hoje por completo.",
             "upstream_status": e.status,
         }), 401
     except BeehusAPIError as e:
@@ -207,7 +209,7 @@ def _companies_empty_reason():
 
     Sonda `list_companies()` direto (sem cache) — só no caminho vazio, então não
     pesa no fluxo normal — para distinguir token ausente/expirado
-    (`BeehusAuthError`, levantado tanto sem token quanto em 401/403) de falha de
+    (`BeehusAuthError`, levantado tanto sem token quanto em 401) de falha de
     rede (`BeehusAPIError`) ou de uma resposta legitimamente vazia."""
     from beehus_api import list_companies
     try:

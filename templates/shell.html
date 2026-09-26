@@ -8,6 +8,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- TRV-02: o shell é outro documento (as páginas rodam em iframe) — carrega a guarda também. -->
   <script src="/static/js/utils/guarda_arrasto.js"></script>
+  <!-- TRV-01: resposta /api/* com X-Beehus-Token: expired abre o pop-up de colar token na hora. -->
+  <script src="/static/js/utils/beehus_token_guard.js"></script>
 
   <style>
     .nav-link[data-active="true"] { background: rgba(255,255,255,0.1); color: white; font-weight: 500; }
@@ -413,8 +415,13 @@
     }
 
     const Token = {
-      open() {
+      /* [2026-09-25, TRV-01] `motivo === 'expirado'` = aberto pelo beehus_token_guard.js porque
+         uma resposta veio com X-Beehus-Token: expired. O campo abre SEMPRE vazio. */
+      open(motivo) {
         const m = document.getElementById('token-modal');
+        const input = document.getElementById('token-input');
+        if (input) input.value = '';
+        this._motivo = motivo || null;
         m.classList.remove('hidden');
         m.classList.add('flex');
         this.refresh();
@@ -422,8 +429,15 @@
       },
       close() {
         const m = document.getElementById('token-modal');
+        const input = document.getElementById('token-input');
+        if (input) input.value = '';
         m.classList.add('hidden');
         m.classList.remove('flex');
+        this._motivo = null;
+        if (window.BeehusTokenGuard) BeehusTokenGuard.marcarFechado();
+      },
+      estaAberto() {
+        return !document.getElementById('token-modal').classList.contains('hidden');
       },
       async refresh() {
         let s = {};
@@ -436,7 +450,9 @@
         const mins     = Math.floor((s.age_seconds || 0) / 60);
         _renderTokenBadge(loaded, mins, rejected);
         const status = document.getElementById('token-status');
-        if (status) {
+        if (status && this._motivo === 'expirado') {
+          status.textContent = 'Seu token expirou, cole um novo.';
+        } else if (status) {
           status.textContent = rejected
             ? 'Token inválido — a API rejeitou (401). Cole o token de hoje novamente.'
             : loaded
@@ -466,6 +482,8 @@
         input.value = '';
         await this.refresh();
         this.close();
+        // [TRV-01/D11] avisa a tela e os iframes; a ação que falhou NÃO é repetida sozinha.
+        if (window.BeehusTokenGuard) BeehusTokenGuard.notificarTokenSalvo();
       },
       async clear() {
         try { await fetch('/api/beehus/token', {method: 'DELETE'}); } catch (e) {}
@@ -528,6 +546,12 @@
       },
       refreshReference() { this._post({scope: 'reference'}, 'Dados de referência atualizados.'); },
     };
+
+    // [TRV-01] O guard (beehus_token_guard.js) abre ESTE modal quando qualquer tela — o shell ou
+    // a página no iframe — recebe uma resposta com X-Beehus-Token: expired.
+    if (window.BeehusTokenGuard) {
+      BeehusTokenGuard.registrarModal({abrir: () => Token.open('expirado'), estaAberto: () => Token.estaAberto()});
+    }
 
     // Fecha os modais no Escape.
     document.addEventListener('keydown', e => {
