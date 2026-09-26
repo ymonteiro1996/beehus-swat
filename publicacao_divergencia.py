@@ -13,11 +13,13 @@ agrupamento, não o da pior carteira. O servidor não checava nada.
 
 Agora a checagem é do SERVIDOR (`nav_publish` em pages/beehus_console.py), dia
 a dia e carteira a carteira, usando os resultados NAV daquela data:
-  • pior |Δ| entre o próprio agrupamento e as carteiras dele;
-  • bloqueia se esse pior |Δ| for >= limite (mesma régua do seletor, que só
-    deixa passar |Δ| < limite; |Δ| exatamente 0 sempre passa, e é só isso que
-    o limite 0 publica) ou se alguém não tiver Δ calculado (decisão do
-    usuário: "sem Δ calculado não publica").
+  • [pedido do usuário, 25/09: "dois campos, um de limite por carteira e
+    outro de limite por agrupamento", ambos 0,02% por padrão] o |Δ| do próprio
+    agrupamento é comparado com o LIMITE DO AGRUPAMENTO e o de cada carteira
+    dele com o LIMITE DA CARTEIRA;
+  • bloqueia se qualquer um não passar (régua `passa_no_limite`: |Δ| < limite
+    ou |Δ| exatamente 0 — é só isso que o limite 0 publica) ou se alguém não
+    tiver Δ calculado (decisão do usuário: "sem Δ calculado não publica").
 
 Carteiras de um agrupamento numa data = união de
   (a) as que o /results lista sob aquele groupingId, e
@@ -40,8 +42,13 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "data", "publicacao_config.json")
-# Mesmo padrão do campo "Limite |Δ| (%)" da tela (pbd-threshold, value="0.02").
+# Mesmo padrão dos campos "Limite |Δ| agrupamento/carteira (%)" da tela (0.02).
 _LIMITE_PADRAO_PCT = 0.02
+
+ENTIDADE_AGRUPAMENTO = "agrupamento"
+ENTIDADE_CARTEIRA = "carteira"
+_CHAVE_CONFIG = {ENTIDADE_AGRUPAMENTO: "limitePadraoDeltaAgrupamentoPct",
+                 ENTIDADE_CARTEIRA: "limitePadraoDeltaCarteiraPct"}
 
 MOTIVO_ACIMA_LIMITE = "acima_limite"
 MOTIVO_SEM_DELTA = "sem_delta"
@@ -49,14 +56,17 @@ MOTIVO_SEM_DELTA = "sem_delta"
 
 # ── Limite ────────────────────────────────────────────────────────────────────
 
-def carregar_limite_padrao_decimal():
+def carregar_limite_padrao_decimal(entidade):
     """Contexto:
-    Limite |Δ| usado quando a requisição de publicação não traz `maxDeltaAbs`
-    (ex.: o atalho "Publicar" do drill-down do Painel). Retorna decimal
-    (0,02% -> 0.0002).
+    Limite |Δ| padrão de um tipo de entidade ("agrupamento" ou "carteira"),
+    usado quando a requisição de publicação não traz o limite daquele tipo (ex.:
+    o atalho "Publicar" do drill-down do Painel). Retorna decimal (0,02% ->
+    0.0002).
 
     Pseudocódigo:
-      1. Lê `limitePadraoDeltaPct` (em %) de data/publicacao_config.json.
+      1. Lê de data/publicacao_config.json a chave do tipo
+         (`limitePadraoDeltaAgrupamentoPct` / `limitePadraoDeltaCarteiraPct`,
+         em %); na falta dela, a antiga `limitePadraoDeltaPct`.
       2. Arquivo ausente, ilegível ou valor negativo -> usa 0,02% (0 vale:
          só publica divergência zero).
       3. Converte % em decimal e retorna.
@@ -64,7 +74,9 @@ def carregar_limite_padrao_decimal():
     percentual = _LIMITE_PADRAO_PCT
     try:
         with open(_CONFIG_FILE, encoding="utf-8") as arquivo:
-            percentual = float(json.load(arquivo).get("limitePadraoDeltaPct", _LIMITE_PADRAO_PCT))
+            config = json.load(arquivo)
+        percentual = float(config.get(_CHAVE_CONFIG[entidade],
+                                      config.get("limitePadraoDeltaPct", _LIMITE_PADRAO_PCT)))
     except (OSError, ValueError, TypeError, AttributeError):
         percentual = _LIMITE_PADRAO_PCT
     if math.isnan(percentual) or math.isinf(percentual) or percentual < 0:
@@ -74,7 +86,8 @@ def carregar_limite_padrao_decimal():
 
 def interpretar_limite(valor):
     """Contexto:
-    Valida o `maxDeltaAbs` (decimal) que a tela manda no POST de publicação.
+    Valida um limite |Δ| (decimal) que a tela manda no POST de publicação
+    (`maxDeltaAbsAgrupamento` / `maxDeltaAbsCarteira`).
     Retorna float >= 0, ou None se o valor for inválido.
 
     Pseudocódigo:
@@ -209,15 +222,20 @@ def pior_divergencia_do_agrupamento(grouping_id, resultados_indexados, indice_ag
     """Contexto:
     Resume a divergência de um agrupamento numa data olhando o próprio
     agrupamento e cada carteira dele. Usado pela trava do servidor e pelo
-    seletor da tela. Retorna {deltaAbs, returnNavPerShare, returnContribution,
-    walletId, carteira, semDelta, semDeltaWalletId, semDeltaCarteira}.
+    seletor da tela. Retorna {deltaAgrupamento, deltaPiorCarteira,
+    piorCarteiraWalletId, piorCarteira, deltaAbs, returnNavPerShare,
+    returnContribution, walletId, carteira, semDelta, semDeltaWalletId,
+    semDeltaCarteira}.
 
     Pseudocódigo:
       1. Lista as entidades: o agrupamento + as carteiras dele na data.
       2. Para cada uma, calcula o |Δ| pela linha do /results (ausente = None).
-      3. deltaAbs = maior |Δ| numérico (e de quem ele é: walletId None = o
-         próprio agrupamento).
-      4. semDelta = alguma entidade sem Δ; guarda a primeira delas.
+      3. deltaAgrupamento = |Δ| do próprio agrupamento; deltaPiorCarteira =
+         maior |Δ| entre as carteiras (e de quem é) — cada um comparado com o
+         seu limite pela trava.
+      4. deltaAbs = o maior dos dois (e de quem é: walletId None = o próprio
+         agrupamento), para exibição.
+      5. semDelta = alguma entidade sem Δ; guarda a primeira delas.
     """
     nomes_carteiras = nomes_carteiras or {}
     linha_agrupamento = resultados_indexados["agrupamentos"].get(grouping_id)
@@ -226,7 +244,9 @@ def pior_divergencia_do_agrupamento(grouping_id, resultados_indexados, indice_ag
                                               indice_agrupamentos, data):
         entidades.append((wallet_id, resultados_indexados["carteiras"].get(wallet_id)))
 
-    resumo = {"deltaAbs": None, "returnNavPerShare": None, "returnContribution": None,
+    resumo = {"deltaAgrupamento": delta_abs(linha_agrupamento), "deltaPiorCarteira": None,
+              "piorCarteiraWalletId": None, "piorCarteira": None,
+              "deltaAbs": None, "returnNavPerShare": None, "returnContribution": None,
               "walletId": None, "carteira": None, "semDelta": False,
               "semDeltaWalletId": None, "semDeltaCarteira": None}
     for wallet_id, linha in entidades:
@@ -236,6 +256,9 @@ def pior_divergencia_do_agrupamento(grouping_id, resultados_indexados, indice_ag
             if not resumo["semDelta"]:
                 resumo.update(semDelta=True, semDeltaWalletId=wallet_id, semDeltaCarteira=nome)
             continue
+        if wallet_id is not None and (resumo["deltaPiorCarteira"] is None
+                                      or delta > resumo["deltaPiorCarteira"]):
+            resumo.update(deltaPiorCarteira=delta, piorCarteiraWalletId=wallet_id, piorCarteira=nome)
         if resumo["deltaAbs"] is None or delta > resumo["deltaAbs"]:
             resumo.update(deltaAbs=delta, walletId=wallet_id, carteira=nome,
                           returnNavPerShare=linha.get("returnNavPerShare"),
@@ -260,40 +283,65 @@ def _nome_da_carteira(wallet_id, linha, nomes_carteiras):
 
 # ── Trava ─────────────────────────────────────────────────────────────────────
 
-def avaliar_publicacao(grouping_ids, resultados, indice_agrupamentos, data, limite,
-                       nomes_carteiras=None):
+def avaliar_publicacao(grouping_ids, resultados, indice_agrupamentos, data,
+                       limite_agrupamento, limite_carteira, nomes_carteiras=None):
     """Contexto:
     Decide, para UMA data, quais agrupamentos podem ser publicados. Chamado por
     `nav_publish` antes de mandar qualquer coisa ao Beehus. Retorna
     (liberados: [gid], bloqueados: [{groupingId, nome, walletId, carteira,
-    delta, motivo}]).
+    delta, limite, entidade, motivo}]).
 
     Pseudocódigo:
       1. Indexa os resultados NAV da data.
-      2. Para cada agrupamento pedido, calcula a pior divergência.
+      2. Para cada agrupamento pedido, resume a divergência (agrupamento e
+         pior carteira).
       3. Alguém sem Δ -> bloqueia com motivo "sem_delta".
-      4. Pior |Δ| não passa em `passa_no_limite` (>= limite e ≠ 0) ->
-         bloqueia com motivo "acima_limite".
-      5. Senão, libera.
+      4. |Δ| do agrupamento não passa no LIMITE DO AGRUPAMENTO -> bloqueia
+         ("acima_limite", entidade "agrupamento").
+      5. |Δ| da pior carteira não passa no LIMITE DA CARTEIRA -> bloqueia
+         ("acima_limite", entidade "carteira", com a carteira).
+      6. Senão, libera. (Agrupamento sem nenhuma carteira na data só passa
+         pelo limite do agrupamento.)
     """
     resultados_indexados = indexar_resultados(resultados)
     liberados, bloqueados = [], []
     for grouping_id in grouping_ids:
         resumo = pior_divergencia_do_agrupamento(grouping_id, resultados_indexados,
                                                  indice_agrupamentos, data, nomes_carteiras)
-        nome = _nome_do_agrupamento(grouping_id, resultados_indexados, indice_agrupamentos)
-        if resumo["semDelta"]:
-            bloqueados.append({"groupingId": grouping_id, "nome": nome,
-                               "walletId": resumo["semDeltaWalletId"],
-                               "carteira": resumo["semDeltaCarteira"],
-                               "delta": None, "motivo": MOTIVO_SEM_DELTA})
-        elif not passa_no_limite(resumo["deltaAbs"], limite):
-            bloqueados.append({"groupingId": grouping_id, "nome": nome,
-                               "walletId": resumo["walletId"], "carteira": resumo["carteira"],
-                               "delta": resumo["deltaAbs"], "motivo": MOTIVO_ACIMA_LIMITE})
+        bloqueio = _motivo_de_bloqueio(resumo, limite_agrupamento, limite_carteira)
+        if bloqueio:
+            nome = _nome_do_agrupamento(grouping_id, resultados_indexados, indice_agrupamentos)
+            bloqueados.append({"groupingId": grouping_id, "nome": nome, **bloqueio})
         else:
             liberados.append(grouping_id)
     return liberados, bloqueados
+
+
+def _motivo_de_bloqueio(resumo, limite_agrupamento, limite_carteira):
+    """Contexto:
+    Aplica os dois limites ao resumo de UM agrupamento. Usado por
+    `avaliar_publicacao`. Retorna None (passa) ou {walletId, carteira, delta,
+    limite, entidade, motivo}.
+
+    Pseudocódigo:
+      1. Sem Δ em alguém -> "sem_delta" (entidade = agrupamento ou carteira).
+      2. |Δ| do agrupamento não passa no limite do agrupamento -> bloqueia.
+      3. |Δ| da pior carteira não passa no limite da carteira -> bloqueia.
+      4. Senão -> None.
+    """
+    if resumo["semDelta"]:
+        entidade = ENTIDADE_AGRUPAMENTO if resumo["semDeltaWalletId"] is None else ENTIDADE_CARTEIRA
+        return {"walletId": resumo["semDeltaWalletId"], "carteira": resumo["semDeltaCarteira"],
+                "delta": None, "limite": None, "entidade": entidade, "motivo": MOTIVO_SEM_DELTA}
+    if not passa_no_limite(resumo["deltaAgrupamento"], limite_agrupamento):
+        return {"walletId": None, "carteira": None, "delta": resumo["deltaAgrupamento"],
+                "limite": limite_agrupamento, "entidade": ENTIDADE_AGRUPAMENTO,
+                "motivo": MOTIVO_ACIMA_LIMITE}
+    if resumo["deltaPiorCarteira"] is not None and not passa_no_limite(resumo["deltaPiorCarteira"], limite_carteira):
+        return {"walletId": resumo["piorCarteiraWalletId"], "carteira": resumo["piorCarteira"],
+                "delta": resumo["deltaPiorCarteira"], "limite": limite_carteira,
+                "entidade": ENTIDADE_CARTEIRA, "motivo": MOTIVO_ACIMA_LIMITE}
+    return None
 
 
 def _nome_do_agrupamento(grouping_id, resultados_indexados, indice_agrupamentos):

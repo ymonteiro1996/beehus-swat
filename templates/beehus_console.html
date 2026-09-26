@@ -1114,19 +1114,31 @@
             útil, só serão publicados os agrupamentos que estiverem elegíveis
             (não publicados) E na seleção. Lista "Selecionadas" vazia =
             publica TODOS os agrupamentos elegíveis em cada dia. A coluna
-            |Δ| é o pior entre o agrupamento e as carteiras dele <strong>na data
-            inicial</strong>; os demais dias da faixa são checados pelo servidor
-            na hora de publicar. "sem Δ" = bloqueado em qualquer limite.
+            |Δ| mostra <strong>A</strong> = |Δ| do agrupamento e <strong>C</strong> =
+            |Δ| da pior carteira dele, <strong>na data inicial</strong> — cada um
+            comparado com o seu limite; os demais dias da faixa são checados pelo
+            servidor na hora de publicar. "sem Δ" = bloqueado em qualquer limite.
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <label id="pbd-threshold-wrap" class="text-[11px] text-gray-600 flex items-center gap-1">
-            Limite |Δ| (%)
-            <input id="pbd-threshold" type="number" step="0.01" min="0" value="0.02"
-                   class="input ml-1" style="width: 5.5rem"
-                   title="|returnNavPerShare − returnContribution| em pontos percentuais. 'Disponíveis' mostra apenas agrupamentos com |Δ| < este limite, e o servidor bloqueia na publicação, dia a dia, quem estiver ≥ limite. 0 mostra todos no seletor, mas não publica: a publicação exige limite > 0."
-                   onchange="PublishDates.onThresholdChange()" />
-          </label>
+          <!-- [2026-09-25, pedido do usuário] dois limites: um para o |Δ| do próprio
+               agrupamento e outro para o de cada carteira dele (padrão 0,02% nos dois). -->
+          <span id="pbd-threshold-wrap" class="text-[11px] text-gray-600 flex items-center gap-2">
+            <label class="flex items-center gap-1">
+              Limite |Δ| agrupamento (%)
+              <input id="pbd-threshold" type="number" step="0.01" min="0" value="0.02"
+                     class="input ml-1" style="width: 5.5rem"
+                     title="|returnNavPerShare − returnContribution| do PRÓPRIO agrupamento, em pontos percentuais. Passa se |Δ| < limite ou |Δ| = 0 (limite 0 = só divergência zero). O servidor checa em cada dia da faixa."
+                     onchange="PublishDates.onThresholdChange()" />
+            </label>
+            <label class="flex items-center gap-1">
+              Limite |Δ| carteira (%)
+              <input id="pbd-threshold-carteira" type="number" step="0.01" min="0" value="0.02"
+                     class="input ml-1" style="width: 5.5rem"
+                     title="|returnNavPerShare − returnContribution| de CADA carteira do agrupamento, em pontos percentuais. Uma carteira acima do limite (ou sem Δ) bloqueia o agrupamento inteiro. O servidor checa em cada dia da faixa."
+                     onchange="PublishDates.onThresholdChange()" />
+            </label>
+          </span>
           <label id="pbd-prev-day-wrap" class="text-[11px] text-gray-600 flex items-center gap-1 cursor-pointer select-none"
                  title="Filtra 'Disponíveis' mostrando apenas agrupamentos que estavam publicados no dia útil anterior à data inicial">
             <input id="pbd-prev-day-filter" type="checkbox"
@@ -7763,7 +7775,7 @@ function makeDatesPipeline(cfg) {
          2. Monta um <details> fechado com uma linha por agrupamento: nome,
             carteira responsável e o motivo (|Δ| vs limite, ou "sem Δ").
          3. Anexa à linha do dia, ocupando a largura toda da grade. */
-    _setDayBlocked(day, blocked, limite) {
+    _setDayBlocked(day, blocked) {
       const li = document.querySelector(`#${id('days')} li[data-day="${day}"]`);
       if (!li || !blocked || !blocked.length) return;
       const pct = (v) => (v === null || v === undefined || !isFinite(v)) ? '—'
@@ -7772,7 +7784,7 @@ function makeDatesPipeline(cfg) {
         const quem = b.carteira ? `carteira ${_escDP(b.carteira)}` : 'o próprio agrupamento';
         const motivo = (b.motivo === 'sem_delta')
           ? `sem Δ calculado (${quem})`
-          : `|Δ| ${pct(b.delta)} ≥ limite ${pct(limite)} (${quem})`;
+          : `|Δ| ${pct(b.delta)} ≥ limite ${b.entidade === 'carteira' ? 'da carteira' : 'do agrupamento'} ${pct(b.limite)} (${quem})`;
         return `<li><strong>${_escDP(b.nome || b.groupingId)}</strong> — ${motivo}</li>`;
       }).join('');
       const box = document.createElement('details');
@@ -7901,7 +7913,7 @@ function makeDatesPipeline(cfg) {
           ? `${day} · ${nPub} ${verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '') + ` (${ms}ms)`
           : `${day} concluído (${ms}ms)`;
         this._setDayStep(day, (nPub === 0 && blocked.length) ? 'skipped' : 'done', detail);
-        this._setDayBlocked(day, blocked, r.body && r.body.maxDeltaAbs);
+        this._setDayBlocked(day, blocked);
         this._setDayElapsed(day, performance.now() - dayT0);
         totalBlocked += blocked.length;
         totalRun++;
@@ -8595,13 +8607,14 @@ const PublishDates = makeDatesPipeline({
   // desligava o filtro e deixava publicar sem trava nenhuma.
   validateRun() {
     if (PublishDates._action === 'unpublish') return null;
-    return (PublishDates._thresholdDecimal() !== null) ? null
-      : 'Informe um "Limite |Δ| (%)" válido (0 ou maior; 0 = só divergência zero). ' +
-        'A publicação sempre passa pela trava de divergência do servidor (dia a dia, carteira a carteira).';
+    return PublishDates._limites().valido ? null
+      : 'Informe os dois limites (|Δ| agrupamento e |Δ| carteira) com valor válido: 0 ou maior ' +
+        '(0 = só divergência zero). A publicação sempre passa pela trava do servidor (dia a dia, carteira a carteira).';
   },
   extraPayload() {
     if (PublishDates._action === 'unpublish') return null;
-    return {maxDeltaAbs: PublishDates._thresholdDecimal()};
+    const lim = PublishDates._limites();
+    return {maxDeltaAbsAgrupamento: lim.agrupamento, maxDeltaAbsCarteira: lim.carteira};
   },
 });
 
@@ -8660,17 +8673,18 @@ const PublishDates = makeDatesPipeline({
           'usa a data inicial como referência — em modo faixa, só serão ' +
           'publicados os agrupamentos elegíveis em cada dia E na seleção (lista ' +
           'vazia = todos os elegíveis). <strong>Trava de divergência:</strong> ' +
-          'em CADA dia o servidor bloqueia o agrupamento cujo pior |Δ| (ele ou ' +
-          'qualquer carteira dele) seja ≥ o limite, ou que tenha carteira sem Δ ' +
-          'calculado — os bloqueados aparecem na linha do dia.',
+          'em CADA dia o servidor bloqueia o agrupamento cujo |Δ| passe do limite ' +
+          'do agrupamento, que tenha alguma carteira acima do limite da carteira, ' +
+          'ou alguém sem Δ calculado — os bloqueados aparecem na linha do dia.',
         pickerHint:
           'Lista carregada para a <strong>data inicial</strong>. Em cada dia ' +
           'útil, só serão publicados os agrupamentos que estiverem elegíveis ' +
           '(não publicados) E na seleção. Lista "Selecionadas" vazia = ' +
           'publica TODOS os agrupamentos elegíveis em cada dia. A coluna ' +
-          '|Δ| é o pior entre o agrupamento e as carteiras dele <strong>na data ' +
-          'inicial</strong>; os demais dias da faixa são checados pelo servidor ' +
-          'na hora de publicar. "sem Δ" = bloqueado em qualquer limite.',
+          '|Δ| mostra <strong>A</strong> = |Δ| do agrupamento e <strong>C</strong> = ' +
+          '|Δ| da pior carteira dele, <strong>na data inicial</strong> — cada um ' +
+          'comparado com o seu limite; os demais dias da faixa são checados pelo ' +
+          'servidor na hora de publicar. "sem Δ" = bloqueado em qualquer limite.',
         emptyBadge:    'nenhum agrupamento não publicado',
         emptyBadgeTitle:
           'Não há agrupamentos com navPackage não-publicado nesta data — ' +
@@ -8826,6 +8840,7 @@ const PublishDates = makeDatesPipeline({
       // is silently rejected and console-warns). pt-BR users still see the comma
       // because the browser formats `type="number"` per its locale on render.
       const t = $$('threshold');     if (t) t.value = '0.02';
+      const tc = $$('threshold-carteira'); if (tc) tc.value = '0.02';
       const xs = $$('pkr-excel-status'); if (xs) xs.textContent = '';
       this._prevDayFilter = false;
       this._prevDayIds    = new Set();
@@ -8864,13 +8879,30 @@ const PublishDates = makeDatesPipeline({
     // Limite do campo "Limite |Δ| (%)" em DECIMAL (0,02% -> 0.0002), ou null
     // quando vazio/negativo/inválido. [SWAT-05] 0 é um limite de verdade (só
     // |Δ| zero passa), não mais "sem filtro". Despublicar não tem trava: null.
-    _thresholdDecimal() {
+    _thresholdDecimal(campo = 'threshold') {
       if (this._action === 'unpublish') return null;
-      const raw = (($$('threshold')?.value) ?? '').toString().replace(',', '.').trim();
+      const raw = (($$(campo)?.value) ?? '').toString().replace(',', '.').trim();
       if (!raw) return null;
       const pct = Number(raw);
       if (!isFinite(pct) || pct < 0) return null;
       return pct / 100;
+    },
+
+    // Os dois limites da trava (decimal): agrupamento (campo pbd-threshold) e
+    // carteira (pbd-threshold-carteira). `valido` = os dois preenchidos e >= 0.
+    _limites() {
+      const agrupamento = this._thresholdDecimal('threshold');
+      const carteira    = this._thresholdDecimal('threshold-carteira');
+      return {agrupamento, carteira, valido: agrupamento !== null && carteira !== null};
+    },
+
+    // Um agrupamento passa nos dois limites? (espelha publicacao_divergencia no
+    // servidor: |Δ| do agrupamento vs limite do agrupamento; pior carteira vs
+    // limite da carteira — agrupamento sem carteira na data só usa o 1º).
+    _passaNosLimites(d, lim) {
+      return this._passaNoLimite(d.deltaAgrupamento, lim.agrupamento)
+          && (d.deltaPiorCarteira === null || d.deltaPiorCarteira === undefined
+              || this._passaNoLimite(d.deltaPiorCarteira, lim.carteira));
     },
 
     // Régua única (espelha publicacao_divergencia.passa_no_limite do servidor):
@@ -8891,10 +8923,12 @@ const PublishDates = makeDatesPipeline({
          1. Indexa os |Δ| carregados (pior carteira, data inicial) por grouping.
          2. semDelta = sem linha, |Δ| nulo ou alguma entidade sem Δ (o servidor
             bloqueia sempre, com qualquer limite).
-         3. passa = não é semDelta e (|Δ| < limite ou |Δ| == 0; campo inválido = sem régua).
+         3. passa = não é semDelta e passa nos DOIS limites (agrupamento e pior
+            carteira; |Δ| < limite ou == 0). Campo inválido = sem régua (o
+            Executar não roda assim).
          4. Despublicar não tem trava nem |Δ| carregado: tudo passa. */
     _regraTrava() {
-      const threshold  = this._thresholdDecimal();
+      const threshold  = this._limites();
       const deltaByGid = new Map();
       for (const d of this._groupingDeltas) deltaByGid.set(d.groupingId, d);
       const linha = (g) => deltaByGid.get(g.id) || null;
@@ -8905,7 +8939,7 @@ const PublishDates = makeDatesPipeline({
         const d = linha(g);
         return !d || d.semDelta || d.deltaAbs === null || d.deltaAbs === undefined;
       };
-      const passa = (g) => !semDelta(g) && this._passaNoLimite(linha(g).deltaAbs, threshold);
+      const passa = (g) => !semDelta(g) && (!threshold.valido || this._passaNosLimites(linha(g), threshold));
       return {threshold, linha, semDelta, passa};
     },
 
@@ -9025,8 +9059,13 @@ const PublishDates = makeDatesPipeline({
       const rowHTML = (g, hlSet, bloqueado = false) => {
         const d    = regra.linha(g);
         const dval = d ? d.deltaAbs : null;
+        // [2 limites] "A x% · C y%" = |Δ| do agrupamento e da pior carteira.
         const tag  = bloqueado ? 'sem Δ'
-          : (dval === null || dval === undefined) ? '—' : this._fmtPct(dval);
+          : (dval === null || dval === undefined) ? '—'
+          : (d.deltaAgrupamento !== undefined)
+            ? `A ${this._fmtPct(d.deltaAgrupamento)}` +
+              (d.deltaPiorCarteira !== null && d.deltaPiorCarteira !== undefined ? ` · C ${this._fmtPct(d.deltaPiorCarteira)}` : '')
+            : this._fmtPct(dval);
         const quem = d && d.worstWallet ? ` · pior: ${d.worstWallet}` : '';
         if (bloqueado) {
           const alvo = d && d.semDeltaWallet ? ` (carteira ${d.semDeltaWallet})` : '';
@@ -9070,12 +9109,12 @@ const PublishDates = makeDatesPipeline({
 
       const filterBadge = $$('pkr-filter-summary');
       if (filterBadge) {
-        if (threshold !== null && this._availableGroupings.length > 0) {
+        if (threshold.valido && this._availableGroupings.length > 0) {
           const safe = this._availableGroupings.filter(passes).length;
-          const limitPct = (threshold * 100).toLocaleString('pt-BR', {
+          const pctLim = (v) => (v * 100).toLocaleString('pt-BR', {
             minimumFractionDigits: 2, maximumFractionDigits: 4,
           });
-          filterBadge.textContent = `${safe}/${this._availableGroupings.length} < ${limitPct}%`;
+          filterBadge.textContent = `${safe}/${this._availableGroupings.length} · A < ${pctLim(threshold.agrupamento)}% · C < ${pctLim(threshold.carteira)}%`;
           filterBadge.classList.remove('hidden');
         } else {
           filterBadge.classList.add('hidden');
@@ -9305,6 +9344,9 @@ const PublishDates = makeDatesPipeline({
           if (!matrix[gid]) matrix[gid] = { name: item.groupingName || gid, byDate: {} };
           matrix[gid].byDate[d] = {
             deltaAbs:  item.deltaAbs,
+            deltaAgrupamento:  item.deltaAgrupamento,
+            deltaPiorCarteira: item.deltaPiorCarteira,
+            semDelta:  !!item.semDelta,
             published: !!item.published,
           };
         }
@@ -9356,7 +9398,7 @@ const PublishDates = makeDatesPipeline({
       // Skip if still loading
       if (loading && !loading.classList.contains('hidden')) return;
 
-      const threshold = this._thresholdDecimal();
+      const threshold = this._limites();   // [2 limites] mesma régua do seletor/servidor
       const filter    = this._matrixFilter;
       const sortCol   = this._matrixSortCol;
       const sortDir   = this._matrixSortDir;
@@ -9387,8 +9429,8 @@ const PublishDates = makeDatesPipeline({
         if (!cell) return 5;
         const { deltaAbs, published } = cell;
         const hasData = deltaAbs !== null && deltaAbs !== undefined && isFinite(deltaAbs);
-        const passaLim = threshold !== null && hasData && this._passaNoLimite(deltaAbs, threshold);   // [SWAT-05] mesma régua do servidor
-        const above = threshold !== null && hasData && !passaLim;
+        const passaLim = threshold.valido && hasData && !cell.semDelta && this._passaNosLimites(cell, threshold);   // [SWAT-05] mesma régua do servidor
+        const above = threshold.valido && hasData && !passaLim;
         const below = passaLim;
         if (below &&  published) return 0;
         if (below && !published) return 1;
@@ -9464,8 +9506,8 @@ const PublishDates = makeDatesPipeline({
             if (cell) {
               const { deltaAbs, published } = cell;
               const hasData = deltaAbs !== null && deltaAbs !== undefined && isFinite(deltaAbs);
-              const passaLim = threshold !== null && hasData && this._passaNoLimite(deltaAbs, threshold);   // [SWAT-05] mesma régua do servidor
-              const above = threshold !== null && hasData && !passaLim;
+              const passaLim = threshold.valido && hasData && !cell.semDelta && this._passaNosLimites(cell, threshold);   // [SWAT-05] mesma régua do servidor
+              const above = threshold.valido && hasData && !passaLim;
               const below = passaLim;
               if      (below &&  published) { bg = 'bg-green-200';  txt = 'text-green-800 font-semibold'; }
               else if (below && !published) { bg = 'bg-purple-100 border-l border-r border-purple-200'; txt = 'text-purple-700'; }

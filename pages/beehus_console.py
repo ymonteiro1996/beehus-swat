@@ -431,7 +431,10 @@ def filter_grouping_return_deltas():
         published    (str, optional — 'true'/'false'/'all', default 'false')
 
     Returns: [{groupingId, groupingName, returnNavPerShare, returnContribution,
-               deltaAbs, worstWalletId, worstWallet, semDelta, semDeltaWallet}]
+               deltaAbs, deltaAgrupamento, deltaPiorCarteira, piorCarteira,
+               worstWalletId, worstWallet, semDelta, semDeltaWallet}]
+             deltaAgrupamento/deltaPiorCarteira = os dois números que a trava compara
+             com o limite do agrupamento e o da carteira (pedido de 25/09).
              (+ `published` quando `all`). Sorted by `deltaAbs` desc (None last).
     """
     company_id    = request.args.get("companyId", "")
@@ -469,6 +472,9 @@ def filter_grouping_return_deltas():
             "returnNavPerShare":  pior["returnNavPerShare"],
             "returnContribution": pior["returnContribution"],
             "deltaAbs":           pior["deltaAbs"],
+            "deltaAgrupamento":   pior["deltaAgrupamento"],
+            "deltaPiorCarteira":  pior["deltaPiorCarteira"],
+            "piorCarteira":       pior["piorCarteira"],
             "worstWalletId":      pior["walletId"],
             "worstWallet":        pior["carteira"],
             "semDelta":           pior["semDelta"],
@@ -979,16 +985,20 @@ def nav_publish():
                      these grouping ids. Empty list = the groupings NOT yet
                      published on that date (resolved here — an empty list
                      is never forwarded, since upstream reads it as "all").
-        maxDeltaAbs  (number, optional) — limite |Δ| em DECIMAL
-                     (0.0002 = 0,02%). Ausente -> data/publicacao_config.json.
+        maxDeltaAbsAgrupamento, maxDeltaAbsCarteira (number, optional) —
+                     limites |Δ| em DECIMAL (0.0002 = 0,02%), um para o próprio
+                     agrupamento e outro para cada carteira dele. Ausente ->
+                     o `maxDeltaAbs` antigo, se vier; senão
+                     data/publicacao_config.json (padrão 0,02% nos dois).
 
     [2026-09-25, SWAT-05] Trava de divergência NO SERVIDOR, para esta data:
-    cada agrupamento pedido só é publicado se o pior |returnNavPerShare −
-    returnContribution| entre ele e as carteiras dele for < limite (ou = 0) e ninguém
-    estiver sem Δ (ver publicacao_divergencia.py). Os barrados voltam em
-    `blocked: [{groupingId, nome, walletId, carteira, delta, motivo}]`
-    (motivo "acima_limite" | "sem_delta"); os enviados em `publishedIds`.
-    Não há "forçar" (D6 do escopo de set/2026).
+    cada agrupamento pedido só é publicado se o |returnNavPerShare −
+    returnContribution| do agrupamento passar no limite do agrupamento, o de
+    cada carteira dele passar no limite da carteira (passa = < limite ou = 0),
+    e ninguém estiver sem Δ (ver publicacao_divergencia.py). Os barrados voltam
+    em `blocked: [{groupingId, nome, walletId, carteira, delta, limite,
+    entidade, motivo}]` (motivo "acima_limite" | "sem_delta"); os enviados em
+    `publishedIds`. Não há "forçar" (D6 do escopo de set/2026).
 
     The upstream API expects a PATCH with a JSON body
     (`companyId`, `positionDate`, `groupingIds[]`); this route forwards the
@@ -1007,17 +1017,11 @@ def nav_publish():
         return jsonify({"error": "company is not visible to this user"}), 403
     if not isinstance(grouping_ids, list) or not all(isinstance(g, str) for g in grouping_ids):
         return jsonify({"error": "groupingIds must be a list of strings"}), 400
-    # [2026-09-25, SWAT-05] A trava de |Δ| é do servidor. `maxDeltaAbs` é
-    # decimal (0,02% -> 0.0002); ausente -> limite padrão de
-    # data/publicacao_config.json; presente e inválido/negativo -> 400. 0 vale:
-    # só publica |Δ| exatamente zero (decisão do usuário, 25/09).
-    if data.get("maxDeltaAbs") is None:
-        limite, limite_origem = publicacao_divergencia.carregar_limite_padrao_decimal(), "padrao"
-    else:
-        limite, limite_origem = publicacao_divergencia.interpretar_limite(data.get("maxDeltaAbs")), "requisicao"
-        if limite is None:
-            return jsonify({"error": "maxDeltaAbs deve ser um número >= 0 "
-                                     "(limite |Δ| em decimal, ex.: 0.0002 = 0,02%)"}), 400
+    # [2026-09-25, SWAT-05] A trava de |Δ| é do servidor, com um limite para o
+    # agrupamento e outro para as carteiras (pedido do usuário).
+    limites, erro_limite = _limites_da_requisicao(data)
+    if erro_limite:
+        return erro_limite
 
     # Resultados NAV DESTA data — chamada direta (não o nav_results do
     # catálogo, que engole erro e devolveria {} = tudo "sem Δ"): token vencido
@@ -1034,7 +1038,7 @@ def nav_publish():
     if not grouping_ids:
         grouping_ids = publicacao_divergencia.agrupamentos_nao_publicados(resultados)
         if not grouping_ids:
-            return jsonify(_resumo_publicacao_vazio(limite, limite_origem, [])), 200
+            return jsonify(_resumo_publicacao_vazio(limites, [])), 200
     gindex = get_grouping_index()
     if wallet_scope.ativo():
         # Painéis Template: só agrupamentos do cadastro; e como "todos" vira a
@@ -1049,13 +1053,15 @@ def nav_publish():
             return _scope_empty_error("agrupamento")
 
     liberados, bloqueados = publicacao_divergencia.avaliar_publicacao(
-        grouping_ids, resultados, gindex, position_date, limite, get_wallet_names())
+        grouping_ids, resultados, gindex, position_date,
+        limites["agrupamento"][0], limites["carteira"][0], get_wallet_names())
     if bloqueados:
-        logging.getLogger(__name__).warning("[publicação] %s %s: %d bloqueado(s) pela trava |Δ| (limite %.6f, %s): %s",
-                     company_id, position_date, len(bloqueados), limite, limite_origem,
-                     ", ".join(f"{b['groupingId']}:{b['motivo']}" for b in bloqueados))
+        logging.getLogger(__name__).warning(
+            "[publicação] %s %s: %d bloqueado(s) pela trava |Δ| (agrupamento %.6f, carteira %.6f): %s",
+            company_id, position_date, len(bloqueados), limites["agrupamento"][0], limites["carteira"][0],
+            ", ".join(f"{b['groupingId']}:{b['motivo']}/{b['entidade']}" for b in bloqueados))
     if not liberados:
-        return jsonify(_resumo_publicacao_vazio(limite, limite_origem, bloqueados)), 200
+        return jsonify(_resumo_publicacao_vazio(limites, bloqueados)), 200
 
     summary = _run_publish_in_chunks(
         publish_nav,
@@ -1063,8 +1069,7 @@ def nav_publish():
         position_date=position_date,
         grouping_ids=liberados,
     )
-    summary.update(publishedIds=liberados, blocked=bloqueados,
-                   maxDeltaAbs=limite, maxDeltaAbsOrigem=limite_origem)
+    summary.update(publishedIds=liberados, blocked=bloqueados, **_campos_dos_limites(limites))
     # Mesmo em sucesso parcial, chunks publicados mudaram o estado `published`
     # → invalida o cache (filtros de publicação leem de nav_packages).
     beehus_catalog.invalidate_nav(company_id)
@@ -1076,7 +1081,47 @@ def nav_publish():
     return jsonify(summary), code
 
 
-def _resumo_publicacao_vazio(limite, limite_origem, bloqueados):
+def _limites_da_requisicao(data):
+    """Contexto:
+    Lê os dois limites |Δ| do corpo do POST de publicação (agrupamento e
+    carteira). Usado por `nav_publish`. Retorna ({"agrupamento": (valor,
+    origem), "carteira": (valor, origem)}, None) ou (None, resposta 400).
+
+    Pseudocódigo:
+      1. Para cada tipo, pega `maxDeltaAbsAgrupamento`/`maxDeltaAbsCarteira`;
+         ausente -> o `maxDeltaAbs` antigo (vale para os dois).
+      2. Ainda ausente -> limite padrão do tipo (data/publicacao_config.json).
+      3. Presente e inválido/negativo -> 400. 0 vale: só publica |Δ| zero.
+    """
+    limites = {}
+    for entidade, campo in (("agrupamento", "maxDeltaAbsAgrupamento"), ("carteira", "maxDeltaAbsCarteira")):
+        bruto = data.get(campo, data.get("maxDeltaAbs"))
+        if bruto is None:
+            limites[entidade] = (publicacao_divergencia.carregar_limite_padrao_decimal(entidade), "padrao")
+            continue
+        valor = publicacao_divergencia.interpretar_limite(bruto)
+        if valor is None:
+            return None, (jsonify({"error": f"{campo} deve ser um número >= 0 "
+                                            "(limite |Δ| em decimal, ex.: 0.0002 = 0,02%)"}), 400)
+        limites[entidade] = (valor, "requisicao")
+    return limites, None
+
+
+def _campos_dos_limites(limites):
+    """Contexto:
+    Campos da resposta de `nav_publish` que dizem quais limites foram usados
+    (a tela e o log explicam os bloqueios com eles). Retorna dict.
+
+    Pseudocódigo:
+      1. Valor e origem ("requisicao" | "padrao") de cada limite.
+    """
+    return {"maxDeltaAbsAgrupamento": limites["agrupamento"][0],
+            "maxDeltaAbsCarteira": limites["carteira"][0],
+            "limitesOrigem": {"agrupamento": limites["agrupamento"][1],
+                              "carteira": limites["carteira"][1]}}
+
+
+def _resumo_publicacao_vazio(limites, bloqueados):
     """Contexto:
     Resposta de `nav_publish` quando nada passou pela trava (ou não havia nada
     a publicar). Nenhuma chamada ao Beehus foi feita. Retorna o dict da resposta
@@ -1084,13 +1129,12 @@ def _resumo_publicacao_vazio(limite, limite_origem, bloqueados):
 
     Pseudocódigo:
       1. Monta ok=True com 0 publicados.
-      2. Anexa a lista de bloqueados e o limite usado, para a tela explicar.
+      2. Anexa a lista de bloqueados e os limites usados, para a tela explicar.
     """
     return {
         "ok": True, "totalGroupings": 0, "chunkSize": _PUBLISH_CHUNK_SIZE,
         "chunkCount": 0, "chunksSucceeded": 0, "chunkResults": [],
-        "publishedIds": [], "blocked": bloqueados,
-        "maxDeltaAbs": limite, "maxDeltaAbsOrigem": limite_origem,
+        "publishedIds": [], "blocked": bloqueados, **_campos_dos_limites(limites),
     }
 
 
