@@ -993,21 +993,37 @@ def _run_publish_in_chunks(fn, *, company_id, position_date, grouping_ids):
     }
 
 
-def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote):
+# [2026-09-28, relato do usuário: "lentidão para publicar o dia 17"] Isolar recusados dividindo o lote
+# ao meio custa até ~2 chamadas por agrupamento quando o Beehus recusa MUITOS (ou todos) — e cada
+# falha dele leva 3–6 s. Teto de chamadas que falham por dia: passou dele, a falha é tratada como GERAL
+# (o Beehus está recusando o dia, não 1 ou 2 agrupamentos) e o resto não é tentado.
+_ISOLAMENTO_MAX_FALHAS_POR_DIA = 20   # ~6 falhas isolam 1 agrupamento ruim num lote de 50: cobre 3
+
+
+class _FalhaGeralDePublicacao(Exception):
+    """Contexto: o teto de falhas do isolamento estourou — o Beehus está recusando o dia inteiro.
+    Carrega a última BeehusAPIError."""
+    def __init__(self, erro):
+        super().__init__(str(erro))
+        self.erro = erro
+
+
+def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote, contador):
     """Contexto:
     [2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com
     "PATCH .../publish failed: 500"] Desde o SWAT-05 o swat manda a LISTA EXPLÍCITA dos agrupamentos
     liberados pela trava (antes, com a seleção vazia, mandava [] e o próprio Beehus escolhia). Um
-    agrupamento que o Beehus não consegue publicar derruba o lote inteiro (500) — e com ele os outros
-    49. Aqui o lote que falha é dividido ao meio e tentado de novo, até isolar os recusados; os demais
-    são publicados. Retorna (publicados, recusados) — recusados = [{groupingId, upstream_status,
-    erro}]. BeehusAuthError (token) não é isolável: sobe para quem chamou.
+    agrupamento que o Beehus não consegue publicar derruba o lote inteiro (500). Aqui o lote que falha
+    é dividido ao meio e tentado de novo, até isolar os recusados; os demais são publicados.
+    `contador` = {"falhas": n} do DIA inteiro: passou de _ISOLAMENTO_MAX_FALHAS_POR_DIA -> levanta
+    _FalhaGeralDePublicacao (o Beehus recusa o dia, isolar não adianta). Retorna (publicados,
+    recusados) — recusados = [{groupingId, upstream_status, erro}]. BeehusAuthError sobe direto.
 
     Pseudocódigo:
       1. Tenta publicar o lote inteiro; deu certo -> todos publicados.
       2. Token rejeitado -> relança (nada a isolar).
-      3. Outro erro com 1 agrupamento só -> ele é o recusado.
-      4. Outro erro com mais de 1 -> divide ao meio e repete em cada metade.
+      3. Conta a falha; passou do teto -> falha geral.
+      4. 1 agrupamento só -> ele é o recusado; mais de 1 -> divide ao meio e repete em cada metade.
     """
     try:
         fn(company_id=company_id, position_date=position_date, grouping_ids=lote)
@@ -1015,12 +1031,15 @@ def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote):
     except BeehusAuthError:
         raise
     except BeehusAPIError as e:
+        contador["falhas"] += 1
+        if contador["falhas"] > _ISOLAMENTO_MAX_FALHAS_POR_DIA:
+            raise _FalhaGeralDePublicacao(e)
         if len(lote) == 1:
             return [], [{"groupingId": lote[0], "upstream_status": e.status,
                          "erro": (e.body or str(e) or "")[:300]}]
         meio = len(lote) // 2
-        pub_a, rec_a = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[:meio])
-        pub_b, rec_b = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[meio:])
+        pub_a, rec_a = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[:meio], contador)
+        pub_b, rec_b = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[meio:], contador)
         return pub_a + pub_b, rec_a + rec_b
 
 
@@ -1028,27 +1047,41 @@ def _publicar_isolando_recusas(fn, *, company_id, position_date, grouping_ids):
     """Contexto:
     Publica `grouping_ids` em lotes de `_PUBLISH_CHUNK_SIZE`, isolando os agrupamentos que o Beehus
     recusa (_publicar_lote_isolando_recusas) em vez de parar no 1º lote que falha — usado só pela
-    PUBLICAÇÃO (a despublicação segue em _run_publish_in_chunks). Retorna o resumo do mesmo formato de
-    _run_publish_in_chunks + `publishedIds` (os que o Beehus aceitou) e `recusados`.
+    PUBLICAÇÃO (a despublicação segue em _run_publish_in_chunks). Escreve 1 linha de progresso no log
+    por lote. Retorna o resumo + `publishedIds` (os que o Beehus aceitou), `recusados` e, na falha
+    geral, `naoTentados`/`falhaGeral`.
 
     Pseudocódigo:
-      1. Para cada lote: publica isolando recusas; token rejeitado -> interrompe e devolve até ali.
-      2. ok = nenhum recusado. Resumo com contagens, publicados e recusados.
+      1. Para cada lote: publica isolando recusas e loga o andamento.
+      2. Token rejeitado -> interrompe e devolve até ali (401).
+      3. Teto de falhas estourado -> interrompe: o que sobrou vai para `naoTentados` (falha geral).
+      4. ok = nenhum recusado e nenhuma falha geral.
     """
+    log = logging.getLogger(__name__)
     lotes = [grouping_ids[i:i + _PUBLISH_CHUNK_SIZE] for i in range(0, len(grouping_ids), _PUBLISH_CHUNK_SIZE)]
-    publicados, recusados = [], []
+    publicados, recusados, contador = [], [], {"falhas": 0}
+    base = {"totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE, "chunkCount": len(lotes)}
     for idx, lote in enumerate(lotes):
         try:
-            pub, rec = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote)
+            pub, rec = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote, contador)
         except BeehusAuthError as e:
-            return {"ok": False, "totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE,
-                    "chunkCount": len(lotes), "chunksSucceeded": idx, "failedChunkIndex": idx,
+            return {**base, "ok": False, "chunksSucceeded": idx, "failedChunkIndex": idx,
                     "error": str(e), "upstream_status": e.status, "upstream_body": e.body,
                     "publishedIds": publicados, "recusados": recusados}
+        except _FalhaGeralDePublicacao as falha:
+            ja = set(publicados) | {r["groupingId"] for r in recusados}
+            nao_tentados = [g for g in grouping_ids if g not in ja]
+            log.warning("[publicação] %s %s: FALHA GERAL do Beehus depois de %d chamadas recusadas — %d publicado(s), "
+                        "%d não tentado(s). Última resposta: %s %s", company_id, position_date, contador["falhas"],
+                        len(publicados), len(nao_tentados), falha.erro.status, (falha.erro.body or str(falha.erro))[:300])
+            return {**base, "ok": False, "falhaGeral": True, "chunksSucceeded": idx, "failedChunkIndex": idx,
+                    "error": str(falha.erro), "upstream_status": falha.erro.status, "upstream_body": falha.erro.body,
+                    "publishedIds": publicados, "recusados": recusados, "naoTentados": nao_tentados}
         publicados += pub
         recusados += rec
-    return {"ok": not recusados, "totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE,
-            "chunkCount": len(lotes), "chunksSucceeded": len(lotes),
+        log.warning("[publicação] %s %s: lote %d/%d — %d publicado(s), %d recusado(s) (falhas no dia: %d)",
+                    company_id, position_date, idx + 1, len(lotes), len(pub), len(rec), contador["falhas"])
+    return {**base, "ok": not recusados, "chunksSucceeded": len(lotes),
             "publishedIds": publicados, "recusados": recusados}
 
 
@@ -1162,6 +1195,11 @@ def nav_publish():
     beehus_catalog.invalidate_nav(company_id)
     if summary.get("upstream_status") == 401:
         return jsonify(summary), 401
+    if summary.get("falhaGeral"):
+        corpo = (summary.get("upstream_body") or "")[:200]
+        summary["error"] = (f"o Beehus recusou a publicação deste dia ({len(summary['publishedIds'])} publicado(s) antes; "
+                            f"{len(summary['naoTentados'])} não tentado(s)) — HTTP {summary.get('upstream_status')}: {corpo}")
+        return jsonify(summary), 502
     if summary["publishedIds"] or summary["ok"]:
         return jsonify(summary), 200   # sucesso parcial: a tela lista os recusados na linha do dia
     primeiro = (summary.get("recusados") or [{}])[0]
