@@ -460,6 +460,7 @@ _GOV_COUPON_MAP = {
     "NTN-F": True,    # Tesouro Prefixado com Juros Semestrais — coupon
     "NTN-B": True,    # Tesouro IPCA+ com Juros Semestrais — coupon
     "NTN-B P": False, # Tesouro IPCA+ / NTN-B Principal — no coupon
+    "NTN-C": True,    # Tesouro IGP-M+ com Juros Semestrais — coupon
 }
 
 
@@ -494,14 +495,16 @@ def _extract_gov_bond(uid):
     if re.search(r"\bNTN-?B\s+P(?:RINCIPAL)?\b|\bNTNBP\b", uid, re.IGNORECASE):
         features["bond_type"] = "NTN-B P"
     else:
-        m = re.search(r"\b(LFT|NTN-?B|NTN-?F|LTN|NTNB|NTNF)\b", uid, re.IGNORECASE)
+        m = re.search(r"\b(LFT|NTN-?C|NTN-?B|NTN-?F|LTN|NTNB|NTNF|NTNC)\b", uid, re.IGNORECASE)
         if m:
             btype = m.group(1).upper().replace("-", "")
-            # Normalize: NTNB → NTN-B
+            # Normalize: NTNB → NTN-B, NTNF → NTN-F, NTNC → NTN-C
             if btype == "NTNB":
                 btype = "NTN-B"
             elif btype == "NTNF":
                 btype = "NTN-F"
+            elif btype == "NTNC":
+                btype = "NTN-C"
             features["bond_type"] = btype
 
     # Coupon — derived from bond type
@@ -539,11 +542,13 @@ def _extract_gov_bond(uid):
                 features["maturity_date"] = f"{yr}-{mo:02d}-{day:02d}"
 
     # Indexer
-    m = re.search(r"\b(SELIC|IPCA|IPC-A|PRE)\b", uid, re.IGNORECASE)
+    m = re.search(r"\b(SELIC|IPCA|IPC-?A|IGP-?M|PRE)\b", uid, re.IGNORECASE)
     if m:
         idx = m.group(1).upper()
-        if idx == "IPC-A":
+        if re.match(r"IPC-?A", idx, re.IGNORECASE):
             idx = "IPCA"
+        elif re.match(r"IGP-?M", idx, re.IGNORECASE):
+            idx = "IGPM"
         features["indexer"] = idx
 
     # ISIN (government bonds in the DB always have isIn populated)
@@ -1958,8 +1963,12 @@ def _score_candidate(sec, features, security_type):
             # Soft penalty: unprocessed names an indexer but candidate has none.
             # Mirrors the missing-date penalty — not a hard reject but enough to
             # drop a generic-code-only match (50) below the auto-check threshold.
-            score -= 25
-            matched_on.append(f"indexer~missing({features['indexer']})")
+            # Exception: government bonds don't store the indexer as a catalog
+            # field — it's implicit in the bond type (NTN-B=IPCA, LFT=SELIC…),
+            # so the absence is structural and should not count against the match.
+            if sec.get("securityType") != "brazilianGovernmentBond":
+                score -= 25
+                matched_on.append(f"indexer~missing({features['indexer']})")
 
     # Name token overlap (+15 max) — accent-insensitive
     name_feature = features.get("name") or features.get("issuer") or ""
