@@ -277,22 +277,48 @@ def agrupamentos(company_id=None, data=None, data_final=None):
     """Set de groupingIds permitidos, ou None sem escopo. = agrupamentos
     listados na coluna "Agrupamentos Indexados" do Template para as carteiras
     permitidas (mesma fonte do ControleCargas), só os não-trashed que existem
-    no índice (e da empresa, quando `company_id` é dado)."""
+    no índice (e da empresa, quando `company_id` é dado).
+
+    [2026-09-28, pedido do usuário: "não carregou também, verifique" — Eté
+    Gestão com 0 agrupamentos nos painéis Template] Carteira cujos ids da
+    coluna G não existem MAIS no índice (agrupamentos recriados no Beehus
+    com outro id; na Eté eram 63 de 63) entra com os agrupamentos atuais do
+    índice que a contêm. Carteira com ao menos 1 id válido, ou com a coluna
+    G vazia, segue só o Template.
+
+    Pseudocódigo:
+      1. Para cada carteira permitida, os ids da coluna G válidos (existem,
+         não-trashed, da empresa).
+      2. Nenhum válido, mas a coluna G tinha ids -> agrupamentos do índice
+         (mesmas regras) que listam a carteira em walletIds.
+    """
     wids = carteiras(company_id, data, data_final)
     if wids is None:
         return None
     base = carteiras_do_escopo()
     gindex = get_grouping_index()
     cid = beehus_catalog.id_str(company_id) if company_id else ""
+
+    def valido(gi):
+        if not gi or gi.get("trashed"):
+            return False
+        return not (cid and gi.get("companyId") and gi.get("companyId") != cid)
+
+    por_carteira = None   # walletId -> [groupingId], montado só se precisar
     out = set()
     for wid in wids:
-        for gid in base[wid]["agrupamentos"]:
-            gi = gindex.get(gid)
-            if not gi or gi.get("trashed"):
-                continue
-            if cid and gi.get("companyId") and gi.get("companyId") != cid:
-                continue
-            out.add(gid)
+        do_template = base[wid]["agrupamentos"]
+        validos = [gid for gid in do_template if valido(gindex.get(gid))]
+        if validos or not do_template:
+            out.update(validos)
+            continue
+        if por_carteira is None:
+            por_carteira = {}
+            for gid, gi in gindex.items():
+                if valido(gi):
+                    for w in gi.get("walletIds") or ():
+                        por_carteira.setdefault(str(w), []).append(gid)
+        out.update(por_carteira.get(wid, ()))
     return out
 
 

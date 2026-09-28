@@ -18,6 +18,10 @@ fluxos**, mas com o universo de carteiras recortado ao cadastro
   O recorte vale para tudo (grade, drill-downs e ferramentas).
 - **Agrupamentos**: os listados em "Agrupamentos Indexados" (coluna G) das
   carteiras do escopo, só os não-trashed (mesma fonte do ControleCargas).
+  [28/09/2026] Carteira cujos ids da coluna G não existem mais no Beehus
+  (agrupamento recriado com outro id — caso da Eté Gestão, 63 de 63 ids
+  vencidos) entra com os agrupamentos atuais que a contêm. Com ao menos 1 id
+  válido, ou com a coluna G vazia, vale só o Template.
 - **Somente SLA**: a data do card é a **data de execução**. Cada carteira só
   entra na sua data de SLA = execução − Defasagem (coluna I), em dias úteis
   ANBIMA (`bizdays`, mesmo calendário do ControleCargas). **"M" conta como D-1**
