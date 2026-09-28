@@ -718,6 +718,18 @@ foram alteradas.
 > (empresa, dia), 1 busca por chave mesmo com pedidos simultâneos e no máximo 3 consultas ao mesmo tempo; erro não
 > entra no cache e continua subindo (SWAT-04). `invalidate_nav` (publicar/despublicar/Atualizar) limpa junto. **A
 > trava de publicação (`nav_publish`) continua lendo o /results AO VIVO.**
+>
+> **[2026-09-28, mesmo dia — a causa real do 500 da Blue3] Carteiras compartilhadas entre agrupamentos.** A
+> resposta do Beehus: "As seguintes carteiras estão compartilhadas em agrupamentos que não estão sendo publicados ou
+> despublicados". O Beehus só publica um agrupamento se TODO agrupamento não publicado que compartilha carteira com ele
+> vier na MESMA chamada. Antes do SWAT-05 a lista ia vazia ("todos") e isso nunca aparecia; com a lista explícita em
+> lotes de 50, parceiros caíam em lotes diferentes e todo lote falhava. Agora (`publicacao_divergencia.py`):
+> `reter_por_carteira_compartilhada` tira da publicação quem compartilha carteira com agrupamento não publicado que não
+> vai junto (bloqueado pela trava ou fora da seleção) — aparece entre os bloqueados com motivo `carteira_compartilhada`,
+> a carteira e os parceiros; parceiro já publicado não prende. `lotes_por_carteira_compartilhada` monta os lotes sem
+> separar componentes ligados por carteira (componente maior que 50 vai sozinho), e o isolamento de recusas divide por
+> componente. Teto de 20 falhas por dia ao isolar (falha geral = para e mostra a resposta do Beehus). Limite: parceiros
+> vêm do /results + membros do cadastro ativos na data; agrupamento que não está no /results da data não é considerado.
 
 > **[2026-09-27, achado A6] Tipo `other` não grava mais (Identificar Transações e a cópia da
 > conciliação).** A API recusa `other` ao gravar transação (POST/PATCH). `TIPOS_NAO_GRAVAVEIS` tira o

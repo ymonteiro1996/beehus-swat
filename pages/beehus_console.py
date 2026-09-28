@@ -1008,13 +1008,16 @@ class _FalhaGeralDePublicacao(Exception):
         self.erro = erro
 
 
-def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote, contador):
+def _publicar_lote_isolando_recusas(fn, company_id, position_date, componentes, contador):
     """Contexto:
     [2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com
     "PATCH .../publish failed: 500"] Desde o SWAT-05 o swat manda a LISTA EXPLÍCITA dos agrupamentos
     liberados pela trava (antes, com a seleção vazia, mandava [] e o próprio Beehus escolhia). Um
     agrupamento que o Beehus não consegue publicar derruba o lote inteiro (500). Aqui o lote que falha
     é dividido ao meio e tentado de novo, até isolar os recusados; os demais são publicados.
+    [2026-09-28, mesmo dia] O lote é uma lista de COMPONENTES (agrupamentos ligados por carteira
+    compartilhada — publicacao_divergencia.lotes_por_carteira_compartilhada): a divisão ao meio nunca
+    separa um componente, porque o Beehus recusa parceiro de carteira fora da chamada.
     `contador` = {"falhas": n} do DIA inteiro: passou de _ISOLAMENTO_MAX_FALHAS_POR_DIA -> levanta
     _FalhaGeralDePublicacao (o Beehus recusa o dia, isolar não adianta). Retorna (publicados,
     recusados) — recusados = [{groupingId, upstream_status, erro}]. BeehusAuthError sobe direto.
@@ -1023,8 +1026,10 @@ def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote, contado
       1. Tenta publicar o lote inteiro; deu certo -> todos publicados.
       2. Token rejeitado -> relança (nada a isolar).
       3. Conta a falha; passou do teto -> falha geral.
-      4. 1 agrupamento só -> ele é o recusado; mais de 1 -> divide ao meio e repete em cada metade.
+      4. 1 componente só -> os agrupamentos dele são os recusados; mais de 1 -> divide os componentes
+         ao meio e repete em cada metade.
     """
+    lote = [g for componente in componentes for g in componente]
     try:
         fn(company_id=company_id, position_date=position_date, grouping_ids=lote)
         return list(lote), []
@@ -1034,16 +1039,16 @@ def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote, contado
         contador["falhas"] += 1
         if contador["falhas"] > _ISOLAMENTO_MAX_FALHAS_POR_DIA:
             raise _FalhaGeralDePublicacao(e)
-        if len(lote) == 1:
-            return [], [{"groupingId": lote[0], "upstream_status": e.status,
-                         "erro": (e.body or str(e) or "")[:300]}]
-        meio = len(lote) // 2
-        pub_a, rec_a = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[:meio], contador)
-        pub_b, rec_b = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[meio:], contador)
+        if len(componentes) == 1:
+            return [], [{"groupingId": g, "upstream_status": e.status,
+                         "erro": (e.body or str(e) or "")[:300]} for g in lote]
+        meio = len(componentes) // 2
+        pub_a, rec_a = _publicar_lote_isolando_recusas(fn, company_id, position_date, componentes[:meio], contador)
+        pub_b, rec_b = _publicar_lote_isolando_recusas(fn, company_id, position_date, componentes[meio:], contador)
         return pub_a + pub_b, rec_a + rec_b
 
 
-def _publicar_isolando_recusas(fn, *, company_id, position_date, grouping_ids):
+def _publicar_isolando_recusas(fn, *, company_id, position_date, grouping_ids, lotes=None):
     """Contexto:
     Publica `grouping_ids` em lotes de `_PUBLISH_CHUNK_SIZE`, isolando os agrupamentos que o Beehus
     recusa (_publicar_lote_isolando_recusas) em vez de parar no 1º lote que falha — usado só pela
@@ -1058,7 +1063,11 @@ def _publicar_isolando_recusas(fn, *, company_id, position_date, grouping_ids):
       4. ok = nenhum recusado e nenhuma falha geral.
     """
     log = logging.getLogger(__name__)
-    lotes = [grouping_ids[i:i + _PUBLISH_CHUNK_SIZE] for i in range(0, len(grouping_ids), _PUBLISH_CHUNK_SIZE)]
+    # `lotes` = [lote] com lote = [componente] (lotes_por_carteira_compartilhada); sem ele, 1 agrupamento
+    # por componente em fatias de _PUBLISH_CHUNK_SIZE (comportamento anterior).
+    if lotes is None:
+        lotes = [[[g] for g in grouping_ids[i:i + _PUBLISH_CHUNK_SIZE]]
+                 for i in range(0, len(grouping_ids), _PUBLISH_CHUNK_SIZE)]
     publicados, recusados, contador = [], [], {"falhas": 0}
     base = {"totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE, "chunkCount": len(lotes)}
     for idx, lote in enumerate(lotes):
@@ -1171,6 +1180,16 @@ def nav_publish():
             "[publicação] %s %s: %d bloqueado(s) pela trava |Δ| (agrupamento %.6f, carteira %.6f): %s",
             company_id, position_date, len(bloqueados), limites["agrupamento"][0], limites["carteira"][0],
             ", ".join(f"{b['groupingId']}:{b['motivo']}/{b['entidade']}" for b in bloqueados))
+    # [2026-09-28] O Beehus só publica um agrupamento com TODOS os parceiros de carteira não publicados
+    # na mesma chamada: quem compartilha carteira com um bloqueado (ou fora da seleção) fica retido e
+    # aparece na linha do dia; os lotes nunca separam parceiros (publicacao_divergencia).
+    liberados, retidos = publicacao_divergencia.reter_por_carteira_compartilhada(
+        liberados, resultados, gindex, position_date, get_wallet_names())
+    if retidos:
+        logging.getLogger(__name__).warning(
+            "[publicação] %s %s: %d retido(s) por carteira compartilhada com agrupamento fora da publicação",
+            company_id, position_date, len(retidos))
+    bloqueados = bloqueados + retidos
     if not liberados:
         return jsonify(_resumo_publicacao_vazio(limites, bloqueados)), 200
 
@@ -1181,6 +1200,8 @@ def nav_publish():
         company_id=company_id,
         position_date=position_date,
         grouping_ids=liberados,
+        lotes=publicacao_divergencia.lotes_por_carteira_compartilhada(
+            liberados, resultados, gindex, position_date, _PUBLISH_CHUNK_SIZE),
     )
     for recusado in summary.get("recusados") or []:
         recusado["nome"] = (gindex.get(recusado["groupingId"]) or {}).get("name", "") or recusado["groupingId"]

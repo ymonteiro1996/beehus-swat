@@ -381,3 +381,124 @@ def agrupamentos_nao_publicados(resultados):
         if grouping_id and grouping_id not in ids:
             ids.append(grouping_id)
     return ids
+
+
+
+# ─────────────────────────────────────────────────────────────
+# Carteiras compartilhadas entre agrupamentos
+# ─────────────────────────────────────────────────────────────
+# [2026-09-28, publicação da Blue3 em 17/09, resposta do Beehus: "As seguintes carteiras estão
+# compartilhadas em agrupamentos que não estão sendo publicados ou despublicados: <walletIds>"] O
+# Beehus só publica um agrupamento se TODO agrupamento não publicado que compartilha carteira com ele
+# vier na MESMA chamada. Antes do SWAT-05 a lista ia vazia ("todos") e isso nunca aparecia; com a
+# lista explícita em lotes de 50, agrupamentos parceiros caíam em lotes diferentes e todo lote falhava.
+MOTIVO_CARTEIRA_COMPARTILHADA = "carteira_compartilhada"
+
+
+def _publicado_na_data(grouping_id, resultados_indexados):
+    """Contexto: o agrupamento já está publicado na data (published == True no /results)? Retorna bool."""
+    return (resultados_indexados["agrupamentos"].get(grouping_id) or {}).get("published") is True
+
+
+def mapa_carteira_agrupamentos(grouping_ids, resultados_indexados, indice_agrupamentos, data):
+    """Contexto:
+    Para cada carteira, os agrupamentos (dentre `grouping_ids`) que a contêm na data — carteiras do
+    /results + membras do cadastro ativas na data (carteiras_do_agrupamento). Retorna {walletId: [gid]}.
+
+    Pseudocódigo: 1. Para cada agrupamento, anota o gid sob cada carteira dele.
+    """
+    mapa = {}
+    for grouping_id in grouping_ids:
+        for wallet_id in carteiras_do_agrupamento(grouping_id, resultados_indexados, indice_agrupamentos, data):
+            lista = mapa.setdefault(wallet_id, [])
+            if grouping_id not in lista:
+                lista.append(grouping_id)
+    return mapa
+
+
+def reter_por_carteira_compartilhada(liberados, resultados, indice_agrupamentos, data, nomes_carteiras=None):
+    """Contexto:
+    Tira de `liberados` o agrupamento que compartilha carteira com um agrupamento NÃO publicado na data
+    que não vai nesta publicação (bloqueado pela trava |Δ|, ou fora da seleção) — o Beehus recusaria
+    a chamada inteira. Repete até estabilizar: quem sai pode prender os parceiros dele. Chamado por
+    `nav_publish` depois de avaliar_publicacao. Retorna (liberados_ok, retidos) — retidos no formato
+    dos bloqueados: {groupingId, nome, walletId, carteira, motivo, entidade, parceiros: [{groupingId,
+    nome}]}.
+
+    Pseudocódigo:
+      1. Candidatos a parceiro = agrupamentos do /results não publicados na data + os liberados.
+      2. Mapa carteira -> agrupamentos (mapa_carteira_agrupamentos).
+      3. Enquanto mudar: liberado com carteira que também está num parceiro fora do envio (e não
+         publicado) sai, registrando a carteira e os parceiros.
+    """
+    indexados = indexar_resultados(resultados)
+    nao_publicados = [g for g in indexados["agrupamentos"] if not _publicado_na_data(g, indexados)]
+    candidatos = list(dict.fromkeys(list(liberados) + nao_publicados))
+    mapa = mapa_carteira_agrupamentos(candidatos, indexados, indice_agrupamentos, data)
+    enviados = list(liberados)
+    retidos = []
+    mudou = True
+    while mudou:
+        mudou = False
+        conjunto = set(enviados)
+        for grouping_id in list(enviados):
+            for wallet_id in carteiras_do_agrupamento(grouping_id, indexados, indice_agrupamentos, data):
+                fora = [p for p in mapa.get(wallet_id, [])
+                        if p != grouping_id and p not in conjunto and not _publicado_na_data(p, indexados)]
+                if not fora:
+                    continue
+                enviados.remove(grouping_id)
+                conjunto.discard(grouping_id)
+                retidos.append({
+                    "groupingId": grouping_id,
+                    "nome": _nome_do_agrupamento(grouping_id, indexados, indice_agrupamentos),
+                    "walletId": wallet_id,
+                    "carteira": _nome_da_carteira(wallet_id, indexados["carteiras"].get(wallet_id), nomes_carteiras),
+                    "motivo": MOTIVO_CARTEIRA_COMPARTILHADA, "entidade": ENTIDADE_CARTEIRA,
+                    "delta": None, "limite": None,
+                    "parceiros": [{"groupingId": p, "nome": _nome_do_agrupamento(p, indexados, indice_agrupamentos)}
+                                  for p in fora],
+                })
+                mudou = True
+                break
+    return enviados, retidos
+
+
+def lotes_por_carteira_compartilhada(grouping_ids, resultados, indice_agrupamentos, data, tamanho):
+    """Contexto:
+    Monta os lotes de publicação sem separar agrupamentos que compartilham carteira (o Beehus exige os
+    parceiros na mesma chamada). Grupos ligados por carteira (componentes) nunca são partidos; vários
+    componentes pequenos dividem um lote até `tamanho`; componente maior que `tamanho` vai sozinho.
+    Retorna [lote], cada lote = [componente], cada componente = [gid] (a divisão ao meio do isolamento
+    de recusas trabalha por componente).
+
+    Pseudocódigo:
+      1. União por carteira (union-find) entre os `grouping_ids`.
+      2. Componentes na ordem da 1ª aparição.
+      3. Empacota: fecha o lote quando o próximo componente não cabe.
+    """
+    indexados = indexar_resultados(resultados)
+    pai = {g: g for g in grouping_ids}
+
+    def raiz(g):
+        while pai[g] != g:
+            pai[g] = pai[pai[g]]
+            g = pai[g]
+        return g
+
+    for agrupamentos in mapa_carteira_agrupamentos(grouping_ids, indexados, indice_agrupamentos, data).values():
+        for outro in agrupamentos[1:]:
+            pai[raiz(outro)] = raiz(agrupamentos[0])
+    componentes = {}
+    for g in grouping_ids:
+        componentes.setdefault(raiz(g), []).append(g)
+    lotes, atual, tamanho_atual = [], [], 0
+    for componente in componentes.values():
+        if atual and tamanho_atual + len(componente) > tamanho:
+            lotes.append(atual)
+            atual, tamanho_atual = [], 0
+        atual.append(componente)
+        tamanho_atual += len(componente)
+    if atual:
+        lotes.append(atual)
+    return lotes

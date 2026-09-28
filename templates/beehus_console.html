@@ -8175,14 +8175,20 @@ function makeDatesPipeline(cfg) {
         : (v * 100).toLocaleString('pt-BR', {minimumFractionDigits: 4, maximumFractionDigits: 4}) + '%';
       const linhas = blocked.map(b => {
         const quem = b.carteira ? `carteira ${_escDP(b.carteira)}` : 'o próprio agrupamento';
-        const motivo = (b.motivo === 'sem_delta')
+        // [2026-09-28] retido porque a carteira é compartilhada com agrupamento(s) fora desta publicação
+        // (o Beehus exige os parceiros na mesma chamada).
+        const parceiros = (b.parceiros || []).map(x => _escDP(x.nome || x.groupingId)).join(', ');
+        const motivo = (b.motivo === 'carteira_compartilhada')
+          ? `carteira ${_escDP(b.carteira || b.walletId)} também está em ${parceiros || 'outro agrupamento'}, que não vai nesta publicação (bloqueado ou fora da seleção) — o Beehus exige publicar juntos`
+          : (b.motivo === 'sem_delta')
           ? `sem Δ calculado (${quem})`
           : `|Δ| ${pct(b.delta)} ≥ limite ${b.entidade === 'carteira' ? 'da carteira' : 'do agrupamento'} ${pct(b.limite)} (${quem})`;
         return `<li><strong>${_escDP(b.nome || b.groupingId)}</strong> — ${motivo}</li>`;
       }).join('');
       const box = document.createElement('details');
       box.className = 'day-blocked';
-      box.innerHTML = `<summary>ver ${blocked.length} bloqueado(s) pela trava |Δ|</summary><ul>${linhas}</ul>`;
+      const nRetidos = blocked.filter(b => b.motivo === 'carteira_compartilhada').length;
+      box.innerHTML = `<summary>ver ${blocked.length} bloqueado(s) pela trava |Δ|${nRetidos ? ` (${nRetidos} por carteira compartilhada)` : ''}</summary><ul>${linhas}</ul>`;
       li.appendChild(box);
     },
     /* Contexto: lista, na linha do dia, os agrupamentos que o Beehus recusou ao publicar (com a
