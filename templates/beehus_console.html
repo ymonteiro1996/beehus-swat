@@ -119,6 +119,18 @@
   html.dark .day-grid .day-date { color: #d1d5db; }
   .day-grid .step-row  { display: inline-flex; gap: 0.4rem; }
   .day-grid .step-row .step-icon { font-size: 0.75rem; }
+  /* SWAT-01: log de negócio por ferramenta (ActionLog), abaixo do botão Executar. */
+  .action-log { margin-top: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.6875rem; max-height: 220px; overflow-y: auto; }
+  .action-log ul { margin: 0.25rem 0 0; }
+  .action-log li { padding: 0.15rem 0; border-top: 1px dashed #f3f4f6; }
+  .action-log li:first-child { border-top: 0; }
+  .action-log .al-hora { font-family: ui-monospace, Consolas, monospace; color: #6b7280; margin-right: 0.35rem; }
+  .action-log .al-falha { color: #b91c1c; }
+  .action-log-cab { display: flex; justify-content: space-between; color: #6b7280; }
+  .action-log-limpar { color: #2563eb; text-decoration: underline; }
+  html.dark .action-log { border-color: #374151; }
+  html.dark .action-log li { border-color: #374151; }
+  html.dark .action-log .al-falha { color: #fca5a5; }
   /* SWAT-05: bloqueados pela trava |Δ| do servidor, embaixo da linha do dia. */
   .day-grid .day-blocked { grid-column: 1 / -1; color: #991b1b; }
   .day-grid .day-blocked summary { cursor: pointer; }
@@ -3622,6 +3634,10 @@ const IdentifyTxn = {
       this._securityIds.size         ? `${this._securityIds.size} security(ies)`        : null,
     ].filter(Boolean).join(' · ');
     document.getElementById('i-search-summary').textContent = summary;
+    // [SWAT-01] busca também entra no log de negócio.
+    ActionLog.registrar('i', {acao: 'Buscar transações', empresa: companyName, faixa: dateLabel,
+      contagens: `${(this._txns || []).length} transação(ões)` + (this._batch && this._batch.hasMore ? ` de ${this._batch.total}` : ''),
+      status: 'concluído'});
   },
 
   // Toggle the optional groupings + wallets cards together. Most runs leave
@@ -5218,7 +5234,10 @@ const IdentifyTxn = {
       hideBusy();
     }
     if (myGen !== this._opGen) return;   // result is stale — a newer op started
-    if (!r.ok) { alert('Falha na identificação. Veja o Log.'); return; }
+    if (!r.ok) {
+      ActionLog.registrar('i', {acao: 'Identificar', empresa: ActionLog.empresaDe('i-company'), contagens: `${ids.length} selecionada(s)`, status: 'falhou (veja o Log)', ok: false});
+      alert('Falha na identificação. Veja o Log.'); return;
+    }
     const sugs = (r.body && r.body.suggestions) || [];
     let filledType = 0, filledSec = 0;
     for (const s of sugs) {
@@ -5252,6 +5271,8 @@ const IdentifyTxn = {
     }
     // Re-render so the suggestion selects pick up the new values.
     this._render();
+    ActionLog.registrar('i', {acao: 'Identificar', empresa: ActionLog.empresaDe('i-company'),
+      contagens: `${ids.length} selecionada(s), ${filledType} tipo(s) e ${filledSec} security(ies) sugeridos`, status: 'concluído'});
     if (!filledType && !filledSec) {
       alert('Identificação concluída — nenhuma sugestão automática foi gerada (algoritmo ainda em definição). Edite os campos manualmente e clique em Implementar.');
     }
@@ -5548,7 +5569,9 @@ const IdentifyTxn = {
     const mongoTail = mongoStale
       ? ` ⚠ ${mongoStale} sem espelho local — atualize via re-busca após o próximo sync.`
       : '';
-    alert(`Concluído: ${ok} atualizadas, ${fail} falhas.${execMsg}${tail}${mongoTail} Veja o Log para detalhes.`);
+    // [SWAT-01] o resultado vai para o log da tela (antes era um alert).
+    ActionLog.registrar('i', {acao: 'Implementar', empresa: ActionLog.empresaDe('i-company'),
+      contagens: `${ok} atualizada(s), ${fail} falha(s)`, status: `concluído${execMsg}${tail}${mongoTail}`.trim(), ok: !fail});
     // Refresh from Mongo so the just-implemented rows reflect the new DB values
     // (or drop out of "Não identificadas") and any new IRRF `taxes` row shows
     // up; keep the existing classifier output for surviving rows so the operator
@@ -6425,7 +6448,8 @@ const IdentifyTxn = {
       hideBusy();
     }
     Token.refresh();
-    alert(`Concluído: ${ok} editadas, ${fail} falhas. Veja o Log para detalhes.`);
+    ActionLog.registrar('i', {acao: 'Editar transações', empresa: ActionLog.empresaDe('i-company'),
+      contagens: `${ok} editada(s), ${fail} falha(s)`, status: 'concluído', ok: !fail});   // [SWAT-01] era alert
     this._pendingEditPatches = null;
     this._edits = {};
     this._tempEdits = {};
@@ -6463,7 +6487,8 @@ const IdentifyTxn = {
       hideBusy();
     }
     Token.refresh();
-    alert(`Concluído: ${ok} excluídas, ${fail} falhas. Veja o Log para detalhes.`);
+    ActionLog.registrar('i', {acao: 'Excluir transações', empresa: ActionLog.empresaDe('i-company'),
+      contagens: `${ok} excluída(s), ${fail} falha(s)`, status: 'concluído', ok: !fail});   // [SWAT-01] era alert
     const idSet = new Set(ids);
     const deletedCount = this._txns.filter(t => idSet.has(t.id)).length;
     this._txns = this._txns.filter(t => !idSet.has(t.id));
@@ -7848,7 +7873,7 @@ function makeDatesPipeline(cfg) {
       const extraPayload = _resolveCfg('extraPayload', null) || {};
 
       let stoppedAt = null;
-      let totalSkipped = 0, totalRun = 0, totalBlocked = 0;
+      let totalSkipped = 0, totalRun = 0, totalBlocked = 0, totalPublished = 0;
       outer: for (const day of days) {
         const dayT0 = performance.now();
         this._scrollDayIntoView(day);
@@ -7931,6 +7956,7 @@ function makeDatesPipeline(cfg) {
         this._setDayBlocked(day, blocked);
         this._setDayElapsed(day, performance.now() - dayT0);
         totalBlocked += blocked.length;
+        totalPublished += (cfg.kind === 'publish') ? nPub : 0;
         totalRun++;
       }
 
@@ -7944,6 +7970,17 @@ function makeDatesPipeline(cfg) {
       } else {
         status.textContent = `Concluído em ${days.length} dia(s) úteis.`;
       }
+      // [SWAT-01] entrada no log de negócio da ferramenta, com o horário de término.
+      ActionLog.registrar(px, {
+        acao: stepLabel || cfg.kind,
+        empresa: ActionLog.empresaDe(id('company')),
+        faixa: days.length > 1 ? `${days[0]} → ${days[days.length - 1]} (${days.length} dias)` : (days[0] || ''),
+        contagens: [`${totalRun} ok`, totalSkipped ? `${totalSkipped} pulado(s)` : '', stoppedAt ? '1 falha' : '',
+                    cfg.kind === 'publish' ? `${totalPublished} publicado(s)` : '',
+                    totalBlocked ? `${totalBlocked} bloqueado(s)` : ''].filter(Boolean).join(', '),
+        status: stoppedAt ? `interrompido em ${stoppedAt.day}` : 'concluído',
+        ok: !stoppedAt,
+      });
 
       this._running = false;
       $('run-btn').disabled = false;
@@ -9656,6 +9693,124 @@ Token.refresh();
 // this iframe via `contentWindow.IdentifyTxn` to drive the TXN drill-down, so
 // expose it explicitly.
 window.IdentifyTxn = IdentifyTxn;
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-25, SWAT-01, pedido do usuário: "Gerar um Log Temporário na tela do que foi
+   feito, horário que foi finalizado… Limpar tela de datas do Executar e LOG do que foi
+   feito ao selecionar outra Company ou mudar algo"] Log de NEGÓCIO por ferramenta (não é o
+   ApiLog técnico): uma caixa logo abaixo do botão Executar (D5), só em memória, entrada
+   mais recente no topo. Cada entrada: horário de término HH:MM:SS, ação, empresa, faixa,
+   contagens e status. Some ao trocar de empresa (e pela barra de escopo do Painel).
+═════════════════════════════════════════════════════════════════════════════ */
+const ActionLog = {
+  _entradas: {},        // prefixo -> [{hora, acao, empresa, faixa, contagens, status, ok}]
+  MAX_ENTRADAS: 30,
+  // Onde a caixa entra em cada ferramenta (id do elemento-âncora; a caixa vai logo depois
+  // da linha que o contém). Ferramentas da fábrica: o botão Executar (`<px>-run-btn`).
+  _ancora(prefixo) {
+    if (prefixo === 'i') return document.getElementById('i-search-summary');
+    return document.getElementById(`${prefixo}-run-btn`);
+  },
+
+  /* Contexto: acha (ou cria 1x) a caixa do log de uma ferramenta. Retorna o elemento ou null.
+     Pseudocódigo: 1. Já existe -> devolve. 2. Senão cria depois da linha da âncora. */
+  _caixa(prefixo) {
+    let caixa = document.getElementById(`${prefixo}-action-log`);
+    if (caixa) return caixa;
+    const ancora = this._ancora(prefixo);
+    if (!ancora) return null;
+    const linha = ancora.closest('div') || ancora.parentElement;
+    caixa = document.createElement('div');
+    caixa.id = `${prefixo}-action-log`;
+    caixa.className = 'action-log hidden';
+    linha.insertAdjacentElement('afterend', caixa);
+    return caixa;
+  },
+
+  /* Contexto: registra uma entrada no log de uma ferramenta e redesenha. Não retorna nada.
+     Pseudocódigo: 1. Carimba o horário de término. 2. Põe no topo (limite de 30). 3. Desenha. */
+  registrar(prefixo, entrada) {
+    const agora = new Date();
+    const hora = [agora.getHours(), agora.getMinutes(), agora.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
+    const lista = this._entradas[prefixo] || (this._entradas[prefixo] = []);
+    lista.unshift({hora, ...entrada});
+    lista.length = Math.min(lista.length, this.MAX_ENTRADAS);
+    this._desenhar(prefixo);
+  },
+
+  /* Contexto: apaga o log de uma ferramenta (troca de empresa / escopo / botão). Não retorna nada. */
+  limpar(prefixo) {
+    this._entradas[prefixo] = [];
+    this._desenhar(prefixo);
+  },
+
+  /* Contexto: desenha a caixa do log de uma ferramenta. Não retorna nada.
+     Pseudocódigo: 1. Sem entradas -> esconde. 2. Senão lista "hora · ação · empresa · faixa ·
+       contagens · status" e o botão "limpar log". */
+  _desenhar(prefixo) {
+    const caixa = this._caixa(prefixo);
+    if (!caixa) return;
+    const lista = this._entradas[prefixo] || [];
+    caixa.classList.toggle('hidden', lista.length === 0);
+    const e = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    caixa.innerHTML = `<div class="action-log-cab"><span>Log desta sessão (some ao trocar de empresa)</span>
+        <button type="button" class="action-log-limpar" onclick="ActionLog.limpar('${prefixo}')">limpar log</button></div>
+      <ul>${lista.map(x => `<li class="${x.ok === false ? 'al-falha' : ''}"><span class="al-hora">${e(x.hora)}</span>
+        <strong>${e(x.acao)}</strong>${x.empresa ? ` · ${e(x.empresa)}` : ''}${x.faixa ? ` · ${e(x.faixa)}` : ''}${x.contagens ? ` · ${e(x.contagens)}` : ''}
+        ${x.status ? ` — <em>${e(x.status)}</em>` : ''}</li>`).join('')}</ul>`;
+  },
+
+  /* Contexto: nome da empresa escolhida num <select> (texto da opção). Retorna string. */
+  empresaDe(idSelect) {
+    const sel = document.getElementById(idSelect);
+    return (sel && sel.value && sel.selectedOptions[0]) ? sel.selectedOptions[0].textContent.trim() : '';
+  },
+};
+
+/* Contexto: limpeza ao trocar de empresa (SWAT-01/D5) nas ferramentas de datas e no
+   Transações — apaga o log, a lista de dias e o status; as datas voltam ao padrão pelo
+   envelope da FaixaPadrao (SWAT-08). E, nos painéis Template, a barra de escopo do Painel
+   avisa por postMessage: cada ferramenta recarrega a lista de empresas (que respeita o
+   escopo — hipótese A do SWAT-04) e limpa o log. Não retorna nada. */
+(function _instalarLimpezaPorEmpresa() {
+  const ferramentas = [
+    [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
+    [typeof NavWalletsDates   !== 'undefined' ? NavWalletsDates   : null, 'nwd'],
+    [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
+    [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
+    [typeof DeletePos         !== 'undefined' ? DeletePos         : null, 'dp'],
+    [typeof ExplosionProp     !== 'undefined' ? ExplosionProp     : null, 'ep'],
+    [typeof IdentifyTxn       !== 'undefined' ? IdentifyTxn       : null, 'i'],
+  ];
+  const limparTela = (prefixo) => {
+    ActionLog.limpar(prefixo);
+    const dias = document.getElementById(`${prefixo}-days`);
+    if (dias) { dias.innerHTML = ''; dias.classList.add('hidden'); }
+    const status = document.getElementById(`${prefixo}-status`);
+    if (status) status.textContent = '';
+  };
+  for (const [obj, prefixo] of ferramentas) {
+    if (!obj || typeof obj.onCompanyChange !== 'function') continue;
+    const original = obj.onCompanyChange.bind(obj);
+    obj.onCompanyChange = function (...args) {
+      if (!obj._running) limparTela(prefixo);
+      return original(...args);
+    };
+  }
+  window.addEventListener('message', async (ev) => {
+    if (ev.origin !== location.origin || !ev.data || ev.data.type !== 'swat-escopo-empresa') return;
+    for (const [obj, prefixo] of ferramentas) {
+      if (!obj || obj._running) continue;
+      limparTela(prefixo);
+      const sel = document.getElementById(prefixo === 'i' ? 'i-company' : `${prefixo}-company`);
+      if (!sel || !sel.options.length || typeof obj.init !== 'function') continue;
+      const antes = sel.value;
+      try { await obj.init(); } catch (e) { continue; }
+      if (antes && sel.value !== antes && typeof obj.onCompanyChange === 'function') obj.onCompanyChange();
+    }
+  });
+})();
 
 /* ════════════════════════════════════════════════════════════════════════════
    [2026-09-25, SWAT-08, pedido do usuário: "Trazer as datas preenchidas na seleção

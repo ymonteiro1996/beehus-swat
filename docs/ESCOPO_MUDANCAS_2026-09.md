@@ -61,7 +61,7 @@ A ordem prioriza o que pode gerar **dado errado no Beehus**. Depois vêm o token
 | 3 | CONC-03 | conciliacao | Botão de copiar o valor do GAP | P–M | CONC-01 | pendente |
 | 3 | CC-02 | ControleCargas | Renomear a aba atual para "Checklist Manual Cargas" | P | — | pendente |
 | 3 | CC-05 | ControleCargas | Pauta com contorno azul; vermelho se o D-1 não foi processado | P | — | pendente |
-| 4 | SWAT-01 | swat | Log temporário na tela e limpeza ao trocar de Company | M | SWAT-08 | pendente |
+| 4 | SWAT-01 | swat | Log temporário na tela e limpeza ao trocar de Company | M | SWAT-08 | feito (branch `onda-4/escopo-2026-09`; D5 no padrão proposto — a confirmar: log por ferramenta abaixo do Executar, datas voltam a D-7/D-1; barra de escopo também limpa e recarrega empresas; Playwright com API simulada) |
 | 4 | SWAT-06 | swat | Várias empresas ou "Todas" nos 5 executores | M (Transações: G) | SWAT-05, SWAT-01 | pendente |
 | 4 | CC-01 | ControleCargas | Campo "Data D0" que muda todo o D0 da ferramenta | M | — | pendente |
 | 5 | CC-03 | ControleCargas | Novo "Controle de Cargas" (3A leitura · 3B API de jobs · 3C disparo) | G | CC-02, CC-01 | pendente |

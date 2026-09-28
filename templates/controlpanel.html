@@ -1434,6 +1434,13 @@ try {
       const sel = document.getElementById("scope-company");
       if (sel && sel.value !== (companyId || "")) sel.value = companyId || "";
       if (_gridDate) selectDate(_gridDate);
+      // [2026-09-25, SWAT-01/SWAT-04 A] As ferramentas abertas (iframes que continuam vivos)
+      // carregaram a lista de empresas uma vez só: avisa para recarregarem (a lista respeita
+      // o escopo) e limparem log/datas — senão pediam dados da empresa antiga com o escopo novo.
+      try {
+        const frames = (typeof Funcoes !== "undefined" && Funcoes._frames) ? Object.values(Funcoes._frames) : [];
+        frames.forEach(f => { try { f.contentWindow.postMessage({type: "swat-escopo-empresa"}, location.origin); } catch (e) {} });
+      } catch (e) {}
     },
   };
 

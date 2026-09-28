@@ -702,6 +702,17 @@ foram alteradas.
 
 ### Pipelines "por datas" (single-step)
 
+> **[2026-09-25, SWAT-01] Log temporário na tela + limpeza ao trocar de empresa.** `ActionLog` (fim do
+> script do console): uma caixa por ferramenta logo **abaixo do botão Executar** (D5), só em memória,
+> entrada mais recente no topo — horário de término `HH:MM:SS`, ação, empresa, faixa, contagens (ok /
+> pulados / falha / publicados / bloqueados) e status. Grava no fim do `run()` da fábrica (Processar,
+> NAV Wallets, NAV Groupings, Publicação, Excluir Posições, Explosão) e no Transações (busca,
+> Identificar, Implementar, Editar, Excluir — estes três **substituíram o `alert` de "Concluído"**).
+> Trocar de empresa limpa o log, a lista de dias e o status (as datas voltam ao padrão pelo SWAT-08).
+> Nos painéis Template, `ScopeBar.setCompany` avisa os iframes abertos (`postMessage
+> swat-escopo-empresa`): cada ferramenta recarrega a lista de empresas (que respeita o escopo) e limpa
+> o log — é a correção da hipótese A do SWAT-04 (ferramenta presa na empresa antiga).
+>
 > **[2026-09-25, SWAT-08] Faixa padrão D-7 → D-1 (dias úteis ANBIMA).** Ao escolher "Faixa de
 > datas", no Limpar e ao trocar de empresa (se em faixa), Processar, NAV Wallets, NAV Groupings,
 > Publicação e Transações preenchem inicial = hoje − 7 du e final = hoje − 1 du, calculados no
