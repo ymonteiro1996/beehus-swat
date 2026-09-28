@@ -702,6 +702,15 @@ foram alteradas.
 
 ### Pipelines "por datas" (single-step)
 
+> **[2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com "PATCH .../publish
+> failed: 500"] Publicação isola os agrupamentos que o Beehus recusa.** Desde o SWAT-05 o servidor manda a lista
+> explícita dos liberados pela trava (antes, com a seleção vazia, mandava `[]` e o Beehus escolhia). Um agrupamento
+> que o Beehus não consegue publicar derrubava o lote de 50 inteiro e a faixa parava. Agora
+> `_publicar_isolando_recusas` divide o lote que falha ao meio até isolar os recusados, publica os demais e devolve
+> `recusados` (nome, HTTP e a mensagem do Beehus) com 200 — a linha do dia mostra "N recusado(s) pelo Beehus" com a
+> lista aberta e a faixa segue. Tudo recusado = 502 com a mensagem; token rejeitado = 401 sem dividir. O erro do dia
+> passou a mostrar também o corpo da resposta do Beehus. A trava |Δ| não muda: só vão ao Beehus os liberados.
+
 > **[2026-09-27, achado A6] Tipo `other` não grava mais (Identificar Transações e a cópia da
 > conciliação).** A API recusa `other` ao gravar transação (POST/PATCH). `TIPOS_NAO_GRAVAVEIS` tira o
 > tipo da edição (por linha e por valor), do modal de sugestão e do reforço (`_editTypes`,

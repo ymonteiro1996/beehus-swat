@@ -988,6 +988,65 @@ def _run_publish_in_chunks(fn, *, company_id, position_date, grouping_ids):
     }
 
 
+def _publicar_lote_isolando_recusas(fn, company_id, position_date, lote):
+    """Contexto:
+    [2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com
+    "PATCH .../publish failed: 500"] Desde o SWAT-05 o swat manda a LISTA EXPLÍCITA dos agrupamentos
+    liberados pela trava (antes, com a seleção vazia, mandava [] e o próprio Beehus escolhia). Um
+    agrupamento que o Beehus não consegue publicar derruba o lote inteiro (500) — e com ele os outros
+    49. Aqui o lote que falha é dividido ao meio e tentado de novo, até isolar os recusados; os demais
+    são publicados. Retorna (publicados, recusados) — recusados = [{groupingId, upstream_status,
+    erro}]. BeehusAuthError (token) não é isolável: sobe para quem chamou.
+
+    Pseudocódigo:
+      1. Tenta publicar o lote inteiro; deu certo -> todos publicados.
+      2. Token rejeitado -> relança (nada a isolar).
+      3. Outro erro com 1 agrupamento só -> ele é o recusado.
+      4. Outro erro com mais de 1 -> divide ao meio e repete em cada metade.
+    """
+    try:
+        fn(company_id=company_id, position_date=position_date, grouping_ids=lote)
+        return list(lote), []
+    except BeehusAuthError:
+        raise
+    except BeehusAPIError as e:
+        if len(lote) == 1:
+            return [], [{"groupingId": lote[0], "upstream_status": e.status,
+                         "erro": (e.body or str(e) or "")[:300]}]
+        meio = len(lote) // 2
+        pub_a, rec_a = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[:meio])
+        pub_b, rec_b = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote[meio:])
+        return pub_a + pub_b, rec_a + rec_b
+
+
+def _publicar_isolando_recusas(fn, *, company_id, position_date, grouping_ids):
+    """Contexto:
+    Publica `grouping_ids` em lotes de `_PUBLISH_CHUNK_SIZE`, isolando os agrupamentos que o Beehus
+    recusa (_publicar_lote_isolando_recusas) em vez de parar no 1º lote que falha — usado só pela
+    PUBLICAÇÃO (a despublicação segue em _run_publish_in_chunks). Retorna o resumo do mesmo formato de
+    _run_publish_in_chunks + `publishedIds` (os que o Beehus aceitou) e `recusados`.
+
+    Pseudocódigo:
+      1. Para cada lote: publica isolando recusas; token rejeitado -> interrompe e devolve até ali.
+      2. ok = nenhum recusado. Resumo com contagens, publicados e recusados.
+    """
+    lotes = [grouping_ids[i:i + _PUBLISH_CHUNK_SIZE] for i in range(0, len(grouping_ids), _PUBLISH_CHUNK_SIZE)]
+    publicados, recusados = [], []
+    for idx, lote in enumerate(lotes):
+        try:
+            pub, rec = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote)
+        except BeehusAuthError as e:
+            return {"ok": False, "totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE,
+                    "chunkCount": len(lotes), "chunksSucceeded": idx, "failedChunkIndex": idx,
+                    "error": str(e), "upstream_status": e.status, "upstream_body": e.body,
+                    "publishedIds": publicados, "recusados": recusados}
+        publicados += pub
+        recusados += rec
+    return {"ok": not recusados, "totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE,
+            "chunkCount": len(lotes), "chunksSucceeded": len(lotes),
+            "publishedIds": publicados, "recusados": recusados}
+
+
 @bp.route("/api/beehus/nav/publish", methods=["POST"])
 def nav_publish():
     """Publish NAV-contribution results for the listed groupings.
@@ -1077,22 +1136,33 @@ def nav_publish():
     if not liberados:
         return jsonify(_resumo_publicacao_vazio(limites, bloqueados)), 200
 
-    summary = _run_publish_in_chunks(
+    # [2026-09-28] Isola os agrupamentos que o Beehus recusa em vez de parar no 1º lote que falha
+    # (ver _publicar_lote_isolando_recusas). Só vão ao Beehus os `liberados` pela trava |Δ|.
+    summary = _publicar_isolando_recusas(
         publish_nav,
         company_id=company_id,
         position_date=position_date,
         grouping_ids=liberados,
     )
-    summary.update(publishedIds=liberados, blocked=bloqueados, **_campos_dos_limites(limites))
-    # Mesmo em sucesso parcial, chunks publicados mudaram o estado `published`
+    for recusado in summary.get("recusados") or []:
+        recusado["nome"] = (gindex.get(recusado["groupingId"]) or {}).get("name", "") or recusado["groupingId"]
+    if summary.get("recusados"):
+        logging.getLogger(__name__).warning(
+            "[publicação] %s %s: %d recusado(s) pelo Beehus: %s", company_id, position_date,
+            len(summary["recusados"]), "; ".join(f"{r['groupingId']}: {r['upstream_status']} {r['erro'][:120]}"
+                                                for r in summary["recusados"]))
+    summary.update(blocked=bloqueados, **_campos_dos_limites(limites))
+    # Mesmo em sucesso parcial, lotes publicados mudaram o estado `published`
     # → invalida o cache (filtros de publicação leem de nav_packages).
     beehus_catalog.invalidate_nav(company_id)
-    if summary["ok"]:
-        return jsonify(summary), 200
-    # Match the rest of the routes: 401 for auth errors, 502 for upstream
-    # failures. The chunk summary preserves upstream_status/body for the log.
-    code = 401 if summary.get("upstream_status") == 401 else 502
-    return jsonify(summary), code
+    if summary.get("upstream_status") == 401:
+        return jsonify(summary), 401
+    if summary["publishedIds"] or summary["ok"]:
+        return jsonify(summary), 200   # sucesso parcial: a tela lista os recusados na linha do dia
+    primeiro = (summary.get("recusados") or [{}])[0]
+    summary["error"] = f"o Beehus recusou todos os {len(liberados)} agrupamento(s) liberados — ex.: {primeiro.get('erro', '')[:200]}"
+    summary["upstream_status"] = primeiro.get("upstream_status")
+    return jsonify(summary), 502
 
 
 def _limites_da_requisicao(data):

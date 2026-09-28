@@ -8109,17 +8109,23 @@ function makeDatesPipeline(cfg) {
           this._setDayElapsed(chave, performance.now() - dayT0);
           return {tipo: 'skip'};
         }
-        this._setDayStep(chave, 'error', `${rotulo} · falhou (${ms}ms)${r.body && r.body.error ? ': ' + r.body.error : ''}`);
+        // [2026-09-28] mostra também o que o Beehus respondeu (antes só "failed: 500").
+        const corpo = r.body && r.body.upstream_body ? ` — resposta do Beehus: ${String(r.body.upstream_body).slice(0, 200)}` : '';
+        this._setDayStep(chave, 'error', `${rotulo} · falhou (${ms}ms)${r.body && r.body.error ? ': ' + r.body.error : ''}${corpo}`);
         return {tipo: 'erro'};
       }
       // Publicação: o servidor devolve o que publicou e o que a trava de |Δ| barrou.
       const blocked = (r.body && Array.isArray(r.body.blocked)) ? r.body.blocked : [];
+      // [2026-09-28] agrupamentos que o Beehus recusou (isolados pelo servidor; os outros publicaram).
+      const recusados = (r.body && Array.isArray(r.body.recusados)) ? r.body.recusados : [];
       const nPub = (r.body && Array.isArray(r.body.publishedIds)) ? r.body.publishedIds.length : ids.length;
       const detail = (cfg.kind === 'publish')
-        ? `${rotulo} · ${nPub} ${ctx.verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '') + ` (${ms}ms)`
+        ? `${rotulo} · ${nPub} ${ctx.verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '')
+          + (recusados.length ? ` · ${recusados.length} recusado(s) pelo Beehus` : '') + ` (${ms}ms)`
         : `${rotulo} concluído (${ms}ms)`;
-      this._setDayStep(chave, (nPub === 0 && blocked.length) ? 'skipped' : 'done', detail);
+      this._setDayStep(chave, recusados.length ? 'error' : ((nPub === 0 && blocked.length) ? 'skipped' : 'done'), detail);
       this._setDayBlocked(chave, blocked);
+      this._setDayRecusados(chave, recusados);
       this._setDayElapsed(chave, performance.now() - dayT0);
       return {tipo: 'ok', publicados: (cfg.kind === 'publish') ? nPub : 0, bloqueados: blocked.length};
     },
@@ -8177,6 +8183,19 @@ function makeDatesPipeline(cfg) {
       const box = document.createElement('details');
       box.className = 'day-blocked';
       box.innerHTML = `<summary>ver ${blocked.length} bloqueado(s) pela trava |Δ|</summary><ul>${linhas}</ul>`;
+      li.appendChild(box);
+    },
+    /* Contexto: lista, na linha do dia, os agrupamentos que o Beehus recusou ao publicar (com a
+       mensagem dele) [2026-09-28]. Os outros do dia foram publicados. Não retorna nada. */
+    _setDayRecusados(day, recusados) {
+      const li = document.querySelector(`#${id('days')} li[data-day="${day}"]`);
+      if (!li || !recusados || !recusados.length) return;
+      const linhas = recusados.map(x => `<li><strong>${_escDP(x.nome || x.groupingId)}</strong> — `
+        + `HTTP ${_escDP(x.upstream_status == null ? '?' : x.upstream_status)}: ${_escDP(x.erro || '(sem mensagem)')}</li>`).join('');
+      const box = document.createElement('details');
+      box.className = 'day-blocked day-recusados';
+      box.open = true;
+      box.innerHTML = `<summary>ver ${recusados.length} recusado(s) pelo Beehus (os demais foram publicados)</summary><ul>${linhas}</ul>`;
       li.appendChild(box);
     },
     _scrollDayIntoView(day) {
