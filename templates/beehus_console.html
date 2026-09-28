@@ -140,6 +140,14 @@
   .multi-aviso { color: #1d4ed8; font-style: italic; }
   html.dark .multi-aviso { color: #93c5fd; }
   .picker-row-carregando { color: #1d4ed8; font-style: italic; cursor: default; }
+  /* [2026-09-28, pedido do usuário: "permitir busca por nome"] busca em cima de cada lista (BuscaListas). */
+  .lista-busca { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.4rem; border-bottom: 1px solid #f3f4f6; }
+  .lista-busca input { flex: 1; min-width: 0; font-size: 0.72rem; padding: 0.2rem 0.45rem; border: 1px solid #e5e7eb;
+    border-radius: 0.35rem; background: #fff; color: inherit; outline: none; }
+  .lista-busca input:focus { border-color: #93c5fd; box-shadow: 0 0 0 2px #dbeafe; }
+  .lista-busca .lista-busca-info { font-size: 0.65rem; color: #6b7280; white-space: nowrap; }
+  html.dark .lista-busca { border-color: #374151; }
+  html.dark .lista-busca input { background: #111827; border-color: #374151; }
   html.dark .picker-row-carregando { color: #93c5fd; }
   /* SWAT-01: log de negócio por ferramenta (ActionLog), abaixo do botão Executar. */
   .action-log { margin-top: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.6875rem; max-height: 220px; overflow-y: auto; }
@@ -10675,6 +10683,113 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     return retorno;
   };
 })();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-28, pedido do usuário: "tanto na seleção de disponíveis como de selecionadas e selecionados,
+   permitir busca por nome"] Campo "Buscar por nome…" em cima de cada lista de carteiras/agrupamentos
+   (Disponíveis e Selecionadas/Selecionados) de todas as ferramentas — as listas de DATAS ficam de fora.
+   Sem mexer nos desenhos das ferramentas: observa a lista e, a cada redesenho, esconde o que não bate.
+   - <select> (fábrica, add-ons, Transações, Despublicar): a opção que não bate SAI da lista, então "»"
+     (que percorre as opções) adiciona só as encontradas; "Carregando…"/avisos (sem valor) ficam sempre.
+   - Seletor da Publicação (<div> por linha): a linha que não bate fica escondida e "»" / "→" sem destaque
+     adicionam só as encontradas (addPickerAll/addPickerSelected embrulhados).
+   Busca sem acento e sem caixa; várias palavras = todas precisam aparecer. A busca fica ao trocar de
+   empresa (a pessoa limpa no ×). Contagem: "N de M" quando há busca.
+   Pseudocódigo:
+     1. Para cada lista, insere o campo logo abaixo do cabeçalho do painel.
+     2. Redesenho da lista (MutationObserver) -> guarda o conjunto completo e aplica a busca.
+     3. Digitar -> aplica a busca sobre o conjunto completo.
+═════════════════════════════════════════════════════════════════════════════ */
+const BuscaListas = {
+  _normalizar(t) { return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); },
+  _bate(texto, termos) { const n = this._normalizar(texto); return termos.every(t => n.includes(t)); },
+  _termos(input) { return this._normalizar(input.value).split(/\s+/).filter(Boolean); },
+
+  instalar() {
+    document.querySelectorAll('select.wallets-list').forEach(el => {
+      if (/-date-/.test(el.id)) return;
+      this._instalarSelect(el);
+    });
+    document.querySelectorAll('.picker-list').forEach(el => this._instalarPicker(el));
+    this._embrulharPublicacao();
+  },
+
+  _campo(lista) {
+    const painel = lista.closest('.wallets-pane');
+    const cab = painel && painel.querySelector('.wallets-pane-header');
+    if (!cab || painel.querySelector('.lista-busca')) return null;
+    const caixa = document.createElement('div');
+    caixa.className = 'lista-busca';
+    caixa.innerHTML = `<input type="search" placeholder="Buscar por nome…" autocomplete="off" id="${lista.id}-busca">`
+      + `<span class="lista-busca-info"></span>`;
+    cab.insertAdjacentElement('afterend', caixa);
+    return {input: caixa.querySelector('input'), info: caixa.querySelector('.lista-busca-info')};
+  },
+
+  _instalarSelect(lista) {
+    const campo = this._campo(lista);
+    if (!campo) return;
+    let todas = Array.from(lista.options);
+    const obs = new MutationObserver(() => { todas = Array.from(lista.options); aplicar(); });
+    const aplicar = () => {
+      const termos = this._termos(campo.input);
+      obs.disconnect();
+      const reais = todas.filter(o => o.value);
+      const visiveis = termos.length ? todas.filter(o => !o.value || this._bate(o.textContent, termos)) : todas;
+      if (visiveis.length !== lista.options.length || visiveis.some((o, i) => lista.options[i] !== o)) {
+        lista.replaceChildren(...visiveis);
+      }
+      obs.observe(lista, {childList: true});
+      const nVis = visiveis.filter(o => o.value).length;
+      campo.info.textContent = termos.length ? `${nVis} de ${reais.length}` : '';
+    };
+    campo.input.addEventListener('input', aplicar);
+    obs.observe(lista, {childList: true});
+    aplicar();
+  },
+
+  _instalarPicker(lista) {
+    const campo = this._campo(lista);
+    if (!campo) return;
+    lista._buscaTermos = () => this._termos(campo.input);
+    const obs = new MutationObserver(() => aplicar());
+    const aplicar = () => {
+      const termos = this._termos(campo.input);
+      obs.disconnect();
+      let total = 0, vis = 0;
+      lista.querySelectorAll('.picker-row[data-id]').forEach(row => {
+        total++;
+        const ok = !termos.length || this._bate(row.textContent, termos);
+        row.style.display = ok ? '' : 'none';
+        if (ok) vis++;
+      });
+      obs.observe(lista, {childList: true, subtree: true});
+      campo.info.textContent = termos.length ? `${vis} de ${total}` : '';
+    };
+    campo.input.addEventListener('input', aplicar);
+    obs.observe(lista, {childList: true, subtree: true});
+    aplicar();
+  },
+
+  /* Publicação: "»" e "→" sem destaque usam a lista do estado (_availableGroupings) — com busca, só as
+     linhas encontradas. */
+  _embrulharPublicacao() {
+    if (typeof PublishDates === 'undefined' || typeof PublishDates.addPickerAll !== 'function') return;
+    const lista = document.getElementById('pbd-pkr-available');
+    if (!lista || !lista._buscaTermos) return;
+    const comBusca = (fn) => function (...a) {
+      const termos = lista._buscaTermos();
+      if (!termos.length) return fn.apply(this, a);
+      const todos = this._availableGroupings;
+      const nomes = new Map(Array.from(lista.querySelectorAll('.picker-row[data-id]')).map(r => [r.dataset.id, r.textContent]));
+      this._availableGroupings = (todos || []).filter(g => BuscaListas._bate(nomes.has(g.id) ? nomes.get(g.id) : (g.name || ''), termos));
+      try { return fn.apply(this, a); } finally { this._availableGroupings = todos; }
+    };
+    PublishDates.addPickerAll = comBusca(PublishDates.addPickerAll);
+    PublishDates.addPickerSelected = comBusca(PublishDates.addPickerSelected);
+  },
+};
+BuscaListas.instalar();
 
 const _initialView = location.hash.slice(1);
 const _allowed = ['identify', 'delete-prov', 'delete-pos', 'explosion-prop', 'unpublish-nav', 'process-dates', 'nav-wallets-dates', 'nav-groupings-dates', 'publish-dates'];
