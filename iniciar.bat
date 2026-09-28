@@ -1,5 +1,5 @@
 @echo off
-title Beehus - Controle de Cargas
+title beehus-swat
 cd /d "%~dp0"
 
 rem [2026-09-27, achado A4] O "git pull" a cada inicio atualiza quem roda o painel da branch do
