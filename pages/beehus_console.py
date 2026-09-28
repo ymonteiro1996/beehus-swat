@@ -636,6 +636,11 @@ _TXN_PATCHABLE = {
 }
 
 
+# [2026-09-27, achado A6] tipos que existem em transações antigas (a busca/filtro aceita) mas que a
+# API recusa ao gravar. Ver transactions_patch.
+_TIPOS_NAO_GRAVAVEIS_EM_TRANSACAO = {"other"}
+
+
 @bp.route("/api/beehus/transactions/<txn_id>", methods=["PATCH"])
 def transactions_patch(txn_id):
     """Forward a partial PATCH to the upstream Beehus API.
@@ -648,6 +653,12 @@ def transactions_patch(txn_id):
     patch = {k: v for k, v in data.items() if k in _TXN_PATCHABLE}
     if not patch:
         return jsonify({"error": "no patchable fields in body"}), 400
+    # [2026-09-27, achado A6] A API Beehus recusa `other` em beehusTransactionType (POST e PATCH de
+    # transação — 400 "aceita apenas um dos valores da lista", confirmado por sonda sem efeito colateral).
+    # Transações ANTIGAS ainda têm `other` (leitura/filtro seguem aceitando); provisões aceitam.
+    # Sem isto, uma sugestão `other` do classificador virava 400 cru do upstream no Implementar.
+    if patch.get("beehusTransactionType") in _TIPOS_NAO_GRAVAVEIS_EM_TRANSACAO:
+        return jsonify({"error": f"a API Beehus não aceita mais o tipo '{patch['beehusTransactionType']}' em transação — escolha outro tipo"}), 400
 
     try:
         result = update_transaction(txn_id, patch)

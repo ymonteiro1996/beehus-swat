@@ -702,6 +702,14 @@ foram alteradas.
 
 ### Pipelines "por datas" (single-step)
 
+> **[2026-09-27, achado A6] Tipo `other` não grava mais (Identificar Transações e a cópia da
+> conciliação).** A API recusa `other` ao gravar transação (POST/PATCH). `TIPOS_NAO_GRAVAVEIS` tira o
+> tipo da edição (por linha e por valor), do modal de sugestão e do reforço (`_editTypes`,
+> `_opcoesTipoGravavel` — numa transação antiga `other`, o atual aparece desabilitado); o filtro da busca
+> continua com ele. `PATCH /api/beehus/transactions/<id>` recusa `other` com 400 claro antes de chamar a
+> API (uma sugestão `other` do classificador falha com essa mensagem no Implementar). A cópia da tela
+> de conciliação no swat recebeu a mesma regra de `conciliacao` (`_erro_tipo_transacao`).
+
 > **[2026-09-25, SWAT-06] Várias empresas / "Todas".** Em Processar, NAV Wallets, NAV Groupings e
 > Publicação, o link **"várias empresas ▾"** ao lado da empresa abre a lista com **Todas** (= as
 > empresas do `<select>`, que já respeitam o escopo do painel). Com 2+ marcadas: o `run()` vira

@@ -3316,8 +3316,20 @@ const IdentifyTxn = {
     'otherFee', 'performanceFee', 'rebate', 'securityContributionAdjustment',
     'securityTransfer', 'taxes', 'withdrawalDeposit', 'withdrawalDepositAdjustment',
   ],
+  // [2026-09-27, achado A6] A API recusa `other` ao gravar transação (POST/PATCH). Continua na busca
+  // e no filtro (há transações antigas com ele), mas sai de tudo que grava: edição, sugestão, reforço.
+  TIPOS_NAO_GRAVAVEIS: ['other'],
   _editTypes() {
-    return (this._allTypes && this._allTypes.length) ? this._allTypes : this.EDIT_TYPES;
+    const todos = (this._allTypes && this._allTypes.length) ? this._allTypes : this.EDIT_TYPES;
+    return todos.filter(t => !this.TIPOS_NAO_GRAVAVEIS.includes(t));
+  },
+  /* Contexto: <option>s de tipo para um controle que GRAVA, com o valor atual marcado. Quando o atual
+     é um tipo não gravável (transação antiga `other`), ele aparece desabilitado no topo. Retorna HTML.
+     Pseudocódigo: 1. Opção desabilitada do atual não gravável; 2. os tipos graváveis. */
+  _opcoesTipoGravavel(cur) {
+    const atual = (cur && this.TIPOS_NAO_GRAVAVEIS.includes(cur))
+      ? `<option value="${this._escape(cur)}" selected disabled>${this._escape(cur)} (a API não aceita mais)</option>` : '';
+    return atual + this._editTypes().map(t => `<option value="${t}" ${t===cur?'selected':''}>${this._escape(t)}</option>`).join('');
   },
 
   async init() {
@@ -4621,7 +4633,7 @@ const IdentifyTxn = {
     document.getElementById('i-tr-apply-sec').checked  = false;
     // Populate type select with the full known list, defaulting to the first.
     const typeSel = document.getElementById('i-tr-type');
-    typeSel.innerHTML = (this._allTypes || []).map(t =>
+    typeSel.innerHTML = this._editTypes().map(t =>   // [A6] reforço grava regra: sem 'other'
       `<option value="${this._escape(t)}">${this._escape(t)}</option>`
     ).join('');
     document.getElementById('i-tr-sec-search').value = '';
@@ -5298,7 +5310,7 @@ const IdentifyTxn = {
     const confLabel = (sug.confidence != null)
       ? ` · confiança ${(sug.confidence * 100).toFixed(0)}%` : '';
 
-    const btns = (this._allTypes || []).map(t => {
+    const btns = this._editTypes().map(t => {   // [A6] sugestão vai pro Implementar: sem 'other'
       const isPicked = (t === currentType);
       return `
         <button class="btn ${isPicked ? 'btn-success' : 'btn-muted'}"
@@ -6172,7 +6184,7 @@ const IdentifyTxn = {
       return `<input type="text" class="input" id="${idAttr}" data-old="${escAttr(oldValue)}" value="${escAttr(cur)}" />`;
     }
     if (f.kind === 'type') {
-      const opts = this._editTypes().map(t => `<option value="${t}" ${t===cur?'selected':''}>${this._escape(t)}</option>`).join('');
+      const opts = this._opcoesTipoGravavel(cur);   // [A6]
       return `<select class="input" id="${idAttr}" data-old="${escAttr(oldValue)}">
                 <option value="">(manter)</option>${opts}
               </select>`;
@@ -6313,7 +6325,7 @@ const IdentifyTxn = {
       return `<input type="text" class="input" ${css} ${handler} value="${escAttr(cur)}" />`;
     }
     if (f.kind === 'type') {
-      const opts = this._editTypes().map(tp => `<option value="${tp}" ${tp===cur?'selected':''}>${this._escape(tp)}</option>`).join('');
+      const opts = this._opcoesTipoGravavel(cur);   // [A6]
       return `<select class="input" ${css} ${handler}>${opts}</select>`;
     }
     if (f.kind === 'entity') {

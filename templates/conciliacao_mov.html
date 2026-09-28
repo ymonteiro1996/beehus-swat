@@ -2061,8 +2061,12 @@ function _openTxnModal(wid, t) {
   _closeTxnModal();
   const editing = !!t;
   const v = t || {};
-  const opts = _TXN_TYPE_OPTS.slice().sort((a, b) => a.localeCompare(b))
-    .map(o => `<option value="${o}"${(v.type || v.beehusTransactionType) === o ? " selected" : ""}>${o}</option>`).join("");
+  // [2026-09-27, achado A6] a API recusa `other` em transação: sai das opções; numa transação antiga
+  // que já é `other`, o valor atual aparece marcado e desabilitado (é preciso escolher outro).
+  const tipoAtual = v.type || v.beehusTransactionType;
+  const opts = (tipoAtual === "other" ? '<option value="other" selected disabled>other (a API não aceita mais — escolha outro)</option>' : "")
+    + _TXN_TYPE_OPTS.filter(o => o !== "other").sort((a, b) => a.localeCompare(b))
+    .map(o => `<option value="${o}"${tipoAtual === o ? " selected" : ""}>${o}</option>`).join("");
   const fld = (label, inner) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:#374151">${label}${inner}</label>`;
   const inp = (id, val, attrs) => `<input id="${id}" value="${val == null ? "" : esc(String(val))}" ${attrs || ""} style="padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">`;
   const td = (_movResults[wid] || {}).targetDate || _targetDate();

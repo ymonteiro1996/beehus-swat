@@ -3693,6 +3693,26 @@ _TXN_TYPES = {
 }
 
 
+# [2026-09-27, achado A6] A API Beehus recusa `other` em beehusTransactionType (POST e PATCH de
+# transação — 400 "aceita apenas um dos valores da lista", confirmado por sonda sem efeito colateral).
+# Transações ANTIGAS ainda têm `other` (leitura/filtro seguem aceitando); provisões aceitam.
+# Então `_TXN_TYPES` continua valendo para PROVISÃO, e transação barra também estes:
+_TIPOS_NAO_GRAVAVEIS_EM_TRANSACAO = {"other"}
+
+
+def _erro_tipo_transacao(ttype):
+    """Contexto: valida o beehusTransactionType de uma transação a GRAVAR (criar/editar). Retorna a
+    mensagem de erro (str) ou None quando o tipo é aceito.
+
+    Pseudocódigo: 1. Fora do enum -> inválido. 2. No enum mas recusado pela API (other) -> explica.
+    """
+    if ttype not in _TXN_TYPES:
+        return f"beehusTransactionType inválido: {ttype or '(vazio)'}"
+    if ttype in _TIPOS_NAO_GRAVAVEIS_EM_TRANSACAO:
+        return f"a API Beehus não aceita mais o tipo '{ttype}' em transação — escolha outro tipo"
+    return None
+
+
 def _txn_write_guard(data):
     """Guard comum das rotas de CRUD de transação: valida empresa VISÍVEL. Retorna
     `(company_id, None)` ou `(None, resposta_de_erro)`."""
@@ -3716,8 +3736,9 @@ def txn_create():
     if not wallet_id:
         return jsonify({"error": "walletId obrigatório"}), 400
     ttype = str(data.get("beehusTransactionType") or "").strip()
-    if ttype not in _TXN_TYPES:
-        return jsonify({"error": f"beehusTransactionType inválido: {ttype or '(vazio)'}"}), 400
+    erro_tipo = _erro_tipo_transacao(ttype)   # [A6] inclui o 'other' que a API recusa
+    if erro_tipo:
+        return jsonify({"error": erro_tipo}), 400
     op_date = str(data.get("operationDate") or "")[:10]
     liq_date = str(data.get("liquidationDate") or "")[:10] or op_date
     if not op_date:
@@ -3762,8 +3783,10 @@ def txn_update():
     if not isinstance(patch, dict) or not patch:
         return jsonify({"error": "patch vazio"}), 400
     # Se o tipo estiver sendo alterado, validar contra o enum (evita 502 do upstream).
-    if patch.get("beehusTransactionType") and patch["beehusTransactionType"] not in _TXN_TYPES:
-        return jsonify({"error": f"beehusTransactionType inválido: {patch['beehusTransactionType']}"}), 400
+    if patch.get("beehusTransactionType"):
+        erro_tipo = _erro_tipo_transacao(patch["beehusTransactionType"])   # [A6]
+        if erro_tipo:
+            return jsonify({"error": erro_tipo}), 400
     try:
         _api_update_transaction(txn_id, patch)
     except (BeehusAuthError, BeehusAPIError) as e:
