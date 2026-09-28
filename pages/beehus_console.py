@@ -332,13 +332,18 @@ def _resultados_nav_ou_erro(company_id, position_date):
     429, timeout), e a tela mostrava "nenhum agrupamento" — igual a quando já
     está tudo publicado. Retorna (resultados, None) ou (None, resposta_de_erro).
 
+    [2026-09-28] Passa por beehus_catalog.nav_results_leitura (cache curto + no máximo 3 consultas
+    simultâneas): ao abrir, a tela pede o Δ de ~30 dias e estourava o limite de requisições do
+    Beehus (429 -> 502 na lista do dia). Só para as rotas de LEITURA — a trava de publicação
+    (nav_publish) continua lendo o /results ao vivo.
+
     Pseudocódigo:
-      1. Chama get_nav_results direto.
+      1. Busca pelo cache de leitura (que não engole erro).
       2. BeehusAPIError -> (None, 401/502 com a causa).
       3. Resposta que não é dict -> {} (sem dados, não é erro).
     """
     try:
-        resultados = get_nav_results(company_id=company_id, position_date=position_date)
+        resultados = beehus_catalog.nav_results_leitura(company_id, position_date)
     except BeehusAPIError as e:
         return None, _api_error_response(e)
     return (resultados if isinstance(resultados, dict) else {}), None

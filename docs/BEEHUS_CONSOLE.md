@@ -710,6 +710,14 @@ foram alteradas.
 > `recusados` (nome, HTTP e a mensagem do Beehus) com 200 — a linha do dia mostra "N recusado(s) pelo Beehus" com a
 > lista aberta e a faixa segue. Tudo recusado = 502 com a mensagem; token rejeitado = 401 sem dividir. O erro do dia
 > passou a mostrar também o corpo da resposta do Beehus. A trava |Δ| não muda: só vão ao Beehus os liberados.
+>
+> **[2026-09-28, mesmo dia] Leituras da Publicação com cache curto.** Ao abrir, a tela pede o Δ de ~30 dias de
+> uma vez (`grouping-return-deltas`) + a lista do dia (`groupings-by-publish-state`); desde o SWAT-05/SWAT-04 cada uma
+> ia direto ao /results e, com o Painel aberto em outra aba, o Beehus devolvia 429 até esgotar as 5 tentativas (~23 s)
+> — a lista do dia virava "falha ao consultar o Beehus". `beehus_catalog.nav_results_leitura`: cache de 90 s por
+> (empresa, dia), 1 busca por chave mesmo com pedidos simultâneos e no máximo 3 consultas ao mesmo tempo; erro não
+> entra no cache e continua subindo (SWAT-04). `invalidate_nav` (publicar/despublicar/Atualizar) limpa junto. **A
+> trava de publicação (`nav_publish`) continua lendo o /results AO VIVO.**
 
 > **[2026-09-27, achado A6] Tipo `other` não grava mais (Identificar Transações e a cópia da
 > conciliação).** A API recusa `other` ao gravar transação (POST/PATCH). `TIPOS_NAO_GRAVAVEIS` tira o
