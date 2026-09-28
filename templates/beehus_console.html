@@ -3898,7 +3898,10 @@ const IdentifyTxn = {
     const suggested = sug && sug.beehusTransactionType ? sug.beehusTransactionType : '';
     const isReview  = !!(sug && sug.needsReview);
     let display;
-    if (suggested) {
+    if (suggested && this.TIPOS_NAO_GRAVAVEIS.includes(suggested)) {
+      // [2026-09-27] sugestão que a API não aceita: vermelho + aviso (o Implementar deixa a linha de fora).
+      display = `<span class="text-[11px] text-red-700 dark:text-red-300 font-semibold" title="A API Beehus não aceita este tipo — escolha outro em ✎ Editar; o Implementar não grava esta linha">${this._escape(suggested)} ⚠ não gravável</span>`;
+    } else if (suggested) {
       const cls = isReview ? 'text-amber-700 dark:text-amber-300' : '';
       display = `<span class="text-[11px] ${cls}">${this._escape(suggested)}</span>`;
     } else {
@@ -5498,13 +5501,22 @@ const IdentifyTxn = {
   // ingested yet). Reinforcement rules are no longer auto-saved here; the
   // operator opts in explicitly via the "Salvar como reforço" button in the
   // security-edit modal.
+  // [2026-09-27, decisão do usuário sobre o classificador: "a falha clara sem gravar"] Linha cujo tipo
+  // sugerido a API não aceita (TIPOS_NAO_GRAVAVEIS — `other`) fica INTEIRA de fora do Implementar
+  // (nem o security vai, ele foi escolhido para aquele tipo) e entra em `_skippedRows`, que a
+  // confirmação e o log mostram. Antes ela ia e voltava 400 da API linha a linha.
   _computePatches() {
     const ids = new Set(this._selectedIds());
     const out = [];
+    const naoGravaveis = [];
     for (const t of this._txns) {
       if (!ids.has(t.id)) continue;
       const sug = this._suggestions[t.id] || {};
       const newType = sug.beehusTransactionType || '';
+      if (newType && newType !== t.type && this.TIPOS_NAO_GRAVAVEIS.includes(newType)) {
+        naoGravaveis.push({txn: t, tipo: newType});
+        continue;
+      }
       const effectiveType = newType || t.type;
       const cellEnabled = (sug.needsSecurity || this._typesNeedingSecurity.has(effectiveType));
       const newSec = cellEnabled ? (sug.securityId || '') : '';
@@ -5513,8 +5525,24 @@ const IdentifyTxn = {
       if (newSec  && newSec  !== (t.securityId || '')) payload.securityId            = newSec;
       if (Object.keys(payload).length) out.push({id: t.id, txn: t, payload});
     }
-    this._skippedRows = [];
+    this._skippedRows = naoGravaveis;
     return out;
+  },
+
+  /* Contexto: aviso (HTML) das linhas que o Implementar NÃO vai gravar por causa do tipo sugerido
+     (`_skippedRows`, montado por _computePatches). Usado na confirmação. Retorna HTML ('' sem nada).
+     Pseudocódigo: 1. Sem linhas -> ''. 2. Caixa vermelha com a contagem, o motivo e até 10 linhas. */
+  _avisoNaoGravaveisHtml() {
+    const lista = this._skippedRows || [];
+    if (!lista.length) return '';
+    const itens = lista.slice(0, 10).map(x =>
+      `<li>${this._escape(x.txn.liquidationDate || '')} · ${this._escape(x.txn.walletName || '')} · ${this._escape(x.txn.description || '')} — sugerido <code>${this._escape(x.tipo)}</code></li>`).join('');
+    return `<div class="rounded border border-red-300 bg-red-50 text-red-800 px-3 py-2 mb-2 text-[11px]" id="i-aviso-nao-gravaveis">
+      <strong>${lista.length} linha(s) NÃO serão gravadas:</strong> o tipo sugerido não é aceito pela API
+      Beehus (${this.TIPOS_NAO_GRAVAVEIS.map(t => `<code>${t}</code>`).join(', ')}). Escolha outro tipo em
+      <em>✎ Editar</em> na coluna "Tipo sugerido" e implemente de novo.
+      <ul class="list-disc ml-4 mt-1">${itens}</ul>${lista.length > 10 ? `<div>… e mais ${lista.length - 10}.</div>` : ''}
+    </div>`;
   },
 
   // Effective derived value coerced to a number, or null when not applicable /
@@ -5583,7 +5611,10 @@ const IdentifyTxn = {
     const extras = this._buildExecExtras();
     const nExec = extras.execPrices.length, nTax = extras.taxes.length;
     if (!patches.length && !nExec && !nTax) {
-      alert('Nenhuma alteração efetiva nas linhas selecionadas — preencha o tipo/security ou um preço de execução / IRRF antes de implementar.');
+      const nNao = (this._skippedRows || []).length;
+      alert(nNao
+        ? `Nada a gravar: ${nNao} linha(s) têm tipo sugerido que a API Beehus não aceita (${this.TIPOS_NAO_GRAVAVEIS.join(', ')}). Escolha outro tipo em ✎ Editar e implemente de novo.`
+        : 'Nenhuma alteração efetiva nas linhas selecionadas — preencha o tipo/security ou um preço de execução / IRRF antes de implementar.');
       return;
     }
     const securityNameById = new Map(this._securities.map(s => [s.id, s.name]));
@@ -5619,7 +5650,7 @@ const IdentifyTxn = {
         <td>${this._escape(x._sec)}</td>
         <td class="text-right">${fmt(x.balance)}</td>
       </tr>`).join('');
-    document.getElementById('i-apply-confirm-body').innerHTML = `
+    document.getElementById('i-apply-confirm-body').innerHTML = this._avisoNaoGravaveisHtml() + `
       <div class="text-[11px] text-gray-600 mb-2">
         <strong>${patches.length}</strong> de ${ids.length} transações selecionadas
         serão atualizadas. Linhas sem alteração efetiva são ignoradas.
@@ -5656,6 +5687,7 @@ const IdentifyTxn = {
       </div>` : ''}`;
     this._pendingPatches = patches;
     this._pendingExtras = extras;
+    this._pendingNaoGravaveis = (this._skippedRows || []).length;   // vai para o log do Implementar
     document.getElementById('i-apply-confirm-modal').classList.add('show');
   },
 
@@ -5779,8 +5811,11 @@ const IdentifyTxn = {
       ? ` ⚠ ${mongoStale} sem espelho local — atualize via re-busca após o próximo sync.`
       : '';
     // [SWAT-01] o resultado vai para o log da tela (antes era um alert).
+    const nNaoGravadas = this._pendingNaoGravaveis || 0;
+    this._pendingNaoGravaveis = 0;
     ActionLog.registrar('i', {acao: 'Implementar', empresa: this._rotuloEmpresas(),
-      contagens: `${ok} atualizada(s), ${fail} falha(s)`, status: `concluído${execMsg}${tail}${mongoTail}`.trim(), ok: !fail});
+      contagens: `${ok} atualizada(s), ${fail} falha(s)`
+        + (nNaoGravadas ? `, ${nNaoGravadas} não gravada(s) (tipo sugerido não aceito pela API)` : ''), status: `concluído${execMsg}${tail}${mongoTail}`.trim(), ok: !fail});
     // Refresh from Mongo so the just-implemented rows reflect the new DB values
     // (or drop out of "Não identificadas") and any new IRRF `taxes` row shows
     // up; keep the existing classifier output for surviving rows so the operator
