@@ -716,6 +716,15 @@ foram alteradas.
 >   Controle normal o "várias empresas ▾" continua, empresa por empresa. Escolher uma empresa volta ao modo normal.
 > - Corrigido junto: no Processar, várias empresas desativava o cartão inteiro (empresa, modo e datas) porque o
 >   `#pcd-grouping` escondido mora nele — agora a seção do seletor de empresa nunca é desativada inteira.
+> - **[mesmo dia, pedido do usuário: "deveria aparecer as listagens tanto de carteiras como de groupings"]** Com
+>   várias empresas / "★ Todas", Processar, NAV Wallets e NAV Groupings **não desativam mais as listas**: elas juntam
+>   carteiras e agrupamentos de CADA empresa marcada ("Empresa · nome"; 3 empresas por vez, guardadas até sair do
+>   modo várias; "Carregando" enquanto buscam; empresa que falhou aparece no resumo). Nada escolhido = tudo de cada
+>   empresa (como antes). Com itens escolhidos, `_executarUmDia` manda a cada empresa só os dela (`_empresaDoItem`,
+>   que também cobre as carteiras dos agrupamentos) e pula no dia a empresa sem nada escolhido ("nada selecionado
+>   nesta empresa"). Desmarcar uma empresa mantém as escolhas das outras. Busca de 1 empresa que termine já no modo
+>   várias não sobrescreve as listas juntas. **A Publicação continua sem seletor com várias empresas** (os elegíveis
+>   mudam dia a dia) — o seletor diz "todos os agrupamentos de cada empresa".
 
 > **[2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com "PATCH .../publish
 > failed: 500"] Publicação isola os agrupamentos que o Beehus recusa.** Desde o SWAT-05 o servidor manda a lista
@@ -763,8 +772,8 @@ foram alteradas.
 > **dia × empresa**, uma chamada por vez (`_executarUmDia`, o antigo corpo do laço, sem mudar a
 > lógica), uma linha por par (`data-day="dia|empresa"`); uma **falha marca a linha e o laço segue**
 > (com 1 empresa continua parando como antes); **429 espera 2/4/8 s e tenta de novo**
-> (`_apiComEspera`); os seletores de carteira/agrupamento ficam desativados ("todas de cada
-> empresa"); confirmação, status e log dizem "N empresas". Limpar volta para 1 empresa. Publicação
+> (`_apiComEspera`); os seletores de carteira/agrupamento ficavam desativados ("todas de cada
+> empresa") — desde 28/09 mostram as listas de todas as empresas (ver acima), menos na Publicação; confirmação, status e log dizem "N empresas". Limpar volta para 1 empresa. Publicação
 > com várias empresas usa a trava do servidor (SWAT-05) em cada empresa/dia. Transações entrou na
 > segunda etapa (abaixo). Achado no teste: o
 > preenchimento da faixa padrão (SWAT-08) é assíncrono — agora não atropela um campo de data que a

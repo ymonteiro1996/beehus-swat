@@ -10467,38 +10467,110 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
       })
       .filter((el, i, a) => el && a.indexOf(el) === i && !(el.id || '').endsWith('dates-card'));
 
-    /* [2026-09-28, "não há mensagem sobre carregando" / "não carregou também"] Com várias empresas os
-       painéis ficavam vazios com "0" — parecia lista que não carregou. Agora dizem que vale tudo de
-       cada empresa. Embrulha os desenhos da ferramenta: vale também para uma busca que termine depois
-       (ex.: empresa escolhida e logo em seguida "★ Todas"). */
-    const oQueLista = px === 'ngd' ? 'todos os agrupamentos' : 'todas as carteiras';
-    const avisoVarias = () => `★ ${obj._empresasMulti.length} empresas: ${oQueLista} de cada empresa`;
-    const pintarVarias = () => {
-      if (!(obj._empresasMulti && obj._empresasMulti.length > 1)) return;
-      const opcao = (t) => `<option value="" disabled class="multi-aviso">${t}</option>`;
-      const pinta = (id, html, cont) => {
-        const el = document.getElementById(`${px}-${id}`); if (el) el.innerHTML = html;
-        const c = document.getElementById(`${px}-${id}-count`); if (c) c.textContent = cont;
-      };
-      pinta('available', opcao(avisoVarias()), 'todas');
-      pinta('selected', '', '0');
-      if (document.getElementById(`${px}-grp-available`)) {
-        pinta('grp-available', opcao(`★ ${obj._empresasMulti.length} empresas: todos os agrupamentos de cada empresa`), 'todos');
-        pinta('grp-selected', '', '0');
-      }
-      if (document.getElementById(`${px}-pkr-available`)) {
-        pinta('pkr-available', `<div class="picker-row picker-row-carregando">${avisoVarias().replace('todas as carteiras', 'todos os agrupamentos')}</div>`, 'todos');
-      }
-    };
-    for (const nome of ['_renderPanes', '_renderGroupingPanes', '_renderPickerPanes']) {
-      if (typeof obj[nome] !== 'function') continue;
-      const desenhoOriginal = obj[nome].bind(obj);
-      obj[nome] = function (...a) { const r = desenhoOriginal(...a); pintarVarias(); return r; };
-    }
+    /* [2026-09-28, pedido do usuário: "deveria aparecer as listagens tanto de carteiras como de
+       groupings"] Com várias empresas (ou "★ Todas") as listas de carteiras e agrupamentos juntam as
+       de CADA empresa marcada, com o nome da empresa na frente, e dá para escolher nelas. Nada
+       escolhido = tudo de cada empresa (como antes). No Executar, cada empresa recebe só os itens
+       dela (_executarUmDia abaixo). A Publicação (pbd) continua sem seletor com várias empresas: os
+       elegíveis dela mudam dia a dia.
+       Pseudocódigo:
+         1. Busca agrupamentos (e carteiras, fora do NAV Groupings) de cada empresa, 3 por vez;
+            guarda por empresa até sair do modo várias.
+         2. Junta tudo com "Empresa · nome" e o mapa item -> empresa (carteiras dos agrupamentos
+            também), e redesenha.
+         3. Uma busca de 1 empresa que termine depois (empresa escolhida e logo "★ Todas") não
+            sobrescreve as listas juntas (restaurarVarias). */
+    const listasPorEmpresa = px !== 'pbd';
+    const comCarteiras = px !== 'ngd';
+    const nomeEmpresa = (c) => ((opcoes().find(o => o.value === c) || {}).textContent || c).trim();
+    const emVarias = () => obj._empresasMulti && obj._empresasMulti.length > 1;
+    const cacheEmpresa = new Map();   // cid -> {grupos, carteiras, falhou}
+    let geracao = 0, carregandoVarias = false, juntas = null;
+    obj._empresaDoItem = new Map();
+
     const redesenhar = () => {
       if (typeof obj._renderGroupingPanes === 'function') obj._renderGroupingPanes(); else obj._renderPanes();
       if (typeof obj._renderPickerPanes === 'function') obj._renderPickerPanes();
     };
+    const restaurarVarias = () => {
+      if (!listasPorEmpresa || !emVarias()) return;
+      obj._carregandoLista = carregandoVarias;
+      obj._groupings = juntas && !carregandoVarias ? juntas.grupos : [];
+      obj._wallets = juntas && !carregandoVarias ? juntas.carteiras : [];
+      redesenhar();
+    };
+    const buscarEmpresa = async (cid) => {
+      if (cacheEmpresa.has(cid)) return cacheEmpresa.get(cid);
+      const q = `companyId=${encodeURIComponent(cid)}`;
+      const [g, w] = await Promise.all([
+        api('GET', `/api/beehus/filters/groupings?${q}`),
+        comCarteiras ? api('GET', `/api/beehus/filters/wallets?${q}`) : Promise.resolve({ok: true, body: []}),
+      ]);
+      const r = {grupos: g.ok ? (g.body || []) : [], carteiras: w.ok ? (w.body || []) : [], falhou: !g.ok || !w.ok};
+      if (!r.falhou) cacheEmpresa.set(cid, r);
+      return r;
+    };
+    const carregarListasVarias = async () => {
+      const minha = ++geracao;
+      const ids = obj._empresasMulti.slice();
+      carregandoVarias = true;
+      restaurarVarias();
+      const resultados = [];
+      for (let i = 0; i < ids.length; i += 3) {
+        const lote = ids.slice(i, i + 3);
+        resultados.push(...await Promise.all(lote.map(async cid => ({cid, ...(await buscarEmpresa(cid))}))));
+        if (minha !== geracao) return;
+      }
+      const grupos = [], carteiras = [], mapa = new Map();
+      const rotular = (cid, it) => ({...it, name: `${nomeEmpresa(cid)} · ${it.name}`});
+      for (const r of resultados) {
+        r.grupos.forEach(it => {
+          grupos.push(rotular(r.cid, it)); mapa.set(it.id, r.cid);
+          (it.walletIds || []).forEach(wid => { if (!mapa.has(wid)) mapa.set(wid, r.cid); });
+        });
+        r.carteiras.forEach(it => { carteiras.push(rotular(r.cid, it)); mapa.set(it.id, r.cid); });
+      }
+      juntas = {grupos, carteiras};
+      obj._empresaDoItem = mapa;
+      carregandoVarias = false;
+      restaurarVarias();
+      const falhas = resultados.filter(r => r.falhou).map(r => nomeEmpresa(r.cid));
+      document.getElementById(`${px}-multi-resumo`).textContent = resumoVarias()
+        + (falhas.length ? ` — falha ao carregar as listas de: ${falhas.join(', ')} (tente de novo)` : '');
+    };
+    const resumoVarias = () => listasPorEmpresa
+      ? `${obj._empresasMulti.length} empresas — listas com carteiras e agrupamentos de todas; nada selecionado = tudo de cada empresa`
+      : `${obj._empresasMulti.length} empresas — seletor de agrupamentos desativado (todos de cada empresa)`;
+
+    /* Publicação com várias empresas: o seletor explica em vez de ficar vazio. */
+    const pintarVarias = () => {
+      if (listasPorEmpresa || !emVarias()) return;
+      const el = document.getElementById(`${px}-pkr-available`);
+      if (el) el.innerHTML = `<div class="picker-row picker-row-carregando">★ ${obj._empresasMulti.length} empresas: todos os agrupamentos de cada empresa</div>`;
+      const c = document.getElementById(`${px}-pkr-available-count`); if (c) c.textContent = 'todos';
+    };
+    if (typeof obj._renderPickerPanes === 'function') {
+      const desenhoOriginal = obj._renderPickerPanes.bind(obj);
+      obj._renderPickerPanes = function (...a) { const r = desenhoOriginal(...a); pintarVarias(); return r; };
+    }
+
+    /* Executar com várias empresas e itens escolhidos: cada empresa recebe só os dela; empresa sem
+       nada escolhido é pulada no dia (antes ia "tudo da empresa"). */
+    if (listasPorEmpresa && typeof obj._executarUmDia === 'function') {
+      const executarOriginal = obj._executarUmDia.bind(obj);
+      obj._executarUmDia = async function (chave, day, cid, ctx) {
+        const todos = obj._selectedIds;
+        if (!emVarias() || !todos || !todos.size) return executarOriginal(chave, day, cid, ctx);
+        const daEmpresa = new Set(Array.from(todos).filter(id => obj._empresaDoItem.get(id) === cid));
+        if (!daEmpresa.size) {
+          obj._setDayStep(chave, 'skipped', `${day} · ${nomeEmpresa(cid)} · nada selecionado nesta empresa`);
+          return {tipo: 'skip'};
+        }
+        obj._selectedIds = daEmpresa;
+        try { return await executarOriginal(chave, day, cid, ctx); }
+        finally { obj._selectedIds = todos; }
+      };
+    }
 
     /* Aplica o estado "várias empresas" na tela e no objeto da ferramenta. `recarregar` = false quando
        quem chama já vai trocar a empresa (onCompanyChange, Limpar). */
@@ -10514,18 +10586,25 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
       if (!multi && sel.value === VALOR_TODAS_EMPRESAS) sel.value = '';
       if (multi) {
         sel.value = todas ? VALOR_TODAS_EMPRESAS : ids[0];
-        obj._selectedIds = new Set();
-        if (obj._groupingSelectedIds) obj._groupingSelectedIds = new Set();
+        // Escolhas de empresas que continuam marcadas ficam; as outras saem.
+        const fica = new Set(ids);
+        const filtra = (set) => new Set(Array.from(set || []).filter(id => eraMulti && fica.has(obj._empresaDoItem.get(id))));
+        obj._selectedIds = filtra(obj._selectedIds);
+        if (obj._groupingSelectedIds) obj._groupingSelectedIds = filtra(obj._groupingSelectedIds);
       }
-      seletores().forEach(el => el.classList.toggle('multi-desativado', multi));
-      document.getElementById(`${px}-multi-resumo`).textContent = multi
-        ? `${ids.length} empresas — seletores de carteira/agrupamento desativados (todas de cada empresa)` : '';
+      (listasPorEmpresa ? [] : seletores()).forEach(el => el.classList.toggle('multi-desativado', multi));
+      document.getElementById(`${px}-multi-resumo`).textContent = multi ? resumoVarias() : '';
       const saiuDeVarias = eraMulti && !multi;
       eraMulti = multi;
-      if (multi) { redesenhar(); return; }
+      if (multi) {
+        if (listasPorEmpresa) carregarListasVarias(); else redesenhar();
+        return;
+      }
+      geracao++; carregandoVarias = false; juntas = null; cacheEmpresa.clear();
+      obj._empresaDoItem = new Map();
       if (!recarregar) return;
       if (ids.length === 1 && sel.value !== ids[0]) { sel.value = ids[0]; obj.onCompanyChange(); return; }
-      // Voltou para 1 (ou nenhuma) empresa: as listas na memória podem ser de outra empresa -> recarrega.
+      // Voltou para 1 (ou nenhuma) empresa: as listas na memória são das várias -> recarrega.
       if (saiuDeVarias) obj.onCompanyChange();
     };
     const {painel} = montarSeletorVariasEmpresas(sel, px, {
@@ -10534,12 +10613,15 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
       podeAbrir: () => !obj._running,
     });
     // [2026-09-28] "★ Todas as empresas" escolhida no próprio <select> = marcar "Todas"; uma empresa
-    // escolhida com várias marcadas volta para 1 empresa.
+    // escolhida com várias marcadas volta para 1 empresa. Busca de 1 empresa que termine já no modo
+    // várias não fica na tela (restaurarVarias).
     const trocaOriginal = obj.onCompanyChange.bind(obj);
-    obj.onCompanyChange = function (...a) {
+    obj.onCompanyChange = async function (...a) {
       if (sel.value === VALOR_TODAS_EMPRESAS) { obj._empresasMulti = opcoes().map(o => o.value); aplicar(); return; }
       if (obj._empresasMulti.length > 1) { obj._empresasMulti = []; aplicar({recarregar: false}); }
-      return trocaOriginal(...a);
+      const retorno = await trocaOriginal(...a);
+      restaurarVarias();
+      return retorno;
     };
     // Confirmação mostra as empresas.
     const confirmarOriginal = obj.confirm.bind(obj);
