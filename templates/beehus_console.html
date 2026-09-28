@@ -8178,7 +8178,7 @@ function makeDatesPipeline(cfg) {
           return {tipo: 'erro'};
         }
         ids = (lookup.body || []).map(g => g.id);
-        // Seleção do seletor (só com 1 empresa — com várias ele fica desativado).
+        // Seleção do seletor. Com várias empresas os ids são de todas (únicos): cada empresa fica só com os dela.
         if (this._selectedIds && this._selectedIds.size > 0) {
           const want = this._selectedIds;
           ids = ids.filter(id => want.has(id));
@@ -9442,6 +9442,8 @@ const PublishDates = makeDatesPipeline({
     },
 
     async _fetchPrevDayIds() {
+      // [2026-09-28] várias empresas: publicados na data anterior de cada uma.
+      const varias = (this._empresasMulti && this._empresasMulti.length > 1) ? this._empresasMulti : null;
       const cid = $$('company').value;
       const dt  = $$('initialDate').value;
       if (!cid || !dt || !this._prevDayFilter) {
@@ -9449,12 +9451,13 @@ const PublishDates = makeDatesPipeline({
         return;
       }
       const prevDt = this._prevBusinessDay(dt);
-      const resp = await api('GET',
+      const cids = varias || [cid];
+      const resps = await Promise.all(cids.map(c => api('GET',
         `/api/beehus/filters/groupings-by-publish-state` +
-        `?companyId=${encodeURIComponent(cid)}` +
+        `?companyId=${encodeURIComponent(c)}` +
         `&positionDate=${encodeURIComponent(prevDt)}` +
-        `&published=true`);
-      this._prevDayIds = new Set((resp.ok && Array.isArray(resp.body) ? resp.body : []).map(g => g.id));
+        `&published=true`)));
+      this._prevDayIds = new Set(resps.flatMap(resp => (resp.ok && Array.isArray(resp.body) ? resp.body : []).map(g => g.id)));
     },
 
     async onPrevDayFilterChange() {
@@ -9464,9 +9467,50 @@ const PublishDates = makeDatesPipeline({
       this._renderPickerPanes();
     },
 
+    /* Contexto: lista do seletor de UMA empresa na data (publicar: não publicados + |Δ|; despublicar:
+       todos os agrupamentos cadastrados). Retorna {grupos, deltas, erro}. [2026-09-28] Separado do
+       _refreshPicker para servir também às várias empresas. */
+    async _buscarPickerEmpresa(cid, dt, isUnpub) {
+      if (isUnpub) {
+        const r = await api('GET', `/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`);
+        return {grupos: r.body || [], deltas: [], erro: null};
+      }
+      // publish → published=false (carrega os ainda não publicados).
+      const pub = 'false';
+      const [eligible, deltas] = await Promise.all([
+        api('GET',
+          `/api/beehus/filters/groupings-by-publish-state` +
+          `?companyId=${encodeURIComponent(cid)}` +
+          `&positionDate=${encodeURIComponent(dt)}` +
+          `&published=${pub}`),
+        api('GET',
+          `/api/beehus/filters/grouping-return-deltas` +
+          `?companyId=${encodeURIComponent(cid)}` +
+          `&positionDate=${encodeURIComponent(dt)}` +
+          `&published=${pub}`),
+      ]);
+      // [SWAT-04] Falha da API chega como erro (não mais como []): o
+      // seletor diz "falha ao consultar" em vez de "nenhum agrupamento não
+      // publicado" — antes as duas situações eram indistinguíveis.
+      const falha = !eligible.ok ? eligible : (!deltas.ok ? deltas : null);
+      return {
+        grupos: (eligible.ok && Array.isArray(eligible.body)) ? eligible.body : [],
+        deltas: (deltas.ok && Array.isArray(deltas.body)) ? deltas.body : [],
+        erro: falha ? `${(falha.body && falha.body.error) || 'HTTP ' + falha.status}` : null,
+      };
+    },
+
+    /* [2026-09-28, pedido do usuário: "para publicação também permitir seleção"] Com várias empresas
+       (ou "★ Todas") o seletor junta a lista de CADA empresa na data inicial, com a empresa na frente
+       ("Empresa · agrupamento"; 3 empresas por vez) e guarda item -> empresa em _empresaDoItem. No
+       Executar nada muda: cada dia/empresa cruza os elegíveis dela com a seleção (ids são únicos), e a
+       empresa sem nada escolhido fica "nada a publicar". Busca que termina depois de outra mais nova
+       (troca de empresa/data no meio) é descartada (_geracaoPicker). */
     async _refreshPicker() {
-      // [2026-09-28] "Todas as empresas" no <select> não é uma empresa: o seletor fica desativado.
-      const cid = ($$('company').value === '__todas__') ? '' : $$('company').value;
+      const minha = this._geracaoPicker = (this._geracaoPicker || 0) + 1;
+      const varias = (this._empresasMulti && this._empresasMulti.length > 1) ? this._empresasMulti.slice() : null;
+      // [2026-09-28] "Todas as empresas" no <select> não é uma empresa: vale a lista de várias.
+      const cid = varias ? varias[0] : (($$('company').value === '__todas__') ? '' : $$('company').value);
       const dt  = $$('initialDate').value;
       const noDate = $$('pkr-no-date');
       const isUnpub = (this._action === 'unpublish');
@@ -9487,36 +9531,33 @@ const PublishDates = makeDatesPipeline({
       this._carregandoPicker = true;   // [2026-09-28] "Carregando lista de agrupamentos…" até a resposta
       this._renderPickerPanes();
 
-      if (isUnpub) {
-        const r = await api('GET',
-          `/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`);
-        this._availableGroupings = r.body || [];
-        this._groupingDeltas     = [];
+      if (varias) {
+        const grupos = [], deltasTodas = [], erros = [], mapa = new Map();
+        for (let i = 0; i < varias.length; i += 3) {
+          const lote = varias.slice(i, i + 3);
+          const rs = await Promise.all(lote.map(c => this._buscarPickerEmpresa(c, dt, isUnpub)));
+          if (minha !== this._geracaoPicker) return;
+          rs.forEach((r, k) => {
+            const c = lote[k], nome = this._nomeEmpresa(c);
+            r.grupos.forEach(g => { grupos.push({...g, name: `${nome} · ${g.name}`}); mapa.set(g.id, c); });
+            deltasTodas.push(...r.deltas);
+            if (r.erro) erros.push(`${nome}: ${r.erro}`);
+          });
+        }
+        this._availableGroupings = grupos;
+        this._groupingDeltas     = deltasTodas;
+        this._empresaDoItem      = mapa;
+        this._erroPicker         = erros.length ? erros.join(' | ') : null;
       } else {
-        // publish → published=false (carrega os ainda não publicados).
-        const pub = 'false';
-        const [eligible, deltas] = await Promise.all([
-          api('GET',
-            `/api/beehus/filters/groupings-by-publish-state` +
-            `?companyId=${encodeURIComponent(cid)}` +
-            `&positionDate=${encodeURIComponent(dt)}` +
-            `&published=${pub}`),
-          api('GET',
-            `/api/beehus/filters/grouping-return-deltas` +
-            `?companyId=${encodeURIComponent(cid)}` +
-            `&positionDate=${encodeURIComponent(dt)}` +
-            `&published=${pub}`),
-        ]);
-        // [SWAT-04] Falha da API chega como erro (não mais como []): o
-        // seletor diz "falha ao consultar" em vez de "nenhum agrupamento não
-        // publicado" — antes as duas situações eram indistinguíveis.
-        const falha = !eligible.ok ? eligible : (!deltas.ok ? deltas : null);
-        this._erroPicker = falha ? `${(falha.body && falha.body.error) || 'HTTP ' + falha.status}` : null;
-        this._availableGroupings = (eligible.ok && Array.isArray(eligible.body)) ? eligible.body : [];
-        this._groupingDeltas     = (deltas.ok && Array.isArray(deltas.body)) ? deltas.body : [];
+        const r = await this._buscarPickerEmpresa(cid, dt, isUnpub);
+        if (minha !== this._geracaoPicker) return;
+        this._availableGroupings = r.grupos;
+        this._groupingDeltas     = r.deltas;
+        this._erroPicker         = r.erro;
       }
 
       await this._fetchPrevDayIds();
+      if (minha !== this._geracaoPicker) return;
 
       // Drop any selection que não pertence mais à lista disponível (ex:
       // empresa trocou, ou voltamos para publicar e a data invalidou ids).
@@ -10461,26 +10502,13 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     obj._empresasMulti = [];
     const opcoes = () => Array.from(sel.options).filter(o => o.value && o.value !== VALOR_TODAS_EMPRESAS);
     instalarOpcaoTodasEmpresas(sel);
-    // Seletores de carteira/agrupamento da view (menos a lista de datas específicas).
-    // [2026-09-28] A seção que contém o seletor de EMPRESA nunca é desativada inteira: no Processar o
-    // #pcd-grouping (select escondido, legado) mora no 1º cartão, junto com empresa, modo e datas — e
-    // desativar a seção travava o "Faixa de datas" e as datas com várias empresas. Ali, select
-    // escondido é ignorado e campo visível desativa só o próprio bloco.
-    const seletores = () => Array.from(document.querySelectorAll(
-      `#${px}-available, #${px}-selected, #${px}-grouping, #${px}-grp-available, #${px}-grp-selected, #${px}-pkr-available, #${px}-pkr-selected`))
-      .map(el => {
-        const secao = el.closest('section');
-        if (secao && secao.contains(sel)) return el.classList.contains('hidden') ? null : (el.parentElement || el);
-        return secao || el;
-      })
-      .filter((el, i, a) => el && a.indexOf(el) === i && !(el.id || '').endsWith('dates-card'));
-
     /* [2026-09-28, pedido do usuário: "deveria aparecer as listagens tanto de carteiras como de
        groupings"] Com várias empresas (ou "★ Todas") as listas de carteiras e agrupamentos juntam as
        de CADA empresa marcada, com o nome da empresa na frente, e dá para escolher nelas. Nada
        escolhido = tudo de cada empresa (como antes). No Executar, cada empresa recebe só os itens
-       dela (_executarUmDia abaixo). A Publicação (pbd) continua sem seletor com várias empresas: os
-       elegíveis dela mudam dia a dia.
+       dela (_executarUmDia abaixo). A Publicação (pbd) tem o seletor próprio: com várias empresas quem
+       junta as listas é o _refreshPicker dela (pedido do usuário: "para publicação também permitir
+       seleção").
        Pseudocódigo:
          1. Busca agrupamentos (e carteiras, fora do NAV Groupings) de cada empresa, 3 por vez;
             guarda por empresa até sair do modo várias.
@@ -10548,19 +10576,7 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     };
     const resumoVarias = () => listasPorEmpresa
       ? `${obj._empresasMulti.length} empresas — listas com carteiras e agrupamentos de todas; nada selecionado = tudo de cada empresa`
-      : `${obj._empresasMulti.length} empresas — seletor de agrupamentos desativado (todos de cada empresa)`;
-
-    /* Publicação com várias empresas: o seletor explica em vez de ficar vazio. */
-    const pintarVarias = () => {
-      if (listasPorEmpresa || !emVarias()) return;
-      const el = document.getElementById(`${px}-pkr-available`);
-      if (el) el.innerHTML = `<div class="picker-row picker-row-carregando">★ ${obj._empresasMulti.length} empresas: todos os agrupamentos de cada empresa</div>`;
-      const c = document.getElementById(`${px}-pkr-available-count`); if (c) c.textContent = 'todos';
-    };
-    if (typeof obj._renderPickerPanes === 'function') {
-      const desenhoOriginal = obj._renderPickerPanes.bind(obj);
-      obj._renderPickerPanes = function (...a) { const r = desenhoOriginal(...a); pintarVarias(); return r; };
-    }
+      : `${obj._empresasMulti.length} empresas — lista com os agrupamentos de todas na data inicial; nada selecionado = todos os elegíveis de cada empresa`;
 
     /* Executar com várias empresas e itens escolhidos: cada empresa recebe só os dela; empresa sem
        nada escolhido é pulada no dia (antes ia "tudo da empresa"). */
@@ -10600,12 +10616,11 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
         obj._selectedIds = filtra(obj._selectedIds);
         if (obj._groupingSelectedIds) obj._groupingSelectedIds = filtra(obj._groupingSelectedIds);
       }
-      (listasPorEmpresa ? [] : seletores()).forEach(el => el.classList.toggle('multi-desativado', multi));
       document.getElementById(`${px}-multi-resumo`).textContent = multi ? resumoVarias() : '';
       const saiuDeVarias = eraMulti && !multi;
       eraMulti = multi;
       if (multi) {
-        if (listasPorEmpresa) carregarListasVarias(); else redesenhar();
+        if (listasPorEmpresa) carregarListasVarias(); else obj._refreshPicker();
         return;
       }
       geracao++; carregandoVarias = false; juntas = null; cacheEmpresa.clear();

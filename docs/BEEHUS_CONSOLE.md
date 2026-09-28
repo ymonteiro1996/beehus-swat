@@ -723,8 +723,19 @@ foram alteradas.
 >   empresa (como antes). Com itens escolhidos, `_executarUmDia` manda a cada empresa só os dela (`_empresaDoItem`,
 >   que também cobre as carteiras dos agrupamentos) e pula no dia a empresa sem nada escolhido ("nada selecionado
 >   nesta empresa"). Desmarcar uma empresa mantém as escolhas das outras. Busca de 1 empresa que termine já no modo
->   várias não sobrescreve as listas juntas. **A Publicação continua sem seletor com várias empresas** (os elegíveis
->   mudam dia a dia) — o seletor diz "todos os agrupamentos de cada empresa".
+>   várias não sobrescreve as listas juntas.
+> - **[mesmo dia, "para publicação também permitir seleção"] Publicação com várias empresas:** o seletor junta os
+>   não publicados + |Δ| de cada empresa na **data inicial** (`_buscarPickerEmpresa`, 3 por vez, "Empresa · nome";
+>   "Publicado na data anterior" também por empresa). No Executar nada muda: cada dia/empresa cruza os elegíveis
+>   dela com a seleção (ids únicos) — empresa sem nada escolhido fica "nada a publicar"; nada escolhido = todos os
+>   elegíveis de cada empresa, com a trava |Δ| do servidor. Busca antiga que termina depois de uma nova é
+>   descartada (`_geracaoPicker`). Falha numa empresa: o aviso "falha ao consultar" lista qual.
+> - **[mesmo dia, "permitir busca por nome"] `BuscaListas`:** campo "Buscar por nome…" em cima de cada lista de
+>   carteiras/agrupamentos (Disponíveis e Selecionadas/Selecionados) de todas as ferramentas e no seletor da
+>   Publicação — as de datas ficam de fora. Sem acento/caixa; várias palavras = todas precisam aparecer; "N de M"
+>   quando há busca; continua ao trocar de empresa. Nas listas `<select>` a opção que não bate sai da lista (o "»"
+>   percorre as opções, então adiciona só as encontradas); no seletor da Publicação a linha fica escondida e
+>   `addPickerAll`/`addPickerSelected` (sem destaque) usam só as encontradas.
 
 > **[2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com "PATCH .../publish
 > failed: 500"] Publicação isola os agrupamentos que o Beehus recusa.** Desde o SWAT-05 o servidor manda a lista
