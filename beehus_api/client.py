@@ -16,6 +16,7 @@ re-paste when the token is still valid (e.g. a mid-day restart).
 import json
 import logging
 import os
+import random
 import threading
 import time
 from pathlib import Path
@@ -46,6 +47,89 @@ _session = requests.Session()
 _adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
 _session.mount("https://", _adapter)
 _session.mount("http://", _adapter)
+
+# ── Freio compartilhado de rate limit (429) ──────────────────────────────────
+# [2026-09-28, relato do usuário: na Publicação da Blue3 a lista do dia voltava "falha ao consultar o
+# Beehus" logo depois de cada reinício] O Painel (tela inicial) conta as transações de todas as
+# empresas em paralelo ao subir e esgota o limite do Beehus; cada thread fazia o próprio backoff
+# (1+2+4+8+8 s ≈ 23 s) e desistia antes de a janela do limite (60 s) virar — e a lista da Publicação,
+# pedida nesse meio tempo, caía em 502. Agora (mesma ideia do cliente do ControleCargas):
+#   - quem toma 429 publica UMA pausa para o processo inteiro (ninguém sai antes dela acabar);
+#   - a espera é a que o Beehus pede: header Retry-After ou `retryAfterSeconds` do corpo JSON;
+#   - no máximo _MAX_SIMULTANEAS chamadas ao Beehus ao mesmo tempo no processo.
+_MAX_SIMULTANEAS = 6
+_TENTATIVAS_429 = 6
+_ESPERA_429_MAX_S = 65.0
+_limite_simultaneas = threading.BoundedSemaphore(_MAX_SIMULTANEAS)
+_pausa_lock = threading.Lock()
+_pausa_ate = 0.0   # time.monotonic() até quando ninguém deve chamar o Beehus
+
+
+def _esperar_pausa_global() -> None:
+    """Contexto: segura a chamada enquanto houver pausa de rate limit em vigor (publicada por
+    _publicar_pausa_429). Custa zero sem pausa. Não retorna nada."""
+    while True:
+        with _pausa_lock:
+            restante = _pausa_ate - time.monotonic()
+        if restante <= 0:
+            return
+        time.sleep(min(restante, 5.0))
+
+
+def _vaga_para_chamar() -> None:
+    """Contexto:
+    Pega uma das _MAX_SIMULTANEAS vagas para chamar o Beehus, respeitando a pausa de 429 — confere a
+    pausa de novo DEPOIS de pegar a vaga: quem estava na fila quando outra thread tomou 429 não sai
+    antes da pausa acabar (sem isso, a fila inteira ainda batia no limite). Quem chama libera a vaga
+    (_limite_simultaneas.release()). Não retorna nada.
+
+    Pseudocódigo: 1. Espera a pausa. 2. Pega a vaga. 3. Pausa nova no meio tempo -> devolve e repete.
+    """
+    while True:
+        _esperar_pausa_global()
+        _limite_simultaneas.acquire()
+        with _pausa_lock:
+            livre = _pausa_ate <= time.monotonic()
+        if livre:
+            return
+        _limite_simultaneas.release()
+
+
+def _segundos_de_espera_429(r, tentativa: int) -> float:
+    """Contexto:
+    Quanto esperar depois de um 429. Retorna segundos.
+
+    Pseudocódigo:
+      1. Header Retry-After (segundos) válido -> ele.
+      2. Corpo JSON com retryAfterSeconds -> ele (o Beehus manda assim: sem header).
+      3. Senão, backoff exponencial 1, 2, 4, 8, 16 s.
+      4. Sempre entre 0,5 s e _ESPERA_429_MAX_S, com um jitter de até 20% (as threads não voltam juntas).
+    """
+    espera = None
+    try:
+        ra = r.headers.get("Retry-After")
+        espera = float(ra) if ra else None
+    except (TypeError, ValueError):
+        espera = None
+    if espera is None:
+        try:
+            corpo = r.json()
+            if isinstance(corpo, dict) and corpo.get("retryAfterSeconds") is not None:
+                espera = float(corpo["retryAfterSeconds"])
+        except (TypeError, ValueError):
+            espera = None
+    if espera is None:
+        espera = float(2 ** (tentativa - 1))
+    espera = max(0.5, min(espera, _ESPERA_429_MAX_S))
+    return espera * (1.0 + random.random() * 0.2)
+
+
+def _publicar_pausa_429(segundos: float) -> None:
+    """Contexto: publica a pausa de rate limit para o processo inteiro (fica a mais longa). Não
+    retorna nada."""
+    global _pausa_ate
+    with _pausa_lock:
+        _pausa_ate = max(_pausa_ate, time.monotonic() + segundos)
 
 _log = logging.getLogger(__name__)
 
@@ -274,16 +358,20 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
     attempt = 0
     while True:
         attempt += 1
+        _vaga_para_chamar()   # [2026-09-28] pausa de 429 compartilhada + teto de simultâneas
         _t0 = time.monotonic() if _timing_on else None
         try:
-            r = _session.request(
-                method,
-                url,
-                headers=_headers(),
-                json=json,
-                params=params,
-                timeout=timeout or DEFAULT_TIMEOUT,
-            )
+            try:
+                r = _session.request(
+                    method,
+                    url,
+                    headers=_headers(),
+                    json=json,
+                    params=params,
+                    timeout=timeout or DEFAULT_TIMEOUT,
+                )
+            finally:
+                _limite_simultaneas.release()
         except requests.RequestException as e:
             if _timing_on:
                 _record_timing(method, path, params, "ERR",
@@ -292,13 +380,9 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
         if _timing_on:
             _record_timing(method, path, params, r.status_code,
                            (time.monotonic() - _t0) * 1000.0)
-        if r.status_code == 429 and attempt <= 5 and not _e_limite_anonimo(r):   # [A7]
-            ra = r.headers.get("Retry-After")
-            try:
-                delay = float(ra) if ra else min(0.5 * (2 ** attempt), 8.0)
-            except (TypeError, ValueError):
-                delay = min(0.5 * (2 ** attempt), 8.0)
-            time.sleep(delay)
+        if r.status_code == 429 and attempt <= _TENTATIVAS_429 and not _e_limite_anonimo(r):   # [A7]
+            # [2026-09-28] espera a que o Beehus pedir e para TODAS as threads (ver bloco do freio).
+            _publicar_pausa_429(_segundos_de_espera_429(r, attempt))
             continue
         break
 
@@ -338,6 +422,7 @@ def request_multipart(method: str, path: str, *, files, data=None,
     Content-Type header so `requests` can fill in the multipart boundary.
     """
     url = f"{BASE_URL}{path}"
+    _esperar_pausa_global()   # [2026-09-28] respeita a pausa de 429 compartilhada
     _t0 = time.monotonic() if _timing_on else None
     try:
         r = _session.request(
