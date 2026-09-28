@@ -131,10 +131,14 @@
   .multi-desativado { opacity: 0.45; pointer-events: none; }
   /* [2026-09-28, pedido do usuário: "mostrando mensagem de carregando lista"] aviso fixo enquanto
      alguma lista (/api/beehus/filters/*) está sendo buscada + linha "carregando" dentro dos seletores. */
-  .carregando-listas { position: fixed; top: 10px; right: 16px; z-index: 70; background: #eff6ff; color: #1d4ed8;
-    border: 1px solid #bfdbfe; border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600;
-    box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-  html.dark .carregando-listas { background: #1e3a8a; color: #dbeafe; border-color: #1d4ed8; }
+  /* [2026-09-28, "não há mensagem sobre carregando"] canto inferior direito e maior: no topo ficava
+     em cima do cabeçalho e passava batido. */
+  .carregando-listas { position: fixed; bottom: 18px; right: 18px; z-index: 70; background: #1d4ed8; color: #fff;
+    border: 1px solid #1e40af; border-radius: 999px; padding: 8px 18px; font-size: 14px; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  html.dark .carregando-listas { background: #2563eb; color: #fff; border-color: #3b82f6; }
+  .multi-aviso { color: #1d4ed8; font-style: italic; }
+  html.dark .multi-aviso { color: #93c5fd; }
   .picker-row-carregando { color: #1d4ed8; font-style: italic; cursor: default; }
   html.dark .picker-row-carregando { color: #93c5fd; }
   /* SWAT-01: log de negócio por ferramenta (ActionLog), abaixo do botão Executar. */
@@ -7114,6 +7118,15 @@ const DeletePos = makeDatesPipeline({
       const avail = $$('grp-available');
       const sel   = $$('grp-selected');
       if (!avail || !sel) return;
+      // [2026-09-28, "não há mensagem sobre carregando"] busca da empresa em andamento -> avisa.
+      if (this._carregandoLista) {
+        avail.innerHTML = '<option value="" disabled>⏳ Carregando agrupamentos…</option>';
+        sel.innerHTML = '';
+        $$('grp-available-count').textContent = '…';
+        $$('grp-selected-count').textContent = '0';
+        this._renderPanes();
+        return;
+      }
       const all = this._groupings || [];
       const available = all.filter(g => !this._groupingSelectedIds.has(g.id));
       const selected  = all.filter(g =>  this._groupingSelectedIds.has(g.id));
@@ -7219,7 +7232,9 @@ const DeletePos = makeDatesPipeline({
       this._groupingSelectedIds = new Set();
       this._eligibleIds = null;
       const statusEl = $$('grp-excel-status'); if (statusEl) statusEl.textContent = '';
-      await _origOnCompanyChg();
+      const busca = _origOnCompanyChg();   // liga _carregandoLista antes do 1º await
+      this._renderGroupingPanes();
+      await busca;
       if (this._mode === 'single') await this._refreshEligibility();
       this._renderGroupingPanes();
     },
@@ -8491,6 +8506,15 @@ const ProcessDates = makeDatesPipeline({
       const avail = $$('grp-available');
       const sel   = $$('grp-selected');
       if (!avail || !sel) return;
+      // [2026-09-28, "não há mensagem sobre carregando"] busca da empresa em andamento -> avisa.
+      if (this._carregandoLista) {
+        avail.innerHTML = '<option value="" disabled>⏳ Carregando agrupamentos…</option>';
+        sel.innerHTML = '';
+        $$('grp-available-count').textContent = '…';
+        $$('grp-selected-count').textContent = '0';
+        this._renderPanes();
+        return;
+      }
       const all = this._groupings || [];
       const available = all.filter(g => !this._groupingSelectedIds.has(g.id));
       const selected  = all.filter(g =>  this._groupingSelectedIds.has(g.id));
@@ -8571,7 +8595,9 @@ const ProcessDates = makeDatesPipeline({
       // would survive across companies.
       this._groupingSelectedIds = new Set();
       const statusEl = $$('grp-excel-status'); if (statusEl) statusEl.textContent = '';
-      await _origOnCompanyChg();
+      const busca = _origOnCompanyChg();   // liga _carregandoLista antes do 1º await
+      this._renderGroupingPanes();
+      await busca;
       this._renderGroupingPanes();
     },
 
@@ -8753,6 +8779,15 @@ const NavWalletsDates = makeDatesPipeline({
       const avail = $$('grp-available');
       const sel   = $$('grp-selected');
       if (!avail || !sel) return;
+      // [2026-09-28, "não há mensagem sobre carregando"] busca da empresa em andamento -> avisa.
+      if (this._carregandoLista) {
+        avail.innerHTML = '<option value="" disabled>⏳ Carregando agrupamentos…</option>';
+        sel.innerHTML = '';
+        $$('grp-available-count').textContent = '…';
+        $$('grp-selected-count').textContent = '0';
+        this._renderPanes();
+        return;
+      }
       const all = this._groupings || [];
       const available = all.filter(g => !this._groupingSelectedIds.has(g.id));
       const selected  = all.filter(g =>  this._groupingSelectedIds.has(g.id));
@@ -8833,7 +8868,9 @@ const NavWalletsDates = makeDatesPipeline({
       // would survive across companies.
       this._groupingSelectedIds = new Set();
       const statusEl = $$('grp-excel-status'); if (statusEl) statusEl.textContent = '';
-      await _origOnCompanyChg();
+      const busca = _origOnCompanyChg();   // liga _carregandoLista antes do 1º await
+      this._renderGroupingPanes();
+      await busca;
       this._renderGroupingPanes();
     },
 
@@ -10422,7 +10459,7 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     // desativar a seção travava o "Faixa de datas" e as datas com várias empresas. Ali, select
     // escondido é ignorado e campo visível desativa só o próprio bloco.
     const seletores = () => Array.from(document.querySelectorAll(
-      `#${px}-available, #${px}-selected, #${px}-grouping, #${px}-pkr-available, #${px}-pkr-selected`))
+      `#${px}-available, #${px}-selected, #${px}-grouping, #${px}-grp-available, #${px}-grp-selected, #${px}-pkr-available, #${px}-pkr-selected`))
       .map(el => {
         const secao = el.closest('section');
         if (secao && secao.contains(sel)) return el.classList.contains('hidden') ? null : (el.parentElement || el);
@@ -10430,8 +10467,43 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
       })
       .filter((el, i, a) => el && a.indexOf(el) === i && !(el.id || '').endsWith('dates-card'));
 
-    /* Aplica o estado "várias empresas" na tela e no objeto da ferramenta. */
-    const aplicar = () => {
+    /* [2026-09-28, "não há mensagem sobre carregando" / "não carregou também"] Com várias empresas os
+       painéis ficavam vazios com "0" — parecia lista que não carregou. Agora dizem que vale tudo de
+       cada empresa. Embrulha os desenhos da ferramenta: vale também para uma busca que termine depois
+       (ex.: empresa escolhida e logo em seguida "★ Todas"). */
+    const oQueLista = px === 'ngd' ? 'todos os agrupamentos' : 'todas as carteiras';
+    const avisoVarias = () => `★ ${obj._empresasMulti.length} empresas: ${oQueLista} de cada empresa`;
+    const pintarVarias = () => {
+      if (!(obj._empresasMulti && obj._empresasMulti.length > 1)) return;
+      const opcao = (t) => `<option value="" disabled class="multi-aviso">${t}</option>`;
+      const pinta = (id, html, cont) => {
+        const el = document.getElementById(`${px}-${id}`); if (el) el.innerHTML = html;
+        const c = document.getElementById(`${px}-${id}-count`); if (c) c.textContent = cont;
+      };
+      pinta('available', opcao(avisoVarias()), 'todas');
+      pinta('selected', '', '0');
+      if (document.getElementById(`${px}-grp-available`)) {
+        pinta('grp-available', opcao(`★ ${obj._empresasMulti.length} empresas: todos os agrupamentos de cada empresa`), 'todos');
+        pinta('grp-selected', '', '0');
+      }
+      if (document.getElementById(`${px}-pkr-available`)) {
+        pinta('pkr-available', `<div class="picker-row picker-row-carregando">${avisoVarias().replace('todas as carteiras', 'todos os agrupamentos')}</div>`, 'todos');
+      }
+    };
+    for (const nome of ['_renderPanes', '_renderGroupingPanes', '_renderPickerPanes']) {
+      if (typeof obj[nome] !== 'function') continue;
+      const desenhoOriginal = obj[nome].bind(obj);
+      obj[nome] = function (...a) { const r = desenhoOriginal(...a); pintarVarias(); return r; };
+    }
+    const redesenhar = () => {
+      if (typeof obj._renderGroupingPanes === 'function') obj._renderGroupingPanes(); else obj._renderPanes();
+      if (typeof obj._renderPickerPanes === 'function') obj._renderPickerPanes();
+    };
+
+    /* Aplica o estado "várias empresas" na tela e no objeto da ferramenta. `recarregar` = false quando
+       quem chama já vai trocar a empresa (onCompanyChange, Limpar). */
+    let eraMulti = false;
+    const aplicar = ({recarregar = true} = {}) => {
       const ids = obj._empresasMulti;
       const multi = ids.length > 1;
       // [2026-09-28] Todas marcadas -> o <select> mostra "★ Todas as empresas" e fica ativo (escolher
@@ -10448,7 +10520,13 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
       seletores().forEach(el => el.classList.toggle('multi-desativado', multi));
       document.getElementById(`${px}-multi-resumo`).textContent = multi
         ? `${ids.length} empresas — seletores de carteira/agrupamento desativados (todas de cada empresa)` : '';
-      if (!multi && ids.length === 1 && sel.value !== ids[0]) { sel.value = ids[0]; obj.onCompanyChange(); }
+      const saiuDeVarias = eraMulti && !multi;
+      eraMulti = multi;
+      if (multi) { redesenhar(); return; }
+      if (!recarregar) return;
+      if (ids.length === 1 && sel.value !== ids[0]) { sel.value = ids[0]; obj.onCompanyChange(); return; }
+      // Voltou para 1 (ou nenhuma) empresa: as listas na memória podem ser de outra empresa -> recarrega.
+      if (saiuDeVarias) obj.onCompanyChange();
     };
     const {painel} = montarSeletorVariasEmpresas(sel, px, {
       obter: () => obj._empresasMulti,
@@ -10460,7 +10538,7 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     const trocaOriginal = obj.onCompanyChange.bind(obj);
     obj.onCompanyChange = function (...a) {
       if (sel.value === VALOR_TODAS_EMPRESAS) { obj._empresasMulti = opcoes().map(o => o.value); aplicar(); return; }
-      if (obj._empresasMulti.length > 1) { obj._empresasMulti = []; aplicar(); }
+      if (obj._empresasMulti.length > 1) { obj._empresasMulti = []; aplicar({recarregar: false}); }
       return trocaOriginal(...a);
     };
     // Confirmação mostra as empresas.
@@ -10477,7 +10555,7 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     // Limpar volta para 1 empresa.
     const resetOriginal = obj.reset.bind(obj);
     obj.reset = function (...a) {
-      if (!obj._running) { obj._empresasMulti = []; painel.classList.add('hidden'); aplicar(); }
+      if (!obj._running) { obj._empresasMulti = []; painel.classList.add('hidden'); aplicar({recarregar: false}); }
       return resetOriginal(...a);
     };
   }
