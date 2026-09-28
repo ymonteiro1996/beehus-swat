@@ -91,6 +91,24 @@ def _tokenise(text):
     return " ".join(tokens)
 
 
+# Hard-coded pre-classification rules that take precedence over the ML model.
+# These keywords are unambiguous identifiers of Brazilian government bonds and
+# should not be overridden by learned weights — the ML model can misclassify
+# descriptions with unusual prefixes (e.g. "[Inflação] NTN-B ...") if such
+# formats were not present in the training data.
+_GOVBOND_PRE_RE = re.compile(
+    r"\b(NTN-?B|NTN-?C|NTN-?F|NTNB|NTNC|NTNF|LFT|LTN)\b",
+    re.IGNORECASE,
+)
+
+def _pre_classify(uid):
+    """Return a forced classification result if a hard rule matches, else None."""
+    if _GOVBOND_PRE_RE.search(uid):
+        t = "brazilianGovernmentBond"
+        return {"type": t, "confidence": 1.0, "top3": [(t, 1.0)]}
+    return None
+
+
 class SecurityTypeClassifier:
     """
     TF-IDF + Logistic Regression classifier for securityType prediction.
@@ -148,6 +166,9 @@ class SecurityTypeClassifier:
 
         Returns {"type": str, "confidence": float, "top3": [(type, conf), ...]}
         """
+        forced = _pre_classify(unprocessed_id)
+        if forced:
+            return forced
         if not self._trained:
             raise RuntimeError("Classifier not trained – call .train() first.")
 
@@ -163,21 +184,31 @@ class SecurityTypeClassifier:
 
     def predict_batch(self, ids):
         """Predict for a list of unprocessedId strings.  Returns list of dicts."""
-        if not self._trained:
-            raise RuntimeError("Classifier not trained – call .train() first.")
+        # Split into hard-rule overrides (no model needed) and ML-required ids.
+        results_map = {}
+        ml_ids = []
+        for uid in ids:
+            forced = _pre_classify(uid)
+            if forced:
+                results_map[uid] = {"unprocessedId": uid, **forced}
+            else:
+                ml_ids.append(uid)
 
-        vecs = self._vectoriser.transform([_tokenise(uid) for uid in ids])
-        probas = self._model.predict_proba(vecs)
-        results = []
-        for uid, proba in zip(ids, probas):
-            ranked = sorted(zip(self._labels, proba), key=lambda x: -x[1])
-            results.append({
-                "unprocessedId": uid,
-                "type":          ranked[0][0],
-                "confidence":    round(float(ranked[0][1]), 4),
-                "top3":          [(t, round(float(c), 4)) for t, c in ranked[:3]],
-            })
-        return results
+        if ml_ids:
+            if not self._trained:
+                raise RuntimeError("Classifier not trained – call .train() first.")
+            vecs = self._vectoriser.transform([_tokenise(uid) for uid in ml_ids])
+            probas = self._model.predict_proba(vecs)
+            for uid, proba in zip(ml_ids, probas):
+                ranked = sorted(zip(self._labels, proba), key=lambda x: -x[1])
+                results_map[uid] = {
+                    "unprocessedId": uid,
+                    "type":          ranked[0][0],
+                    "confidence":    round(float(ranked[0][1]), 4),
+                    "top3":          [(t, round(float(c), 4)) for t, c in ranked[:3]],
+                }
+
+        return [results_map[uid] for uid in ids]
 
     # ── evaluation ────────────────────────────────────────────────────────
 
