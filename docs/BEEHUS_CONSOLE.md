@@ -710,10 +710,31 @@ foram alteradas.
 > (com 1 empresa continua parando como antes); **429 espera 2/4/8 s e tenta de novo**
 > (`_apiComEspera`); os seletores de carteira/agrupamento ficam desativados ("todas de cada
 > empresa"); confirmação, status e log dizem "N empresas". Limpar volta para 1 empresa. Publicação
-> com várias empresas usa a trava do servidor (SWAT-05) em cada empresa/dia. **Transações ficou para
-> uma segunda etapa** (esforço G: as listas de edição são por empresa). Achado no teste: o
+> com várias empresas usa a trava do servidor (SWAT-05) em cada empresa/dia. Transações entrou na
+> segunda etapa (abaixo). Achado no teste: o
 > preenchimento da faixa padrão (SWAT-08) é assíncrono — agora não atropela um campo de data que a
 > pessoa editou depois que ele começou.
+>
+> **[2026-09-27, SWAT-06 — Transações (2ª etapa)]** O Identificar Transações ganhou o mesmo
+> **"várias empresas ▾"** (o painel virou `montarSeletorVariasEmpresas()`, usado pelas 5; clique fora
+> fecha). Com 2+ empresas:
+> - **Buscar** faz 1 `POST /transactions/search` por empresa, em sequência, com o mesmo filtro
+>   (datas, tipos, securities, identificadas) e `apiComEspera429()` (a espera do 429 saiu da fábrica
+>   para ser comum). As listas são juntadas numa tabela só, com a coluna **Empresa**; uma empresa
+>   que falha entra no log e as outras seguem. O lote de 250 é **por empresa** — o aviso de lote diz
+>   quais ficaram com mais transações fora do lote.
+> - **Desativados** (são por empresa): Groupings & Wallets e o filtro de Entidades. O backend não
+>   mudou.
+> - **Identificar, Implementar, Editar e Excluir não mudaram**: já trabalham por id de transação
+>   (e os extras de execução por carteira), então valem para as linhas de qualquer empresa.
+> - **Edição de Entidade**: por linha, oferece as entidades da empresa daquela linha; o mapeamento por
+>   valor ("de X para Y") só é oferecido quando todas as linhas com aquele valor são da mesma
+>   empresa (senão aparece "linhas de várias empresas — edite por linha").
+> - Log e resumo da busca dizem "N empresas". Limpar e o atalho do Painel (`prefillFromPainel`)
+>   voltam para 1 empresa.
+> - Testado com Playwright e API simulada (21 checks: 3 empresas, 429 com nova tentativa, 1 empresa
+>   falhando, coluna, aviso de lote, entidades por empresa, Identificar/Excluir por id, volta para 1
+>   empresa sem coluna); SWAT-01/05/06/07/08/09 sem regressão.
 >
 > **[2026-09-25, SWAT-01] Log temporário na tela + limpeza ao trocar de empresa.** `ActionLog` (fim do
 > script do console): uma caixa por ferramenta logo **abaixo do botão Executar** (D5), só em memória,

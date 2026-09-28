@@ -1647,6 +1647,7 @@
               <th style="width:28px"><input id="i-select-all" type="checkbox" checked onchange="IdentifyTxn.toggleAll(this.checked)" /></th>
               <th>Data liquid.</th>
               <th>Wallet</th>
+              <th id="i-th-empresa" class="hidden">Empresa</th>
               <th>Entity</th>
               <th>Tipo atual</th>
               <th>Tipo sugerido</th>
@@ -3124,6 +3125,21 @@ async function api(method, path, body) {
   }
 }
 
+/* Contexto:
+   `api()` com espera em 429 — várias empresas em sequência batem no limite de taxa (o log de
+   25/09 mostra 6 companies com 429). Usada pelos executores por datas e pela busca de Transações
+   com várias empresas [2026-09-27, SWAT-06: saiu de dentro da fábrica para as duas usarem].
+   Retorna o mesmo {ok, status, body} de api().
+   Pseudocódigo: 1. Chama. 2. 429 -> espera 2 s, 4 s, 8 s e tenta de novo (até 3 vezes). */
+async function apiComEspera429(metodo, url, corpo) {
+  let r = await api(metodo, url, corpo);
+  for (let tentativa = 0; r.status === 429 && tentativa < 3; tentativa++) {
+    await new Promise(ok => setTimeout(ok, 2000 * (2 ** tentativa)));
+    r = await api(metodo, url, corpo);
+  }
+  return r;
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    Token section
 ═════════════════════════════════════════════════════════════════════════════ */
@@ -3271,6 +3287,17 @@ const IdentifyTxn = {
   BATCH_LIMIT: 250,
   _batch: { total: null, returned: 0, hasMore: false, identified: 'false' },
 
+  // [2026-09-27, SWAT-06 — Transações, pedido do usuário: "Permitir seleção de todas Empresas ou
+  // selecionar > 1 em ... Transação"] Com 2+ empresas marcadas no "várias empresas ▾", a busca
+  // roda 1x por empresa (em sequência, com espera no 429) e junta tudo na mesma tabela, com a
+  // coluna Empresa. Identificar/Implementar/Editar/Excluir já trabalham por id de transação, então
+  // não mudam. O que é POR EMPRESA fica desativado (agrupamentos, carteiras, filtro de entidade) e
+  // a edição de Entidade oferece as entidades da empresa da própria linha.
+  _empresasMulti: [],
+  _entitiesPorEmpresa: {},   // companyId → [{id, name}] (só com várias empresas)
+  _colunaEmpresa: false,     // a última busca foi com várias empresas
+  _geracaoListasMulti: 0,
+
   // Field metadata for the edit configurator. `txnKey` is the property on the
   // search-result transaction; `apiKey` is what the upstream PATCH expects.
   EDIT_FIELDS: {
@@ -3313,6 +3340,7 @@ const IdentifyTxn = {
     try { await this._initPromise; } catch (e) { /* init failed; bail below */ }
 
     const comp = document.getElementById('i-company');
+    if (this._empresasMulti.length) { this._empresasMulti = []; this.aplicarVariasEmpresas(); }   // [SWAT-06]
     comp.value = companyId;
     if (comp.value !== companyId) {
       alert('Empresa não disponível no Beehus Console (sem visibilidade ou não carregada).');
@@ -3426,6 +3454,144 @@ const IdentifyTxn = {
   },
   addSecurity(id)    { if (!id) return; this._securityIds.add(id); document.getElementById('i-security-add').value = ''; this._renderSecurities(); },
   removeSecurity(id) { this._securityIds.delete(id); this._renderSecurities(); },
+
+  // ── Várias empresas (SWAT-06 — Transações) ────────────────────────────
+  /* Contexto: há 2+ empresas marcadas? Retorna bool. */
+  _emVariasEmpresas() { return this._empresasMulti.length > 1; },
+
+  /* Contexto: nome de uma empresa pelo <select> (coluna Empresa e log). Retorna string. */
+  _nomeEmpresaTxn(cid) {
+    const opt = Array.from(document.getElementById('i-company').options).find(o => o.value === cid);
+    return opt ? opt.textContent.trim() : cid;
+  },
+
+  /* Contexto: rótulo de empresa para o log da tela e o resumo da busca. Retorna string.
+     Pseudocódigo: 1. Várias -> "N empresas"; 2. senão o nome da empresa do <select>. */
+  _rotuloEmpresas() {
+    if (this._emVariasEmpresas()) return `${this._empresasMulti.length} empresas`;
+    return ActionLog.empresaDe('i-company');
+  },
+
+  /* Contexto:
+     Aplica na tela a troca entre 1 e várias empresas — chamada pelo painel "várias empresas ▾"
+     (_instalarVariasEmpresasTransacoes) e por prefillFromPainel. Não retorna nada.
+     Pseudocódigo:
+       1. Várias: trava o <select> na 1ª, zera as seleções por empresa (agrupamentos, carteiras,
+          entidades), desativa esses filtros e carrega as entidades de cada empresa (edição).
+       2. Uma ou nenhuma: destrava e recarrega as listas da empresa do <select>. */
+  aplicarVariasEmpresas() {
+    const multi = this._emVariasEmpresas();
+    const sel = document.getElementById('i-company');
+    const estavaTravado = sel.disabled;
+    sel.disabled = multi;
+    const porEmpresa = [document.getElementById('i-card-groupings'), document.getElementById('i-card-wallets'),
+      document.getElementById('i-toggle-advanced'), (document.getElementById('i-entity-add') || {}).parentElement];
+    porEmpresa.filter(Boolean).forEach(el => el.classList.toggle('multi-desativado', multi));
+    const resumo = document.getElementById('i-multi-resumo');
+    if (resumo) resumo.textContent = multi
+      ? `${this._empresasMulti.length} empresas — agrupamentos, carteiras e filtro de entidade desativados (todas de cada empresa)` : '';
+    if (multi) {
+      sel.value = this._empresasMulti[0];
+      this._groupingSelectedIds = new Set();
+      this._walletSelectedIds = new Set();
+      this._entityIds = new Set();
+      document.getElementById('i-card-groupings').classList.add('hidden');
+      document.getElementById('i-card-wallets').classList.add('hidden');
+      this._renderGroupingPanes();
+      this._renderPanes();
+      this._carregarListasVariasEmpresas();
+      return;
+    }
+    this._entitiesPorEmpresa = {};
+    if (this._empresasMulti.length === 1 && sel.value !== this._empresasMulti[0]) {
+      sel.value = this._empresasMulti[0];
+      this.onCompanyChange();
+    } else if (estavaTravado) {
+      this.onCompanyChange();
+    }
+  },
+
+  /* Contexto:
+     Carrega as entidades de cada empresa marcada (para a edição de Entidade por linha) e o
+     catálogo de securities (global). Sequencial com espera no 429. Uma troca de seleção no meio
+     descarta o resultado antigo (contador de geração). Não retorna nada.
+     Pseudocódigo: 1. Para cada empresa: GET entities; 2. _entities = união (rótulos e filtros). */
+  async _carregarListasVariasEmpresas() {
+    const geracao = ++this._geracaoListasMulti;
+    const ids = this._empresasMulti.slice();
+    const porEmpresa = {};
+    for (const cid of ids) {
+      const r = await apiComEspera429('GET', `/api/beehus/filters/entities?companyId=${encodeURIComponent(cid)}`);
+      if (geracao !== this._geracaoListasMulti) return;
+      porEmpresa[cid] = (r.ok && Array.isArray(r.body)) ? r.body : [];
+    }
+    if (!this._securities.length) {
+      const r = await apiComEspera429('GET', '/api/beehus/filters/securities');
+      if (geracao !== this._geracaoListasMulti) return;
+      this._securities = (r.ok && Array.isArray(r.body)) ? r.body : [];
+    }
+    this._entitiesPorEmpresa = porEmpresa;
+    const vistos = new Map();
+    Object.values(porEmpresa).flat().forEach(e => { if (!vistos.has(e.id)) vistos.set(e.id, e); });
+    this._entities = Array.from(vistos.values());
+    this._renderEntities();
+    this._renderSecurities();
+  },
+
+  /* Contexto:
+     Busca com várias empresas: 1 POST /transactions/search por empresa, em sequência (com espera
+     no 429), mesmo payload trocando só o companyId. Uma empresa que falha não interrompe as
+     outras. Retorna {ok, body: {transactions, total, hasMore}, falhas: [{cid, erro}], lotes}.
+     Pseudocódigo:
+       1. Para cada empresa: busca; marca cada transação com _companyId/_companyName.
+       2. Junta as listas; total = soma (null se alguma empresa não informou); hasMore = alguma.
+       3. ok = pelo menos 1 empresa respondeu. */
+  async _buscarVariasEmpresas(payloadBase) {
+    const transacoes = [], falhas = [], lotes = [];
+    let total = 0, totalConhecido = true, algumaOk = false;
+    for (let i = 0; i < this._empresasMulti.length; i++) {
+      const cid = this._empresasMulti[i];
+      const nome = this._nomeEmpresaTxn(cid);
+      showBusy(`Buscando transações… ${i + 1}/${this._empresasMulti.length} (${nome})`);
+      const r = await apiComEspera429('POST', '/api/beehus/transactions/search', {...payloadBase, companyId: cid});
+      if (!r.ok) { falhas.push({cid, nome, erro: (r.body && r.body.error) || `HTTP ${r.status}`}); continue; }
+      algumaOk = true;
+      const lista = (r.body && r.body.transactions) || [];
+      lista.forEach(t => { t._companyId = cid; t._companyName = nome; });
+      transacoes.push(...lista);
+      const b = r.body || {};
+      if (typeof b.total === 'number') total += b.total; else totalConhecido = false;
+      lotes.push({cid, nome, hasMore: !!b.hasMore, returned: lista.length, total: b.total});
+    }
+    return {
+      ok: algumaOk,
+      status: algumaOk ? 200 : 0,
+      body: algumaOk
+        ? {transactions: transacoes, total: totalConhecido ? total : null, hasMore: lotes.some(l => l.hasMore)}
+        : {error: falhas.map(f => `${f.nome}: ${f.erro}`).join(' · ')},
+      falhas, lotes,
+    };
+  },
+
+  /* Contexto: entidades que a edição por LINHA oferece — a da empresa da própria transação quando
+     a busca foi com várias empresas. Retorna array. */
+  _entidadesParaTxn(t) {
+    if (this._colunaEmpresa && t && t._companyId) return this._entitiesPorEmpresa[t._companyId] || [];
+    return this._entities;
+  },
+
+  /* Contexto:
+     Entidades que o mapeamento POR VALOR ("de X para Y") oferece. Com várias empresas, só dá para
+     mapear se todas as linhas com aquele valor forem da mesma empresa (entidade é por empresa).
+     Retorna array, ou null quando as linhas são de empresas diferentes.
+     Pseudocódigo: 1. Uma empresa só na busca -> _entities. 2. Empresas das linhas com o valor:
+     1 -> as entidades dela; mais de 1 -> null. */
+  _entidadesParaValorAntigo(valorAntigo) {
+    if (!this._colunaEmpresa) return this._entities;
+    const empresas = new Set(this._txns.filter(t => (t.entityId || '') === (valorAntigo || '')).map(t => t._companyId));
+    if (empresas.size !== 1) return null;
+    return this._entitiesPorEmpresa[Array.from(empresas)[0]] || [];
+  },
 
   // ── Company change ────────────────────────────────────────────────────
   async onCompanyChange() {
@@ -3545,22 +3711,30 @@ const IdentifyTxn = {
       limit:                  this.BATCH_LIMIT,
     };
     const myGen = ++this._opGen;
+    const multi = this._emVariasEmpresas();   // [SWAT-06] 1 busca por empresa, juntadas
     showBusy('Buscando transações…');
     let r;
     try {
-      r = await api('POST', '/api/beehus/transactions/search', payload);
+      r = multi ? await this._buscarVariasEmpresas(payload)
+                : await api('POST', '/api/beehus/transactions/search', payload);
     } finally {
       hideBusy();
     }
     if (myGen !== this._opGen) return;   // a newer search/identify started
     if (!r.ok) { alert(r.body?.error || 'Falha na busca. Veja o Log.'); return; }
     this._txns = r.body?.transactions || [];
+    this._colunaEmpresa = multi;
+    if (!multi) {
+      const nome = this._nomeEmpresaTxn(cid);
+      this._txns.forEach(t => { t._companyId = cid; t._companyName = nome; });
+    }
     const bb = r.body || {};
     this._batch = {
       total:      (typeof bb.total === 'number') ? bb.total : null,
       returned:   this._txns.length,
       hasMore:    !!bb.hasMore,
       identified: identified,   // the filter this batch was fetched with, not whatever the radio shows now
+      lotes:      r.lotes || null,   // [SWAT-06] por empresa, quando a busca foi com várias
     };
     if (preserveSug) {
       // Drop suggestions for ids that aren't in the new result set; keep
@@ -3628,7 +3802,8 @@ const IdentifyTxn = {
     const advBtn = document.getElementById('i-toggle-advanced');
     if (advBtn) advBtn.textContent = '+ Groupings & Wallets';
 
-    const companyName = document.getElementById('i-company').selectedOptions[0]?.textContent || '';
+    const companyName = multi ? this._rotuloEmpresas()
+                              : (document.getElementById('i-company').selectedOptions[0]?.textContent || '');
     const dateLabel = isRange ? `${ini} → ${fin}` : ini;
     const idLabel = identified === 'true' ? 'identificadas'
                   : identified === 'false' ? 'não identificadas'
@@ -3647,7 +3822,10 @@ const IdentifyTxn = {
     // [SWAT-01] busca também entra no log de negócio.
     ActionLog.registrar('i', {acao: 'Buscar transações', empresa: companyName, faixa: dateLabel,
       contagens: `${(this._txns || []).length} transação(ões)` + (this._batch && this._batch.hasMore ? ` de ${this._batch.total}` : ''),
-      status: 'concluído'});
+      status: (r.falhas && r.falhas.length)
+        ? `concluído com ${r.falhas.length} falha(s): ${r.falhas.map(f => `${f.nome} (${f.erro})`).join('; ')}`
+        : 'concluído',
+      ok: !(r.falhas && r.falhas.length)});
   },
 
   // Toggle the optional groupings + wallets cards together. Most runs leave
@@ -4825,6 +5003,11 @@ const IdentifyTxn = {
       : `A faixa selecionada tem <strong>${b.total}</strong> transações. Estamos
          exibindo as <strong>${b.returned}</strong> mais antigas
          (${restante} fora deste lote). Reduza o intervalo de datas para ver as demais.`;
+    // [SWAT-06] com várias empresas o lote de 250 é POR empresa — diz quais ficaram com mais.
+    if (b.lotes && b.lotes.length) {
+      const comMais = b.lotes.filter(l => l.hasMore).map(l => this._escape(l.nome));
+      if (comMais.length) body.innerHTML += `<br>Lote de ${this.BATCH_LIMIT} por empresa — com mais transações fora do lote: <strong>${comMais.join(', ')}</strong>.`;
+    }
     box.classList.remove('hidden');
   },
 
@@ -4839,6 +5022,9 @@ const IdentifyTxn = {
       b.hasMore ? `${this._txns.length} de ${b.total}` : this._txns.length;
     document.getElementById('i-result-truncated').classList.toggle('hidden', !this._truncated);
     this._renderBatchNotice();
+    // [SWAT-06] coluna Empresa só quando a busca foi com várias empresas.
+    const thEmpresa = document.getElementById('i-th-empresa');
+    if (thEmpresa) thEmpresa.classList.toggle('hidden', !this._colunaEmpresa);
 
     // Repainting the tbody throws away the previous DOM nodes, so any
     // index-based anchor for shift+click range selection no longer maps
@@ -4911,6 +5097,7 @@ const IdentifyTxn = {
                    onchange="IdentifyTxn.onRowCheck(this)"></td>
         <td>${renderCell(t, 'liquidationDate', t.liquidationDate || '')}</td>
         <td>${this._escape(t.walletName)}</td>
+        ${this._colunaEmpresa ? `<td>${this._escape(t._companyName || '')}</td>` : ''}
         <td>${renderCell(t, 'entityId', t.entityName || t.entityId || '')}</td>
         <td>${renderCell(t, 'beehusTransactionType', t.type || '')}</td>
         <td>
@@ -5245,7 +5432,7 @@ const IdentifyTxn = {
     }
     if (myGen !== this._opGen) return;   // result is stale — a newer op started
     if (!r.ok) {
-      ActionLog.registrar('i', {acao: 'Identificar', empresa: ActionLog.empresaDe('i-company'), contagens: `${ids.length} selecionada(s)`, status: 'falhou (veja o Log)', ok: false});
+      ActionLog.registrar('i', {acao: 'Identificar', empresa: this._rotuloEmpresas(), contagens: `${ids.length} selecionada(s)`, status: 'falhou (veja o Log)', ok: false});
       alert('Falha na identificação. Veja o Log.'); return;
     }
     const sugs = (r.body && r.body.suggestions) || [];
@@ -5281,7 +5468,7 @@ const IdentifyTxn = {
     }
     // Re-render so the suggestion selects pick up the new values.
     this._render();
-    ActionLog.registrar('i', {acao: 'Identificar', empresa: ActionLog.empresaDe('i-company'),
+    ActionLog.registrar('i', {acao: 'Identificar', empresa: this._rotuloEmpresas(),
       contagens: `${ids.length} selecionada(s), ${filledType} tipo(s) e ${filledSec} security(ies) sugeridos`, status: 'concluído'});
     if (!filledType && !filledSec) {
       alert('Identificação concluída — nenhuma sugestão automática foi gerada (algoritmo ainda em definição). Edite os campos manualmente e clique em Implementar.');
@@ -5580,7 +5767,7 @@ const IdentifyTxn = {
       ? ` ⚠ ${mongoStale} sem espelho local — atualize via re-busca após o próximo sync.`
       : '';
     // [SWAT-01] o resultado vai para o log da tela (antes era um alert).
-    ActionLog.registrar('i', {acao: 'Implementar', empresa: ActionLog.empresaDe('i-company'),
+    ActionLog.registrar('i', {acao: 'Implementar', empresa: this._rotuloEmpresas(),
       contagens: `${ok} atualizada(s), ${fail} falha(s)`, status: `concluído${execMsg}${tail}${mongoTail}`.trim(), ok: !fail});
     // Refresh from Mongo so the just-implemented rows reflect the new DB values
     // (or drop out of "Não identificadas") and any new IRRF `taxes` row shows
@@ -5991,7 +6178,14 @@ const IdentifyTxn = {
               </select>`;
     }
     if (f.kind === 'entity') {
-      const opts = this._entities.map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
+      // [SWAT-06] com várias empresas, só as entidades da empresa das linhas com esse valor.
+      const lista = this._entidadesParaValorAntigo(oldValue);
+      if (!lista) {
+        return `<select class="input" id="${idAttr}" data-old="${escAttr(oldValue)}" disabled>
+                  <option value="">(linhas de várias empresas — edite por linha)</option>
+                </select>`;
+      }
+      const opts = lista.map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
       return `<select class="input" id="${idAttr}" data-old="${escAttr(oldValue)}">
                 <option value="">(manter)</option>${opts}
               </select>`;
@@ -6123,7 +6317,8 @@ const IdentifyTxn = {
       return `<select class="input" ${css} ${handler}>${opts}</select>`;
     }
     if (f.kind === 'entity') {
-      const opts = this._entities.map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
+      // [SWAT-06] entidades da empresa desta linha (com várias empresas na busca).
+      const opts = this._entidadesParaTxn(t).map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
       return `<select class="input" ${css} ${handler}>${opts}</select>`;
     }
     if (f.kind === 'security') {
@@ -6458,7 +6653,7 @@ const IdentifyTxn = {
       hideBusy();
     }
     Token.refresh();
-    ActionLog.registrar('i', {acao: 'Editar transações', empresa: ActionLog.empresaDe('i-company'),
+    ActionLog.registrar('i', {acao: 'Editar transações', empresa: this._rotuloEmpresas(),
       contagens: `${ok} editada(s), ${fail} falha(s)`, status: 'concluído', ok: !fail});   // [SWAT-01] era alert
     this._pendingEditPatches = null;
     this._edits = {};
@@ -6497,7 +6692,7 @@ const IdentifyTxn = {
       hideBusy();
     }
     Token.refresh();
-    ActionLog.registrar('i', {acao: 'Excluir transações', empresa: ActionLog.empresaDe('i-company'),
+    ActionLog.registrar('i', {acao: 'Excluir transações', empresa: this._rotuloEmpresas(),
       contagens: `${ok} excluída(s), ${fail} falha(s)`, status: 'concluído', ok: !fail});   // [SWAT-01] era alert
     const idSet = new Set(ids);
     const deletedCount = this._txns.filter(t => idSet.has(t.id)).length;
@@ -7885,14 +8080,9 @@ function makeDatesPipeline(cfg) {
     /* Contexto:
        `api()` com espera em 429 (SWAT-06: várias empresas em sequência batiam no limite de
        taxa — o log de 25/09 mostra 6 companies com 429). Retorna o mesmo {ok, status, body}.
-       Pseudocódigo: 1. Chama. 2. 429 -> espera 2 s, 4 s, 8 s e tenta de novo (até 3 vezes). */
+       Pseudocódigo: 1. Delega para apiComEspera429 (função comum desde 27/09). */
     async _apiComEspera(metodo, url, corpo) {
-      let r = await api(metodo, url, corpo);
-      for (let tentativa = 0; r.status === 429 && tentativa < 3; tentativa++) {
-        await new Promise(ok => setTimeout(ok, 2000 * (2 ** tentativa)));
-        r = await api(metodo, url, corpo);
-      }
-      return r;
+      return apiComEspera429(metodo, url, corpo);
     },
 
     /* Contexto: nome de uma empresa pelo <select> da ferramenta (rótulo das linhas). */
@@ -9954,6 +10144,56 @@ const FaixaPadrao = {
    seletores de carteira/agrupamento ficam desativados ("todas de cada empresa"). Com 0/1
    marcada, a ferramenta volta ao normal. (Transações: segunda etapa — esforço G.)
 ═════════════════════════════════════════════════════════════════════════════ */
+/* Contexto:
+   Monta o botão "várias empresas ▾" + a lista com "Todas" ao lado de um <select> de empresa.
+   Usado pelas 4 ferramentas por datas e por Transações [2026-09-27, SWAT-06: extraído do
+   instalador das 4 para Transações reaproveitar]. "Todas" = as opções do <select>, que já
+   respeitam o escopo do painel. Retorna {painel}.
+   Pseudocódigo:
+     1. Cria a caixa (botão, resumo #<px>-multi-resumo, painel) logo depois do <select>.
+     2. Clique no botão abre/fecha o painel (se podeAbrir()); clique fora dele fecha.
+     3. Marcar/desmarcar chama definir(ids) na ordem do <select>. */
+function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
+  const esc = (t) => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const caixa = document.createElement('div');
+  caixa.className = 'multi-empresas';
+  caixa.innerHTML = `<button type="button" class="multi-empresas-btn" id="${px}-multi-btn">várias empresas ▾</button>
+    <span class="multi-empresas-resumo" id="${px}-multi-resumo"></span>
+    <div class="multi-empresas-painel hidden" id="${px}-multi-painel"></div>`;
+  sel.insertAdjacentElement('afterend', caixa);
+  const painel = caixa.querySelector('.multi-empresas-painel');
+  const opcoes = () => Array.from(sel.options).filter(o => o.value);
+  const desenhar = () => {
+    const marcadas = new Set(obter());
+    const todas = opcoes().length > 0 && opcoes().every(o => marcadas.has(o.value));
+    painel.innerHTML = `<label class="me-todas"><input type="checkbox" data-todas ${todas ? 'checked' : ''}> <b>Todas</b> (${opcoes().length})</label>` +
+      opcoes().map(o => `<label><input type="checkbox" value="${esc(o.value)}" ${marcadas.has(o.value) ? 'checked' : ''}> ${esc(o.textContent)}</label>`).join('');
+  };
+  caixa.querySelector('.multi-empresas-btn').addEventListener('click', () => {
+    if (!podeAbrir()) return;
+    painel.classList.toggle('hidden');
+    if (!painel.classList.contains('hidden')) desenhar();
+  });
+  painel.addEventListener('change', (ev) => {
+    const alvo = ev.target;
+    let ids;
+    if (alvo.hasAttribute('data-todas')) {
+      ids = alvo.checked ? opcoes().map(o => o.value) : [];
+    } else {
+      const set = new Set(obter());
+      alvo.checked ? set.add(alvo.value) : set.delete(alvo.value);
+      ids = opcoes().map(o => o.value).filter(v => set.has(v));   // ordem do <select>
+    }
+    definir(ids);
+    desenhar();
+  });
+  // Clique fora fecha o painel (aberto, ele cobre os botões logo abaixo, como o Buscar).
+  document.addEventListener('click', (ev) => {
+    if (!painel.classList.contains('hidden') && !caixa.contains(ev.target)) painel.classList.add('hidden');
+  });
+  return {painel};
+}
+
 (function _instalarVariasEmpresas() {
   const ferramentas = [
     [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
@@ -9961,19 +10201,11 @@ const FaixaPadrao = {
     [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
     [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
   ];
-  const esc = (t) => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   for (const [obj, px] of ferramentas) {
     if (!obj) continue;
     const sel = document.getElementById(`${px}-company`);
     if (!sel) continue;
     obj._empresasMulti = [];
-    const caixa = document.createElement('div');
-    caixa.className = 'multi-empresas';
-    caixa.innerHTML = `<button type="button" class="multi-empresas-btn" id="${px}-multi-btn">várias empresas ▾</button>
-      <span class="multi-empresas-resumo" id="${px}-multi-resumo"></span>
-      <div class="multi-empresas-painel hidden" id="${px}-multi-painel"></div>`;
-    sel.insertAdjacentElement('afterend', caixa);
-    const painel = caixa.querySelector('.multi-empresas-painel');
     const opcoes = () => Array.from(sel.options).filter(o => o.value);
     // Seletores de carteira/agrupamento da view (menos a lista de datas específicas).
     const seletores = () => Array.from(document.querySelectorAll(
@@ -9995,27 +10227,10 @@ const FaixaPadrao = {
         ? `${ids.length} empresas — seletores de carteira/agrupamento desativados (todas de cada empresa)` : '';
       if (!multi && ids.length === 1 && sel.value !== ids[0]) { sel.value = ids[0]; obj.onCompanyChange(); }
     };
-    const desenhar = () => {
-      const marcadas = new Set(obj._empresasMulti);
-      const todas = opcoes().length > 0 && opcoes().every(o => marcadas.has(o.value));
-      painel.innerHTML = `<label class="me-todas"><input type="checkbox" data-todas ${todas ? 'checked' : ''}> <b>Todas</b> (${opcoes().length})</label>` +
-        opcoes().map(o => `<label><input type="checkbox" value="${esc(o.value)}" ${marcadas.has(o.value) ? 'checked' : ''}> ${esc(o.textContent)}</label>`).join('');
-    };
-    caixa.querySelector('.multi-empresas-btn').addEventListener('click', () => {
-      if (obj._running) return;
-      painel.classList.toggle('hidden');
-      if (!painel.classList.contains('hidden')) desenhar();
-    });
-    painel.addEventListener('change', (ev) => {
-      const alvo = ev.target;
-      if (alvo.hasAttribute('data-todas')) {
-        obj._empresasMulti = alvo.checked ? opcoes().map(o => o.value) : [];
-      } else {
-        const set = new Set(obj._empresasMulti);
-        alvo.checked ? set.add(alvo.value) : set.delete(alvo.value);
-        obj._empresasMulti = opcoes().map(o => o.value).filter(v => set.has(v));   // ordem do <select>
-      }
-      desenhar(); aplicar();
+    const {painel} = montarSeletorVariasEmpresas(sel, px, {
+      obter: () => obj._empresasMulti,
+      definir: (ids) => { obj._empresasMulti = ids; aplicar(); },
+      podeAbrir: () => !obj._running,
     });
     // Confirmação mostra as empresas.
     const confirmarOriginal = obj.confirm.bind(obj);
@@ -10035,6 +10250,31 @@ const FaixaPadrao = {
       return resetOriginal(...a);
     };
   }
+})();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-27, SWAT-06 — Transações, 2ª etapa] "várias empresas ▾" no Identificar Transações.
+   Mesmo painel das 4 ferramentas por datas (montarSeletorVariasEmpresas); quem aplica o estado
+   na tela é IdentifyTxn.aplicarVariasEmpresas(). Limpar volta para 1 empresa.
+═════════════════════════════════════════════════════════════════════════════ */
+(function _instalarVariasEmpresasTransacoes() {
+  const sel = document.getElementById('i-company');
+  if (!sel || typeof IdentifyTxn === 'undefined') return;
+  const {painel} = montarSeletorVariasEmpresas(sel, 'i', {
+    obter: () => IdentifyTxn._empresasMulti,
+    definir: (ids) => { IdentifyTxn._empresasMulti = ids; IdentifyTxn.aplicarVariasEmpresas(); },
+    podeAbrir: () => true,
+  });
+  const resetOriginal = IdentifyTxn.reset.bind(IdentifyTxn);
+  IdentifyTxn.reset = function (...a) {
+    const tinhaVarias = this._empresasMulti.length > 0;
+    this._empresasMulti = [];
+    this._colunaEmpresa = false;
+    painel.classList.add('hidden');
+    const retorno = resetOriginal(...a);
+    if (tinhaVarias) this.aplicarVariasEmpresas();
+    return retorno;
+  };
 })();
 
 const _initialView = location.hash.slice(1);
