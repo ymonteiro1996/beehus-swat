@@ -15,4 +15,4 @@ class BeehusAPIError(Exception):
 
 
 class BeehusAuthError(BeehusAPIError):
-    """Token missing, expired, or rejected (401/403)."""
+    """Token missing, expired, or rejected (401)."""

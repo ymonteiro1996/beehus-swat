@@ -16,6 +16,7 @@ re-paste when the token is still valid (e.g. a mid-day restart).
 import json
 import logging
 import os
+import random
 import threading
 import time
 from pathlib import Path
@@ -29,7 +30,7 @@ BASE_URL = "https://api.controladoria.beehus.com.br"
 DEFAULT_TIMEOUT = 30  # seconds
 
 _lock = threading.Lock()
-# `rejected`: set True whenever the upstream answers 401/403 (token missing on
+# `rejected`: set True whenever the upstream answers 401 (token missing on
 # the server side, expired, or wrong), cleared on the next 2xx and whenever a
 # new token is pasted/cleared. Lets the UI distinguish "server rejected this
 # token" from a locally-valid-looking JWT — the local `exp` decode can't.
@@ -46,6 +47,89 @@ _session = requests.Session()
 _adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
 _session.mount("https://", _adapter)
 _session.mount("http://", _adapter)
+
+# ── Freio compartilhado de rate limit (429) ──────────────────────────────────
+# [2026-09-28, relato do usuário: na Publicação da Blue3 a lista do dia voltava "falha ao consultar o
+# Beehus" logo depois de cada reinício] O Painel (tela inicial) conta as transações de todas as
+# empresas em paralelo ao subir e esgota o limite do Beehus; cada thread fazia o próprio backoff
+# (1+2+4+8+8 s ≈ 23 s) e desistia antes de a janela do limite (60 s) virar — e a lista da Publicação,
+# pedida nesse meio tempo, caía em 502. Agora (mesma ideia do cliente do ControleCargas):
+#   - quem toma 429 publica UMA pausa para o processo inteiro (ninguém sai antes dela acabar);
+#   - a espera é a que o Beehus pede: header Retry-After ou `retryAfterSeconds` do corpo JSON;
+#   - no máximo _MAX_SIMULTANEAS chamadas ao Beehus ao mesmo tempo no processo.
+_MAX_SIMULTANEAS = 6
+_TENTATIVAS_429 = 6
+_ESPERA_429_MAX_S = 65.0
+_limite_simultaneas = threading.BoundedSemaphore(_MAX_SIMULTANEAS)
+_pausa_lock = threading.Lock()
+_pausa_ate = 0.0   # time.monotonic() até quando ninguém deve chamar o Beehus
+
+
+def _esperar_pausa_global() -> None:
+    """Contexto: segura a chamada enquanto houver pausa de rate limit em vigor (publicada por
+    _publicar_pausa_429). Custa zero sem pausa. Não retorna nada."""
+    while True:
+        with _pausa_lock:
+            restante = _pausa_ate - time.monotonic()
+        if restante <= 0:
+            return
+        time.sleep(min(restante, 5.0))
+
+
+def _vaga_para_chamar() -> None:
+    """Contexto:
+    Pega uma das _MAX_SIMULTANEAS vagas para chamar o Beehus, respeitando a pausa de 429 — confere a
+    pausa de novo DEPOIS de pegar a vaga: quem estava na fila quando outra thread tomou 429 não sai
+    antes da pausa acabar (sem isso, a fila inteira ainda batia no limite). Quem chama libera a vaga
+    (_limite_simultaneas.release()). Não retorna nada.
+
+    Pseudocódigo: 1. Espera a pausa. 2. Pega a vaga. 3. Pausa nova no meio tempo -> devolve e repete.
+    """
+    while True:
+        _esperar_pausa_global()
+        _limite_simultaneas.acquire()
+        with _pausa_lock:
+            livre = _pausa_ate <= time.monotonic()
+        if livre:
+            return
+        _limite_simultaneas.release()
+
+
+def _segundos_de_espera_429(r, tentativa: int) -> float:
+    """Contexto:
+    Quanto esperar depois de um 429. Retorna segundos.
+
+    Pseudocódigo:
+      1. Header Retry-After (segundos) válido -> ele.
+      2. Corpo JSON com retryAfterSeconds -> ele (o Beehus manda assim: sem header).
+      3. Senão, backoff exponencial 1, 2, 4, 8, 16 s.
+      4. Sempre entre 0,5 s e _ESPERA_429_MAX_S, com um jitter de até 20% (as threads não voltam juntas).
+    """
+    espera = None
+    try:
+        ra = r.headers.get("Retry-After")
+        espera = float(ra) if ra else None
+    except (TypeError, ValueError):
+        espera = None
+    if espera is None:
+        try:
+            corpo = r.json()
+            if isinstance(corpo, dict) and corpo.get("retryAfterSeconds") is not None:
+                espera = float(corpo["retryAfterSeconds"])
+        except (TypeError, ValueError):
+            espera = None
+    if espera is None:
+        espera = float(2 ** (tentativa - 1))
+    espera = max(0.5, min(espera, _ESPERA_429_MAX_S))
+    return espera * (1.0 + random.random() * 0.2)
+
+
+def _publicar_pausa_429(segundos: float) -> None:
+    """Contexto: publica a pausa de rate limit para o processo inteiro (fica a mais longa). Não
+    retorna nada."""
+    global _pausa_ate
+    with _pausa_lock:
+        _pausa_ate = max(_pausa_ate, time.monotonic() + segundos)
 
 _log = logging.getLogger(__name__)
 
@@ -207,7 +291,7 @@ def token_status() -> dict:
         "age_seconds": (time.time() - set_at) if set_at else None,
         "exp": exp,
         "expired": expired,
-        # True when the upstream last answered 401/403 — catches a token the
+        # True when the upstream last answered 401 — catches a token the
         # server rejects even though its local `exp` still looks valid.
         "rejected": bool(_state.get("rejected")),
     }
@@ -217,7 +301,7 @@ def verify_token() -> None:
     """Probe the API with the current token via a cheap authenticated GET.
 
     Returns None on success; raises BeehusAuthError if the token is missing or
-    rejected (401/403), or BeehusAPIError on any other upstream failure. Used by
+    rejected (401), or BeehusAPIError on any other upstream failure. Used by
     the token-save route to validate a pasted token immediately instead of
     letting later page reads fail silently."""
     request("GET", "/beehus/partners/companies")
@@ -236,10 +320,36 @@ def _headers(*, json_body: bool = True) -> dict:
     return h
 
 
+# [2026-09-27, achado A7 — decisão do usuário: "trate o 429 limite excedido como token rejeitado"]
+# Sem token, ou com token inválido/vencido, a API cai num balde ANÔNIMO de 20 req/min e, quando ele
+# esgota, responde 429 {"userType": "default", "retryAfterSeconds": 60, ...} em vez de 401. Retentar
+# isso só prendia a tela ~60 s em "Validando token..." e o pop-up de token nunca abria. Só ESSE 429 vira
+# token rejeitado: o 429 de token válido (rate limit real, comum num Atualizar grande) segue com retry.
+_USER_TYPE_LIMITE_ANONIMO = "default"
+
+
+def _e_limite_anonimo(r) -> bool:
+    """Contexto: a resposta é o 429 do balde anônimo (token ausente/inválido)? Usada por request() e
+    request_multipart() para tratá-la como token rejeitado, sem retry. Retorna bool.
+
+    Pseudocódigo:
+      1. Status diferente de 429 -> False.
+      2. Corpo JSON com userType == "default" -> True; corpo ilegível ou outro userType -> False.
+    """
+    if r.status_code != 429:
+        return False
+    try:
+        corpo = r.json()
+    except ValueError:
+        return False
+    return isinstance(corpo, dict) and corpo.get("userType") == _USER_TYPE_LIMITE_ANONIMO
+
+
 def request(method: str, path: str, *, json=None, params=None, timeout: int | None = None):
     """Send a request to the Beehus API and return the parsed JSON body.
 
-    Raises BeehusAuthError on 401/403, BeehusAPIError on any other non-2xx.
+    Raises BeehusAuthError on 401 (and on the anonymous-bucket 429, A7), BeehusAPIError on any
+    other non-2xx.
     """
     url = f"{BASE_URL}{path}"
     # Retry on 429 (rate limit) with backoff — the bulk warm of the navPackages
@@ -248,16 +358,20 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
     attempt = 0
     while True:
         attempt += 1
+        _vaga_para_chamar()   # [2026-09-28] pausa de 429 compartilhada + teto de simultâneas
         _t0 = time.monotonic() if _timing_on else None
         try:
-            r = _session.request(
-                method,
-                url,
-                headers=_headers(),
-                json=json,
-                params=params,
-                timeout=timeout or DEFAULT_TIMEOUT,
-            )
+            try:
+                r = _session.request(
+                    method,
+                    url,
+                    headers=_headers(),
+                    json=json,
+                    params=params,
+                    timeout=timeout or DEFAULT_TIMEOUT,
+                )
+            finally:
+                _limite_simultaneas.release()
         except requests.RequestException as e:
             if _timing_on:
                 _record_timing(method, path, params, "ERR",
@@ -266,17 +380,17 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
         if _timing_on:
             _record_timing(method, path, params, r.status_code,
                            (time.monotonic() - _t0) * 1000.0)
-        if r.status_code == 429 and attempt <= 5:
-            ra = r.headers.get("Retry-After")
-            try:
-                delay = float(ra) if ra else min(0.5 * (2 ** attempt), 8.0)
-            except (TypeError, ValueError):
-                delay = min(0.5 * (2 ** attempt), 8.0)
-            time.sleep(delay)
+        if r.status_code == 429 and attempt <= _TENTATIVAS_429 and not _e_limite_anonimo(r):   # [A7]
+            # [2026-09-28] espera a que o Beehus pedir e para TODAS as threads (ver bloco do freio).
+            _publicar_pausa_429(_segundos_de_espera_429(r, attempt))
             continue
         break
 
-    if r.status_code in (401, 403):
+    # [2026-09-25, TRV-01] 401 é token rejeitado. Medido contra a API: token com
+    # assinatura inválida, ausente ou lixo -> 401. 403 é falta de PERMISSÃO — tratá-lo
+    # como token vencido abriria o pop-up "cole um token novo" à toa.
+    # [2026-09-27, A7] ...e o 429 do balde anônimo também (ver _e_limite_anonimo).
+    if r.status_code == 401 or _e_limite_anonimo(r):
         _state["rejected"] = True  # atomic dict set under the GIL
         raise BeehusAuthError(
             f"Token rejected ({r.status_code}). Re-paste today's token on /beehus.",
@@ -308,6 +422,7 @@ def request_multipart(method: str, path: str, *, files, data=None,
     Content-Type header so `requests` can fill in the multipart boundary.
     """
     url = f"{BASE_URL}{path}"
+    _esperar_pausa_global()   # [2026-09-28] respeita a pausa de 429 compartilhada
     _t0 = time.monotonic() if _timing_on else None
     try:
         r = _session.request(
@@ -328,7 +443,11 @@ def request_multipart(method: str, path: str, *, files, data=None,
         _record_timing(method, path, params, r.status_code,
                        (time.monotonic() - _t0) * 1000.0)
 
-    if r.status_code in (401, 403):
+    # [2026-09-25, TRV-01] 401 é token rejeitado. Medido contra a API: token com
+    # assinatura inválida, ausente ou lixo -> 401. 403 é falta de PERMISSÃO — tratá-lo
+    # como token vencido abriria o pop-up "cole um token novo" à toa.
+    # [2026-09-27, A7] ...e o 429 do balde anônimo também (ver _e_limite_anonimo).
+    if r.status_code == 401 or _e_limite_anonimo(r):
         _state["rejected"] = True  # atomic dict set under the GIL
         raise BeehusAuthError(
             f"Token rejected ({r.status_code}). Re-paste today's token on /beehus.",

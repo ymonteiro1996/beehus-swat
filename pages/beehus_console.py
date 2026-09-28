@@ -78,6 +78,7 @@ from beehus_api import (
     verify_token,
 )
 from db import (
+    today_in_brt,
     atomic_write_json,
     biz_days_between,
     business_days_before,
@@ -111,6 +112,8 @@ def _api_error_response(e: BeehusAPIError):
         "error": str(e),
         "upstream_status": e.status,
         "upstream_body": e.body,
+        # [TRV-01] código estável p/ o front reconhecer token vencido sem depender do texto.
+        **({"error_code": "BEEHUS_TOKEN_EXPIRED"} if isinstance(e, BeehusAuthError) else {}),
     }), status
 
 
@@ -184,7 +187,7 @@ def token_set():
         verify_token()
     except BeehusAuthError as e:
         return jsonify({
-            "error": "Token rejeitado pela API (401/403). Verifique se copiou o token de hoje por completo.",
+            "error": "Token rejeitado pela API (401). Verifique se copiou o token de hoje por completo.",
             "upstream_status": e.status,
         }), 401
     except BeehusAPIError as e:
@@ -207,7 +210,7 @@ def _companies_empty_reason():
 
     Sonda `list_companies()` direto (sem cache) — só no caminho vazio, então não
     pesa no fluxo normal — para distinguir token ausente/expirado
-    (`BeehusAuthError`, levantado tanto sem token quanto em 401/403) de falha de
+    (`BeehusAuthError`, levantado tanto sem token quanto em 401) de falha de
     rede (`BeehusAPIError`) ou de uma resposta legitimamente vazia."""
     from beehus_api import list_companies
     try:
@@ -329,13 +332,18 @@ def _resultados_nav_ou_erro(company_id, position_date):
     429, timeout), e a tela mostrava "nenhum agrupamento" — igual a quando já
     está tudo publicado. Retorna (resultados, None) ou (None, resposta_de_erro).
 
+    [2026-09-28] Passa por beehus_catalog.nav_results_leitura (cache curto + no máximo 3 consultas
+    simultâneas): ao abrir, a tela pede o Δ de ~30 dias e estourava o limite de requisições do
+    Beehus (429 -> 502 na lista do dia). Só para as rotas de LEITURA — a trava de publicação
+    (nav_publish) continua lendo o /results ao vivo.
+
     Pseudocódigo:
-      1. Chama get_nav_results direto.
+      1. Busca pelo cache de leitura (que não engole erro).
       2. BeehusAPIError -> (None, 401/502 com a causa).
       3. Resposta que não é dict -> {} (sem dados, não é erro).
     """
     try:
-        resultados = get_nav_results(company_id=company_id, position_date=position_date)
+        resultados = beehus_catalog.nav_results_leitura(company_id, position_date)
     except BeehusAPIError as e:
         return None, _api_error_response(e)
     return (resultados if isinstance(resultados, dict) else {}), None
@@ -633,6 +641,11 @@ _TXN_PATCHABLE = {
 }
 
 
+# [2026-09-27, achado A6] tipos que existem em transações antigas (a busca/filtro aceita) mas que a
+# API recusa ao gravar. Ver transactions_patch.
+_TIPOS_NAO_GRAVAVEIS_EM_TRANSACAO = {"other"}
+
+
 @bp.route("/api/beehus/transactions/<txn_id>", methods=["PATCH"])
 def transactions_patch(txn_id):
     """Forward a partial PATCH to the upstream Beehus API.
@@ -645,6 +658,12 @@ def transactions_patch(txn_id):
     patch = {k: v for k, v in data.items() if k in _TXN_PATCHABLE}
     if not patch:
         return jsonify({"error": "no patchable fields in body"}), 400
+    # [2026-09-27, achado A6] A API Beehus recusa `other` em beehusTransactionType (POST e PATCH de
+    # transação — 400 "aceita apenas um dos valores da lista", confirmado por sonda sem efeito colateral).
+    # Transações ANTIGAS ainda têm `other` (leitura/filtro seguem aceitando); provisões aceitam.
+    # Sem isto, uma sugestão `other` do classificador virava 400 cru do upstream no Implementar.
+    if patch.get("beehusTransactionType") in _TIPOS_NAO_GRAVAVEIS_EM_TRANSACAO:
+        return jsonify({"error": f"a API Beehus não aceita mais o tipo '{patch['beehusTransactionType']}' em transação — escolha outro tipo"}), 400
 
     try:
         result = update_transaction(txn_id, patch)
@@ -974,6 +993,107 @@ def _run_publish_in_chunks(fn, *, company_id, position_date, grouping_ids):
     }
 
 
+# [2026-09-28, relato do usuário: "lentidão para publicar o dia 17"] Isolar recusados dividindo o lote
+# ao meio custa até ~2 chamadas por agrupamento quando o Beehus recusa MUITOS (ou todos) — e cada
+# falha dele leva 3–6 s. Teto de chamadas que falham por dia: passou dele, a falha é tratada como GERAL
+# (o Beehus está recusando o dia, não 1 ou 2 agrupamentos) e o resto não é tentado.
+_ISOLAMENTO_MAX_FALHAS_POR_DIA = 20   # ~6 falhas isolam 1 agrupamento ruim num lote de 50: cobre 3
+
+
+class _FalhaGeralDePublicacao(Exception):
+    """Contexto: o teto de falhas do isolamento estourou — o Beehus está recusando o dia inteiro.
+    Carrega a última BeehusAPIError."""
+    def __init__(self, erro):
+        super().__init__(str(erro))
+        self.erro = erro
+
+
+def _publicar_lote_isolando_recusas(fn, company_id, position_date, componentes, contador):
+    """Contexto:
+    [2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com
+    "PATCH .../publish failed: 500"] Desde o SWAT-05 o swat manda a LISTA EXPLÍCITA dos agrupamentos
+    liberados pela trava (antes, com a seleção vazia, mandava [] e o próprio Beehus escolhia). Um
+    agrupamento que o Beehus não consegue publicar derruba o lote inteiro (500). Aqui o lote que falha
+    é dividido ao meio e tentado de novo, até isolar os recusados; os demais são publicados.
+    [2026-09-28, mesmo dia] O lote é uma lista de COMPONENTES (agrupamentos ligados por carteira
+    compartilhada — publicacao_divergencia.lotes_por_carteira_compartilhada): a divisão ao meio nunca
+    separa um componente, porque o Beehus recusa parceiro de carteira fora da chamada.
+    `contador` = {"falhas": n} do DIA inteiro: passou de _ISOLAMENTO_MAX_FALHAS_POR_DIA -> levanta
+    _FalhaGeralDePublicacao (o Beehus recusa o dia, isolar não adianta). Retorna (publicados,
+    recusados) — recusados = [{groupingId, upstream_status, erro}]. BeehusAuthError sobe direto.
+
+    Pseudocódigo:
+      1. Tenta publicar o lote inteiro; deu certo -> todos publicados.
+      2. Token rejeitado -> relança (nada a isolar).
+      3. Conta a falha; passou do teto -> falha geral.
+      4. 1 componente só -> os agrupamentos dele são os recusados; mais de 1 -> divide os componentes
+         ao meio e repete em cada metade.
+    """
+    lote = [g for componente in componentes for g in componente]
+    try:
+        fn(company_id=company_id, position_date=position_date, grouping_ids=lote)
+        return list(lote), []
+    except BeehusAuthError:
+        raise
+    except BeehusAPIError as e:
+        contador["falhas"] += 1
+        if contador["falhas"] > _ISOLAMENTO_MAX_FALHAS_POR_DIA:
+            raise _FalhaGeralDePublicacao(e)
+        if len(componentes) == 1:
+            return [], [{"groupingId": g, "upstream_status": e.status,
+                         "erro": (e.body or str(e) or "")[:300]} for g in lote]
+        meio = len(componentes) // 2
+        pub_a, rec_a = _publicar_lote_isolando_recusas(fn, company_id, position_date, componentes[:meio], contador)
+        pub_b, rec_b = _publicar_lote_isolando_recusas(fn, company_id, position_date, componentes[meio:], contador)
+        return pub_a + pub_b, rec_a + rec_b
+
+
+def _publicar_isolando_recusas(fn, *, company_id, position_date, grouping_ids, lotes=None):
+    """Contexto:
+    Publica `grouping_ids` em lotes de `_PUBLISH_CHUNK_SIZE`, isolando os agrupamentos que o Beehus
+    recusa (_publicar_lote_isolando_recusas) em vez de parar no 1º lote que falha — usado só pela
+    PUBLICAÇÃO (a despublicação segue em _run_publish_in_chunks). Escreve 1 linha de progresso no log
+    por lote. Retorna o resumo + `publishedIds` (os que o Beehus aceitou), `recusados` e, na falha
+    geral, `naoTentados`/`falhaGeral`.
+
+    Pseudocódigo:
+      1. Para cada lote: publica isolando recusas e loga o andamento.
+      2. Token rejeitado -> interrompe e devolve até ali (401).
+      3. Teto de falhas estourado -> interrompe: o que sobrou vai para `naoTentados` (falha geral).
+      4. ok = nenhum recusado e nenhuma falha geral.
+    """
+    log = logging.getLogger(__name__)
+    # `lotes` = [lote] com lote = [componente] (lotes_por_carteira_compartilhada); sem ele, 1 agrupamento
+    # por componente em fatias de _PUBLISH_CHUNK_SIZE (comportamento anterior).
+    if lotes is None:
+        lotes = [[[g] for g in grouping_ids[i:i + _PUBLISH_CHUNK_SIZE]]
+                 for i in range(0, len(grouping_ids), _PUBLISH_CHUNK_SIZE)]
+    publicados, recusados, contador = [], [], {"falhas": 0}
+    base = {"totalGroupings": len(grouping_ids), "chunkSize": _PUBLISH_CHUNK_SIZE, "chunkCount": len(lotes)}
+    for idx, lote in enumerate(lotes):
+        try:
+            pub, rec = _publicar_lote_isolando_recusas(fn, company_id, position_date, lote, contador)
+        except BeehusAuthError as e:
+            return {**base, "ok": False, "chunksSucceeded": idx, "failedChunkIndex": idx,
+                    "error": str(e), "upstream_status": e.status, "upstream_body": e.body,
+                    "publishedIds": publicados, "recusados": recusados}
+        except _FalhaGeralDePublicacao as falha:
+            ja = set(publicados) | {r["groupingId"] for r in recusados}
+            nao_tentados = [g for g in grouping_ids if g not in ja]
+            log.warning("[publicação] %s %s: FALHA GERAL do Beehus depois de %d chamadas recusadas — %d publicado(s), "
+                        "%d não tentado(s). Última resposta: %s %s", company_id, position_date, contador["falhas"],
+                        len(publicados), len(nao_tentados), falha.erro.status, (falha.erro.body or str(falha.erro))[:300])
+            return {**base, "ok": False, "falhaGeral": True, "chunksSucceeded": idx, "failedChunkIndex": idx,
+                    "error": str(falha.erro), "upstream_status": falha.erro.status, "upstream_body": falha.erro.body,
+                    "publishedIds": publicados, "recusados": recusados, "naoTentados": nao_tentados}
+        publicados += pub
+        recusados += rec
+        log.warning("[publicação] %s %s: lote %d/%d — %d publicado(s), %d recusado(s) (falhas no dia: %d)",
+                    company_id, position_date, idx + 1, len(lotes), len(pub), len(rec), contador["falhas"])
+    return {**base, "ok": not recusados, "chunksSucceeded": len(lotes),
+            "publishedIds": publicados, "recusados": recusados}
+
+
 @bp.route("/api/beehus/nav/publish", methods=["POST"])
 def nav_publish():
     """Publish NAV-contribution results for the listed groupings.
@@ -1060,25 +1180,53 @@ def nav_publish():
             "[publicação] %s %s: %d bloqueado(s) pela trava |Δ| (agrupamento %.6f, carteira %.6f): %s",
             company_id, position_date, len(bloqueados), limites["agrupamento"][0], limites["carteira"][0],
             ", ".join(f"{b['groupingId']}:{b['motivo']}/{b['entidade']}" for b in bloqueados))
+    # [2026-09-28] O Beehus só publica um agrupamento com TODOS os parceiros de carteira não publicados
+    # na mesma chamada: quem compartilha carteira com um bloqueado (ou fora da seleção) fica retido e
+    # aparece na linha do dia; os lotes nunca separam parceiros (publicacao_divergencia).
+    liberados, retidos = publicacao_divergencia.reter_por_carteira_compartilhada(
+        liberados, resultados, gindex, position_date, get_wallet_names())
+    if retidos:
+        logging.getLogger(__name__).warning(
+            "[publicação] %s %s: %d retido(s) por carteira compartilhada com agrupamento fora da publicação",
+            company_id, position_date, len(retidos))
+    bloqueados = bloqueados + retidos
     if not liberados:
         return jsonify(_resumo_publicacao_vazio(limites, bloqueados)), 200
 
-    summary = _run_publish_in_chunks(
+    # [2026-09-28] Isola os agrupamentos que o Beehus recusa em vez de parar no 1º lote que falha
+    # (ver _publicar_lote_isolando_recusas). Só vão ao Beehus os `liberados` pela trava |Δ|.
+    summary = _publicar_isolando_recusas(
         publish_nav,
         company_id=company_id,
         position_date=position_date,
         grouping_ids=liberados,
+        lotes=publicacao_divergencia.lotes_por_carteira_compartilhada(
+            liberados, resultados, gindex, position_date, _PUBLISH_CHUNK_SIZE),
     )
-    summary.update(publishedIds=liberados, blocked=bloqueados, **_campos_dos_limites(limites))
-    # Mesmo em sucesso parcial, chunks publicados mudaram o estado `published`
+    for recusado in summary.get("recusados") or []:
+        recusado["nome"] = (gindex.get(recusado["groupingId"]) or {}).get("name", "") or recusado["groupingId"]
+    if summary.get("recusados"):
+        logging.getLogger(__name__).warning(
+            "[publicação] %s %s: %d recusado(s) pelo Beehus: %s", company_id, position_date,
+            len(summary["recusados"]), "; ".join(f"{r['groupingId']}: {r['upstream_status']} {r['erro'][:120]}"
+                                                for r in summary["recusados"]))
+    summary.update(blocked=bloqueados, **_campos_dos_limites(limites))
+    # Mesmo em sucesso parcial, lotes publicados mudaram o estado `published`
     # → invalida o cache (filtros de publicação leem de nav_packages).
     beehus_catalog.invalidate_nav(company_id)
-    if summary["ok"]:
-        return jsonify(summary), 200
-    # Match the rest of the routes: 401 for auth errors, 502 for upstream
-    # failures. The chunk summary preserves upstream_status/body for the log.
-    code = 401 if summary.get("upstream_status") == 401 else 502
-    return jsonify(summary), code
+    if summary.get("upstream_status") == 401:
+        return jsonify(summary), 401
+    if summary.get("falhaGeral"):
+        corpo = (summary.get("upstream_body") or "")[:200]
+        summary["error"] = (f"o Beehus recusou a publicação deste dia ({len(summary['publishedIds'])} publicado(s) antes; "
+                            f"{len(summary['naoTentados'])} não tentado(s)) — HTTP {summary.get('upstream_status')}: {corpo}")
+        return jsonify(summary), 502
+    if summary["publishedIds"] or summary["ok"]:
+        return jsonify(summary), 200   # sucesso parcial: a tela lista os recusados na linha do dia
+    primeiro = (summary.get("recusados") or [{}])[0]
+    summary["error"] = f"o Beehus recusou todos os {len(liberados)} agrupamento(s) liberados — ex.: {primeiro.get('erro', '')[:200]}"
+    summary["upstream_status"] = primeiro.get("upstream_status")
+    return jsonify(summary), 502
 
 
 def _limites_da_requisicao(data):
@@ -3127,6 +3275,24 @@ def util_parse_strings_excel():
                 values.append(s)
 
     return jsonify({"values": values, "count": len(values)})
+
+
+@bp.route("/api/beehus/util/default-range")
+def util_default_range():
+    """Contexto:
+    [2026-09-25, SWAT-08, pedido do usuário: "Trazer as datas preenchidas na seleção faixa,
+    default data inicial como D-7 e data final como D-1"] Faixa padrão dos executores por
+    datas (Processar, NAV Wallets, NAV Groupings, Publicação, Transações), em DIAS ÚTEIS ANBIMA
+    (D4 do escopo) — o front só conhece segunda a sexta. Retorna {ini, fin, hoje} (AAAA-MM-DD).
+
+    Pseudocódigo:
+      1. Hoje em BRT.
+      2. ini = hoje − 7 du; fin = hoje − 1 du (wallet_scope.deslocar_du, calendário ANBIMA).
+    """
+    hoje = today_in_brt().isoformat()
+    return jsonify({"ini": wallet_scope.deslocar_du(hoje, -7),
+                    "fin": wallet_scope.deslocar_du(hoje, -1),
+                    "hoje": hoje})
 
 
 @bp.route("/api/beehus/util/parse-dates-excel", methods=["POST"])

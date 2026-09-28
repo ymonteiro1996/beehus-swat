@@ -119,16 +119,40 @@
   html.dark .day-grid .day-date { color: #d1d5db; }
   .day-grid .step-row  { display: inline-flex; gap: 0.4rem; }
   .day-grid .step-row .step-icon { font-size: 0.75rem; }
+  /* SWAT-06: várias empresas. */
+  .multi-empresas { margin-top: 0.25rem; font-size: 0.6875rem; position: relative; }
+  .multi-empresas-btn { color: #2563eb; text-decoration: underline; }
+  .multi-empresas-resumo { color: #92400e; margin-left: 0.4rem; }
+  .multi-empresas-painel { position: absolute; z-index: 30; background: #fff; border: 1px solid #d1d5db; border-radius: 0.5rem;
+                           padding: 0.4rem 0.6rem; max-height: 260px; overflow-y: auto; min-width: 260px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .multi-empresas-painel label { display: block; padding: 0.1rem 0; white-space: nowrap; }
+  .multi-empresas-painel .me-todas { border-bottom: 1px solid #e5e7eb; margin-bottom: 0.2rem; }
+  html.dark .multi-empresas-painel { background: #1f2937; border-color: #374151; }
+  .multi-desativado { opacity: 0.45; pointer-events: none; }
+  /* SWAT-01: log de negócio por ferramenta (ActionLog), abaixo do botão Executar. */
+  .action-log { margin-top: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.6875rem; max-height: 220px; overflow-y: auto; }
+  .action-log ul { margin: 0.25rem 0 0; }
+  .action-log li { padding: 0.15rem 0; border-top: 1px dashed #f3f4f6; }
+  .action-log li:first-child { border-top: 0; }
+  .action-log .al-hora { font-family: ui-monospace, Consolas, monospace; color: #6b7280; margin-right: 0.35rem; }
+  .action-log .al-falha { color: #b91c1c; }
+  .action-log-cab { display: flex; justify-content: space-between; color: #6b7280; }
+  .action-log-limpar { color: #2563eb; text-decoration: underline; }
+  html.dark .action-log { border-color: #374151; }
+  html.dark .action-log li { border-color: #374151; }
+  html.dark .action-log .al-falha { color: #fca5a5; }
   /* SWAT-05: bloqueados pela trava |Δ| do servidor, embaixo da linha do dia. */
   .day-grid .day-blocked { grid-column: 1 / -1; color: #991b1b; }
   .day-grid .day-blocked summary { cursor: pointer; }
   .day-grid .day-blocked ul { margin: 0.25rem 0 0.25rem 1rem; list-style: disc; }
   html.dark .day-grid .day-blocked { color: #fca5a5; }
   .table-wrap   { max-height: 50vh; overflow: auto; }
-  /* The Identificar Transações result table is the page's main work surface
-     once a search returns rows; let it consume the rest of the viewport so
-     the operator scrolls the table, not the page. */
-  #i-result .table-wrap { max-height: calc(100vh - 240px); }
+  /* [2026-09-25, SWAT-09, pedido do usuário: "há um Scroll bar dentro de outro Scroll bar… ficar
+     apenas no Scroll bar da tela"] A tabela de Transações não tem mais rolagem vertical própria:
+     só a horizontal fica na tabela e a vertical é a da página (mesmo modelo de Issues/Strip no
+     Painel). Antes: max-height calc(100vh - 240px) + a página do iframe passando da altura
+     fixa do #tool-view = duas barras. Efeito aceito: o cabeçalho deixa de grudar ao rolar. */
+  #i-result .table-wrap { max-height: none; overflow-x: auto; overflow-y: visible; }
   table.txn-table { width: 100%; border-collapse: collapse; font-size: 0.6875rem; }
   table.txn-table th, table.txn-table td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #e5e7eb; text-align: left; }
   html.dark table.txn-table th, html.dark table.txn-table td { border-color: #374151; }
@@ -1344,15 +1368,15 @@
           </div>
         </div>
 
-        <!-- Aviso do lote de 500 — visível apenas em modo "faixa" (toggled em
+        <!-- Aviso do lote de 250 — visível apenas em modo "faixa" (toggled em
              onModeChange). A faixa pode cobrir milhares de transações; a
              busca sempre carrega no máximo BATCH_LIMIT por vez. -->
         <div id="i-range-cap-note" class="hidden mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
           <div class="text-[11px] font-semibold text-amber-800 mb-1">
-            Faixa de datas — carga em lotes de 500
+            Faixa de datas — carga em lotes de 250
           </div>
           <div class="text-[11px] text-amber-700 leading-relaxed">
-            O intervalo selecionado pode retornar até <strong>500 transações por vez</strong>,
+            O intervalo selecionado pode retornar até <strong>250 transações por vez</strong>,
             começando pelas mais antigas. Se houver mais pendências na faixa, elas entram no
             lote seguinte conforme você for identificando e implementando as atuais.
           </div>
@@ -1488,7 +1512,7 @@
     <section id="i-result" class="section-card mt-3 hidden">
       <!-- Aviso de lote pendente. Preenchido por _renderBatchNotice() quando o
            backend reporta hasMore (mais transações no range além deste lote
-           de 500). Mesmo padrão visual do aviso de faixa acima. -->
+           de 250). Mesmo padrão visual do aviso de faixa acima. -->
       <div id="i-batch-warning" class="hidden mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
         <div class="text-[11px] font-semibold text-amber-800 mb-1">
           Mais transações pendentes nesta faixa
@@ -1623,6 +1647,7 @@
               <th style="width:28px"><input id="i-select-all" type="checkbox" checked onchange="IdentifyTxn.toggleAll(this.checked)" /></th>
               <th>Data liquid.</th>
               <th>Wallet</th>
+              <th id="i-th-empresa" class="hidden">Empresa</th>
               <th>Entity</th>
               <th>Tipo atual</th>
               <th>Tipo sugerido</th>
@@ -1645,7 +1670,7 @@
   </div>
 
   <!-- ─── Modal: Identificar Transações — Editar tipo ───────────────────────── -->
-  <div id="i-type-edit-modal" class="modal-overlay" onclick="if(event.target===this) IdentifyTxn.closeTypeEdit()">
+  <div id="i-type-edit-modal" class="modal-overlay"><!-- TRV-02/D12: só Fechar/Esc -->
     <div class="modal-card" style="width: min(640px, 90vw); max-height: 80vh">
       <div class="px-5 py-4 border-b flex items-center justify-between">
         <h3 class="font-semibold text-sm text-gray-700">Editar tipo</h3>
@@ -1658,7 +1683,7 @@
   </div>
 
   <!-- ─── Modal: Identificar Transações — Editar / escolher security ───────── -->
-  <div id="i-sec-edit-modal" class="modal-overlay" onclick="if(event.target===this) IdentifyTxn.closeSecEdit()">
+  <div id="i-sec-edit-modal" class="modal-overlay"><!-- TRV-02/D12: só Fechar/Esc -->
     <div class="modal-card" style="width: min(960px, 95vw); max-height: 92vh">
       <div class="px-5 py-4 border-b flex items-center justify-between">
         <h3 class="font-semibold text-sm text-gray-700">Editar security</h3>
@@ -2688,7 +2713,8 @@
 </div>
 
 <!-- ─── Modal: Bearer Token ────────────────────────────────────────────────── -->
-<div id="token-modal" class="modal-overlay" onclick="if(event.target===this) Token.close()">
+<!-- TRV-02/D12: não fecha com clique no fundo — só botão Fechar/Cancelar ou Esc. -->
+<div id="token-modal" class="modal-overlay">
   <div class="modal-card" style="width: min(640px, 90vw)">
     <div class="px-5 py-3 border-b flex items-center justify-between">
       <h3 class="font-semibold text-sm text-gray-700">Bearer Token (diário)</h3>
@@ -2701,7 +2727,7 @@
         outras páginas que importem o pacote.
       </p>
       <div class="flex gap-2">
-        <input id="token-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..."
+        <input id="token-input" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs..."
                class="input flex-1 font-mono" />
         <button onclick="Token.save()"  class="btn btn-primary">Salvar</button>
         <button onclick="Token.clear()" class="btn btn-muted">Limpar</button>
@@ -2750,8 +2776,7 @@
 </div>
 
 <!-- Modal: configurar edição — mapeamento de valores (tela unificada) -->
-<div id="i-edit-field-modal" class="modal-overlay"
-     onclick="if(event.target===this) IdentifyTxn.cancelEditField()">
+<div id="i-edit-field-modal" class="modal-overlay"><!-- TRV-02/D12: só Cancelar/Esc -->
   <div class="modal-card" style="width: min(720px, 92vw)">
     <div class="px-5 py-4 border-b">
       <h3 class="font-semibold text-sm text-gray-700">
@@ -3100,15 +3125,31 @@ async function api(method, path, body) {
   }
 }
 
+/* Contexto:
+   `api()` com espera em 429 — várias empresas em sequência batem no limite de taxa (o log de
+   25/09 mostra 6 companies com 429). Usada pelos executores por datas e pela busca de Transações
+   com várias empresas [2026-09-27, SWAT-06: saiu de dentro da fábrica para as duas usarem].
+   Retorna o mesmo {ok, status, body} de api().
+   Pseudocódigo: 1. Chama. 2. 429 -> espera 2 s, 4 s, 8 s e tenta de novo (até 3 vezes). */
+async function apiComEspera429(metodo, url, corpo) {
+  let r = await api(metodo, url, corpo);
+  for (let tentativa = 0; r.status === 429 && tentativa < 3; tentativa++) {
+    await new Promise(ok => setTimeout(ok, 2000 * (2 ** tentativa)));
+    r = await api(metodo, url, corpo);
+  }
+  return r;
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    Token section
 ═════════════════════════════════════════════════════════════════════════════ */
 const Token = {
   open()  {
+    document.getElementById('token-input').value = '';   // [TRV-03] sempre abre vazio
     document.getElementById('token-modal').classList.add('show');
     setTimeout(() => document.getElementById('token-input').focus(), 0);
   },
-  close() { document.getElementById('token-modal').classList.remove('show'); },
+  close() { document.getElementById('token-input').value = ''; document.getElementById('token-modal').classList.remove('show'); },   // [TRV-03] limpa ao fechar
 
   async refresh() {
     const r = await api('GET', '/api/beehus/token');
@@ -3140,6 +3181,17 @@ const Token = {
     this.refresh();
   },
 };
+// [2026-09-25, TRV-01] Página aberta FORA do shell (janela de cima): o beehus_token_guard.js
+// abre ESTE modal quando uma resposta vem com X-Beehus-Token: expired. Dentro do shell, quem
+// abre é o modal do shell. Campo sempre vazio; fechar liga a espera de 20 s (anti-loop).
+if (window.top === window && window.BeehusTokenGuard && document.getElementById('token-modal')) {
+  const _fecharTokenOriginal = Token.close.bind(Token);
+  Token.close = function () { _fecharTokenOriginal(); BeehusTokenGuard.marcarFechado(); };
+  BeehusTokenGuard.registrarModal({
+    abrir: () => { const campo = document.getElementById('token-input'); if (campo) campo.value = ''; Token.open(); },
+    estaAberto: () => document.getElementById('token-modal').classList.contains('show'),
+  });
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
    Identificar Transações — search + suggest beehusTransactionType /
@@ -3230,9 +3282,21 @@ const IdentifyTxn = {
   // servidor. `_batch` guarda o que o backend reportou na última busca —
   // `total` vem `null` quando o backend não escaneou a faixa inteira (range
   // grande, ainda sobra trabalho fora deste lote). `_renderBatchNotice()` usa
-  // isso para avisar quando há mais pendências além das 500 exibidas.
-  BATCH_LIMIT: 500,
+  // isso para avisar quando há mais pendências além das 250 exibidas.
+  // [2026-09-25, SWAT-07, pedido do usuário: "Limitar 250 transações por consulta"] era 500.
+  BATCH_LIMIT: 250,
   _batch: { total: null, returned: 0, hasMore: false, identified: 'false' },
+
+  // [2026-09-27, SWAT-06 — Transações, pedido do usuário: "Permitir seleção de todas Empresas ou
+  // selecionar > 1 em ... Transação"] Com 2+ empresas marcadas no "várias empresas ▾", a busca
+  // roda 1x por empresa (em sequência, com espera no 429) e junta tudo na mesma tabela, com a
+  // coluna Empresa. Identificar/Implementar/Editar/Excluir já trabalham por id de transação, então
+  // não mudam. O que é POR EMPRESA fica desativado (agrupamentos, carteiras, filtro de entidade) e
+  // a edição de Entidade oferece as entidades da empresa da própria linha.
+  _empresasMulti: [],
+  _entitiesPorEmpresa: {},   // companyId → [{id, name}] (só com várias empresas)
+  _colunaEmpresa: false,     // a última busca foi com várias empresas
+  _geracaoListasMulti: 0,
 
   // Field metadata for the edit configurator. `txnKey` is the property on the
   // search-result transaction; `apiKey` is what the upstream PATCH expects.
@@ -3252,8 +3316,20 @@ const IdentifyTxn = {
     'otherFee', 'performanceFee', 'rebate', 'securityContributionAdjustment',
     'securityTransfer', 'taxes', 'withdrawalDeposit', 'withdrawalDepositAdjustment',
   ],
+  // [2026-09-27, achado A6] A API recusa `other` ao gravar transação (POST/PATCH). Continua na busca
+  // e no filtro (há transações antigas com ele), mas sai de tudo que grava: edição, sugestão, reforço.
+  TIPOS_NAO_GRAVAVEIS: ['other'],
   _editTypes() {
-    return (this._allTypes && this._allTypes.length) ? this._allTypes : this.EDIT_TYPES;
+    const todos = (this._allTypes && this._allTypes.length) ? this._allTypes : this.EDIT_TYPES;
+    return todos.filter(t => !this.TIPOS_NAO_GRAVAVEIS.includes(t));
+  },
+  /* Contexto: <option>s de tipo para um controle que GRAVA, com o valor atual marcado. Quando o atual
+     é um tipo não gravável (transação antiga `other`), ele aparece desabilitado no topo. Retorna HTML.
+     Pseudocódigo: 1. Opção desabilitada do atual não gravável; 2. os tipos graváveis. */
+  _opcoesTipoGravavel(cur) {
+    const atual = (cur && this.TIPOS_NAO_GRAVAVEIS.includes(cur))
+      ? `<option value="${this._escape(cur)}" selected disabled>${this._escape(cur)} (a API não aceita mais)</option>` : '';
+    return atual + this._editTypes().map(t => `<option value="${t}" ${t===cur?'selected':''}>${this._escape(t)}</option>`).join('');
   },
 
   async init() {
@@ -3276,6 +3352,7 @@ const IdentifyTxn = {
     try { await this._initPromise; } catch (e) { /* init failed; bail below */ }
 
     const comp = document.getElementById('i-company');
+    if (this._empresasMulti.length) { this._empresasMulti = []; this.aplicarVariasEmpresas(); }   // [SWAT-06]
     comp.value = companyId;
     if (comp.value !== companyId) {
       alert('Empresa não disponível no Beehus Console (sem visibilidade ou não carregada).');
@@ -3389,6 +3466,144 @@ const IdentifyTxn = {
   },
   addSecurity(id)    { if (!id) return; this._securityIds.add(id); document.getElementById('i-security-add').value = ''; this._renderSecurities(); },
   removeSecurity(id) { this._securityIds.delete(id); this._renderSecurities(); },
+
+  // ── Várias empresas (SWAT-06 — Transações) ────────────────────────────
+  /* Contexto: há 2+ empresas marcadas? Retorna bool. */
+  _emVariasEmpresas() { return this._empresasMulti.length > 1; },
+
+  /* Contexto: nome de uma empresa pelo <select> (coluna Empresa e log). Retorna string. */
+  _nomeEmpresaTxn(cid) {
+    const opt = Array.from(document.getElementById('i-company').options).find(o => o.value === cid);
+    return opt ? opt.textContent.trim() : cid;
+  },
+
+  /* Contexto: rótulo de empresa para o log da tela e o resumo da busca. Retorna string.
+     Pseudocódigo: 1. Várias -> "N empresas"; 2. senão o nome da empresa do <select>. */
+  _rotuloEmpresas() {
+    if (this._emVariasEmpresas()) return `${this._empresasMulti.length} empresas`;
+    return ActionLog.empresaDe('i-company');
+  },
+
+  /* Contexto:
+     Aplica na tela a troca entre 1 e várias empresas — chamada pelo painel "várias empresas ▾"
+     (_instalarVariasEmpresasTransacoes) e por prefillFromPainel. Não retorna nada.
+     Pseudocódigo:
+       1. Várias: trava o <select> na 1ª, zera as seleções por empresa (agrupamentos, carteiras,
+          entidades), desativa esses filtros e carrega as entidades de cada empresa (edição).
+       2. Uma ou nenhuma: destrava e recarrega as listas da empresa do <select>. */
+  aplicarVariasEmpresas() {
+    const multi = this._emVariasEmpresas();
+    const sel = document.getElementById('i-company');
+    const estavaTravado = sel.disabled;
+    sel.disabled = multi;
+    const porEmpresa = [document.getElementById('i-card-groupings'), document.getElementById('i-card-wallets'),
+      document.getElementById('i-toggle-advanced'), (document.getElementById('i-entity-add') || {}).parentElement];
+    porEmpresa.filter(Boolean).forEach(el => el.classList.toggle('multi-desativado', multi));
+    const resumo = document.getElementById('i-multi-resumo');
+    if (resumo) resumo.textContent = multi
+      ? `${this._empresasMulti.length} empresas — agrupamentos, carteiras e filtro de entidade desativados (todas de cada empresa)` : '';
+    if (multi) {
+      sel.value = this._empresasMulti[0];
+      this._groupingSelectedIds = new Set();
+      this._walletSelectedIds = new Set();
+      this._entityIds = new Set();
+      document.getElementById('i-card-groupings').classList.add('hidden');
+      document.getElementById('i-card-wallets').classList.add('hidden');
+      this._renderGroupingPanes();
+      this._renderPanes();
+      this._carregarListasVariasEmpresas();
+      return;
+    }
+    this._entitiesPorEmpresa = {};
+    if (this._empresasMulti.length === 1 && sel.value !== this._empresasMulti[0]) {
+      sel.value = this._empresasMulti[0];
+      this.onCompanyChange();
+    } else if (estavaTravado) {
+      this.onCompanyChange();
+    }
+  },
+
+  /* Contexto:
+     Carrega as entidades de cada empresa marcada (para a edição de Entidade por linha) e o
+     catálogo de securities (global). Sequencial com espera no 429. Uma troca de seleção no meio
+     descarta o resultado antigo (contador de geração). Não retorna nada.
+     Pseudocódigo: 1. Para cada empresa: GET entities; 2. _entities = união (rótulos e filtros). */
+  async _carregarListasVariasEmpresas() {
+    const geracao = ++this._geracaoListasMulti;
+    const ids = this._empresasMulti.slice();
+    const porEmpresa = {};
+    for (const cid of ids) {
+      const r = await apiComEspera429('GET', `/api/beehus/filters/entities?companyId=${encodeURIComponent(cid)}`);
+      if (geracao !== this._geracaoListasMulti) return;
+      porEmpresa[cid] = (r.ok && Array.isArray(r.body)) ? r.body : [];
+    }
+    if (!this._securities.length) {
+      const r = await apiComEspera429('GET', '/api/beehus/filters/securities');
+      if (geracao !== this._geracaoListasMulti) return;
+      this._securities = (r.ok && Array.isArray(r.body)) ? r.body : [];
+    }
+    this._entitiesPorEmpresa = porEmpresa;
+    const vistos = new Map();
+    Object.values(porEmpresa).flat().forEach(e => { if (!vistos.has(e.id)) vistos.set(e.id, e); });
+    this._entities = Array.from(vistos.values());
+    this._renderEntities();
+    this._renderSecurities();
+  },
+
+  /* Contexto:
+     Busca com várias empresas: 1 POST /transactions/search por empresa, em sequência (com espera
+     no 429), mesmo payload trocando só o companyId. Uma empresa que falha não interrompe as
+     outras. Retorna {ok, body: {transactions, total, hasMore}, falhas: [{cid, erro}], lotes}.
+     Pseudocódigo:
+       1. Para cada empresa: busca; marca cada transação com _companyId/_companyName.
+       2. Junta as listas; total = soma (null se alguma empresa não informou); hasMore = alguma.
+       3. ok = pelo menos 1 empresa respondeu. */
+  async _buscarVariasEmpresas(payloadBase) {
+    const transacoes = [], falhas = [], lotes = [];
+    let total = 0, totalConhecido = true, algumaOk = false;
+    for (let i = 0; i < this._empresasMulti.length; i++) {
+      const cid = this._empresasMulti[i];
+      const nome = this._nomeEmpresaTxn(cid);
+      showBusy(`Buscando transações… ${i + 1}/${this._empresasMulti.length} (${nome})`);
+      const r = await apiComEspera429('POST', '/api/beehus/transactions/search', {...payloadBase, companyId: cid});
+      if (!r.ok) { falhas.push({cid, nome, erro: (r.body && r.body.error) || `HTTP ${r.status}`}); continue; }
+      algumaOk = true;
+      const lista = (r.body && r.body.transactions) || [];
+      lista.forEach(t => { t._companyId = cid; t._companyName = nome; });
+      transacoes.push(...lista);
+      const b = r.body || {};
+      if (typeof b.total === 'number') total += b.total; else totalConhecido = false;
+      lotes.push({cid, nome, hasMore: !!b.hasMore, returned: lista.length, total: b.total});
+    }
+    return {
+      ok: algumaOk,
+      status: algumaOk ? 200 : 0,
+      body: algumaOk
+        ? {transactions: transacoes, total: totalConhecido ? total : null, hasMore: lotes.some(l => l.hasMore)}
+        : {error: falhas.map(f => `${f.nome}: ${f.erro}`).join(' · ')},
+      falhas, lotes,
+    };
+  },
+
+  /* Contexto: entidades que a edição por LINHA oferece — a da empresa da própria transação quando
+     a busca foi com várias empresas. Retorna array. */
+  _entidadesParaTxn(t) {
+    if (this._colunaEmpresa && t && t._companyId) return this._entitiesPorEmpresa[t._companyId] || [];
+    return this._entities;
+  },
+
+  /* Contexto:
+     Entidades que o mapeamento POR VALOR ("de X para Y") oferece. Com várias empresas, só dá para
+     mapear se todas as linhas com aquele valor forem da mesma empresa (entidade é por empresa).
+     Retorna array, ou null quando as linhas são de empresas diferentes.
+     Pseudocódigo: 1. Uma empresa só na busca -> _entities. 2. Empresas das linhas com o valor:
+     1 -> as entidades dela; mais de 1 -> null. */
+  _entidadesParaValorAntigo(valorAntigo) {
+    if (!this._colunaEmpresa) return this._entities;
+    const empresas = new Set(this._txns.filter(t => (t.entityId || '') === (valorAntigo || '')).map(t => t._companyId));
+    if (empresas.size !== 1) return null;
+    return this._entitiesPorEmpresa[Array.from(empresas)[0]] || [];
+  },
 
   // ── Company change ────────────────────────────────────────────────────
   async onCompanyChange() {
@@ -3508,22 +3723,30 @@ const IdentifyTxn = {
       limit:                  this.BATCH_LIMIT,
     };
     const myGen = ++this._opGen;
+    const multi = this._emVariasEmpresas();   // [SWAT-06] 1 busca por empresa, juntadas
     showBusy('Buscando transações…');
     let r;
     try {
-      r = await api('POST', '/api/beehus/transactions/search', payload);
+      r = multi ? await this._buscarVariasEmpresas(payload)
+                : await api('POST', '/api/beehus/transactions/search', payload);
     } finally {
       hideBusy();
     }
     if (myGen !== this._opGen) return;   // a newer search/identify started
     if (!r.ok) { alert(r.body?.error || 'Falha na busca. Veja o Log.'); return; }
     this._txns = r.body?.transactions || [];
+    this._colunaEmpresa = multi;
+    if (!multi) {
+      const nome = this._nomeEmpresaTxn(cid);
+      this._txns.forEach(t => { t._companyId = cid; t._companyName = nome; });
+    }
     const bb = r.body || {};
     this._batch = {
       total:      (typeof bb.total === 'number') ? bb.total : null,
       returned:   this._txns.length,
       hasMore:    !!bb.hasMore,
       identified: identified,   // the filter this batch was fetched with, not whatever the radio shows now
+      lotes:      r.lotes || null,   // [SWAT-06] por empresa, quando a busca foi com várias
     };
     if (preserveSug) {
       // Drop suggestions for ids that aren't in the new result set; keep
@@ -3541,7 +3764,7 @@ const IdentifyTxn = {
       this._execEdits = {};
     }
     // The old "(truncado em 10000)" indicator is obsolete now that this view
-    // always requests a 500-row batch — `_renderBatchNotice()` (driven by
+    // always requests a 250-row batch — `_renderBatchNotice()` (driven by
     // `_batch`) replaces it with a more informative banner.
     this._truncated = false;
     // A new result set is a fresh selection: select every row. Subsequent
@@ -3591,7 +3814,8 @@ const IdentifyTxn = {
     const advBtn = document.getElementById('i-toggle-advanced');
     if (advBtn) advBtn.textContent = '+ Groupings & Wallets';
 
-    const companyName = document.getElementById('i-company').selectedOptions[0]?.textContent || '';
+    const companyName = multi ? this._rotuloEmpresas()
+                              : (document.getElementById('i-company').selectedOptions[0]?.textContent || '');
     const dateLabel = isRange ? `${ini} → ${fin}` : ini;
     const idLabel = identified === 'true' ? 'identificadas'
                   : identified === 'false' ? 'não identificadas'
@@ -3607,6 +3831,13 @@ const IdentifyTxn = {
       this._securityIds.size         ? `${this._securityIds.size} security(ies)`        : null,
     ].filter(Boolean).join(' · ');
     document.getElementById('i-search-summary').textContent = summary;
+    // [SWAT-01] busca também entra no log de negócio.
+    ActionLog.registrar('i', {acao: 'Buscar transações', empresa: companyName, faixa: dateLabel,
+      contagens: `${(this._txns || []).length} transação(ões)` + (this._batch && this._batch.hasMore ? ` de ${this._batch.total}` : ''),
+      status: (r.falhas && r.falhas.length)
+        ? `concluído com ${r.falhas.length} falha(s): ${r.falhas.map(f => `${f.nome} (${f.erro})`).join('; ')}`
+        : 'concluído',
+      ok: !(r.falhas && r.falhas.length)});
   },
 
   // Toggle the optional groupings + wallets cards together. Most runs leave
@@ -3667,7 +3898,10 @@ const IdentifyTxn = {
     const suggested = sug && sug.beehusTransactionType ? sug.beehusTransactionType : '';
     const isReview  = !!(sug && sug.needsReview);
     let display;
-    if (suggested) {
+    if (suggested && this.TIPOS_NAO_GRAVAVEIS.includes(suggested)) {
+      // [2026-09-27] sugestão que a API não aceita: vermelho + aviso (o Implementar deixa a linha de fora).
+      display = `<span class="text-[11px] text-red-700 dark:text-red-300 font-semibold" title="A API Beehus não aceita este tipo — escolha outro em ✎ Editar; o Implementar não grava esta linha">${this._escape(suggested)} ⚠ não gravável</span>`;
+    } else if (suggested) {
       const cls = isReview ? 'text-amber-700 dark:text-amber-300' : '';
       display = `<span class="text-[11px] ${cls}">${this._escape(suggested)}</span>`;
     } else {
@@ -4402,7 +4636,7 @@ const IdentifyTxn = {
     document.getElementById('i-tr-apply-sec').checked  = false;
     // Populate type select with the full known list, defaulting to the first.
     const typeSel = document.getElementById('i-tr-type');
-    typeSel.innerHTML = (this._allTypes || []).map(t =>
+    typeSel.innerHTML = this._editTypes().map(t =>   // [A6] reforço grava regra: sem 'other'
       `<option value="${this._escape(t)}">${this._escape(t)}</option>`
     ).join('');
     document.getElementById('i-tr-sec-search').value = '';
@@ -4757,7 +4991,7 @@ const IdentifyTxn = {
     return rows;
   },
 
-  // Aviso do lote de 500. Só aparece quando o backend disse que sobrou algo
+  // Aviso do lote de 250. Só aparece quando o backend disse que sobrou algo
   // no range (`_batch.hasMore`); `_batch.total` é sempre exato (o backend faz
   // 1 fetch do range inteiro e corta em Python — ver comentário em
   // `_TXN_SEARCH_CAP` no backend sobre por que NÃO é dividido em janelas de
@@ -4784,6 +5018,11 @@ const IdentifyTxn = {
       : `A faixa selecionada tem <strong>${b.total}</strong> transações. Estamos
          exibindo as <strong>${b.returned}</strong> mais antigas
          (${restante} fora deste lote). Reduza o intervalo de datas para ver as demais.`;
+    // [SWAT-06] com várias empresas o lote de 250 é POR empresa — diz quais ficaram com mais.
+    if (b.lotes && b.lotes.length) {
+      const comMais = b.lotes.filter(l => l.hasMore).map(l => this._escape(l.nome));
+      if (comMais.length) body.innerHTML += `<br>Lote de ${this.BATCH_LIMIT} por empresa — com mais transações fora do lote: <strong>${comMais.join(', ')}</strong>.`;
+    }
     box.classList.remove('hidden');
   },
 
@@ -4798,6 +5037,9 @@ const IdentifyTxn = {
       b.hasMore ? `${this._txns.length} de ${b.total}` : this._txns.length;
     document.getElementById('i-result-truncated').classList.toggle('hidden', !this._truncated);
     this._renderBatchNotice();
+    // [SWAT-06] coluna Empresa só quando a busca foi com várias empresas.
+    const thEmpresa = document.getElementById('i-th-empresa');
+    if (thEmpresa) thEmpresa.classList.toggle('hidden', !this._colunaEmpresa);
 
     // Repainting the tbody throws away the previous DOM nodes, so any
     // index-based anchor for shift+click range selection no longer maps
@@ -4870,6 +5112,7 @@ const IdentifyTxn = {
                    onchange="IdentifyTxn.onRowCheck(this)"></td>
         <td>${renderCell(t, 'liquidationDate', t.liquidationDate || '')}</td>
         <td>${this._escape(t.walletName)}</td>
+        ${this._colunaEmpresa ? `<td>${this._escape(t._companyName || '')}</td>` : ''}
         <td>${renderCell(t, 'entityId', t.entityName || t.entityId || '')}</td>
         <td>${renderCell(t, 'beehusTransactionType', t.type || '')}</td>
         <td>
@@ -5070,7 +5313,7 @@ const IdentifyTxn = {
     const confLabel = (sug.confidence != null)
       ? ` · confiança ${(sug.confidence * 100).toFixed(0)}%` : '';
 
-    const btns = (this._allTypes || []).map(t => {
+    const btns = this._editTypes().map(t => {   // [A6] sugestão vai pro Implementar: sem 'other'
       const isPicked = (t === currentType);
       return `
         <button class="btn ${isPicked ? 'btn-success' : 'btn-muted'}"
@@ -5203,7 +5446,10 @@ const IdentifyTxn = {
       hideBusy();
     }
     if (myGen !== this._opGen) return;   // result is stale — a newer op started
-    if (!r.ok) { alert('Falha na identificação. Veja o Log.'); return; }
+    if (!r.ok) {
+      ActionLog.registrar('i', {acao: 'Identificar', empresa: this._rotuloEmpresas(), contagens: `${ids.length} selecionada(s)`, status: 'falhou (veja o Log)', ok: false});
+      alert('Falha na identificação. Veja o Log.'); return;
+    }
     const sugs = (r.body && r.body.suggestions) || [];
     let filledType = 0, filledSec = 0;
     for (const s of sugs) {
@@ -5237,6 +5483,8 @@ const IdentifyTxn = {
     }
     // Re-render so the suggestion selects pick up the new values.
     this._render();
+    ActionLog.registrar('i', {acao: 'Identificar', empresa: this._rotuloEmpresas(),
+      contagens: `${ids.length} selecionada(s), ${filledType} tipo(s) e ${filledSec} security(ies) sugeridos`, status: 'concluído'});
     if (!filledType && !filledSec) {
       alert('Identificação concluída — nenhuma sugestão automática foi gerada (algoritmo ainda em definição). Edite os campos manualmente e clique em Implementar.');
     }
@@ -5253,13 +5501,22 @@ const IdentifyTxn = {
   // ingested yet). Reinforcement rules are no longer auto-saved here; the
   // operator opts in explicitly via the "Salvar como reforço" button in the
   // security-edit modal.
+  // [2026-09-27, decisão do usuário sobre o classificador: "a falha clara sem gravar"] Linha cujo tipo
+  // sugerido a API não aceita (TIPOS_NAO_GRAVAVEIS — `other`) fica INTEIRA de fora do Implementar
+  // (nem o security vai, ele foi escolhido para aquele tipo) e entra em `_skippedRows`, que a
+  // confirmação e o log mostram. Antes ela ia e voltava 400 da API linha a linha.
   _computePatches() {
     const ids = new Set(this._selectedIds());
     const out = [];
+    const naoGravaveis = [];
     for (const t of this._txns) {
       if (!ids.has(t.id)) continue;
       const sug = this._suggestions[t.id] || {};
       const newType = sug.beehusTransactionType || '';
+      if (newType && newType !== t.type && this.TIPOS_NAO_GRAVAVEIS.includes(newType)) {
+        naoGravaveis.push({txn: t, tipo: newType});
+        continue;
+      }
       const effectiveType = newType || t.type;
       const cellEnabled = (sug.needsSecurity || this._typesNeedingSecurity.has(effectiveType));
       const newSec = cellEnabled ? (sug.securityId || '') : '';
@@ -5268,8 +5525,24 @@ const IdentifyTxn = {
       if (newSec  && newSec  !== (t.securityId || '')) payload.securityId            = newSec;
       if (Object.keys(payload).length) out.push({id: t.id, txn: t, payload});
     }
-    this._skippedRows = [];
+    this._skippedRows = naoGravaveis;
     return out;
+  },
+
+  /* Contexto: aviso (HTML) das linhas que o Implementar NÃO vai gravar por causa do tipo sugerido
+     (`_skippedRows`, montado por _computePatches). Usado na confirmação. Retorna HTML ('' sem nada).
+     Pseudocódigo: 1. Sem linhas -> ''. 2. Caixa vermelha com a contagem, o motivo e até 10 linhas. */
+  _avisoNaoGravaveisHtml() {
+    const lista = this._skippedRows || [];
+    if (!lista.length) return '';
+    const itens = lista.slice(0, 10).map(x =>
+      `<li>${this._escape(x.txn.liquidationDate || '')} · ${this._escape(x.txn.walletName || '')} · ${this._escape(x.txn.description || '')} — sugerido <code>${this._escape(x.tipo)}</code></li>`).join('');
+    return `<div class="rounded border border-red-300 bg-red-50 text-red-800 px-3 py-2 mb-2 text-[11px]" id="i-aviso-nao-gravaveis">
+      <strong>${lista.length} linha(s) NÃO serão gravadas:</strong> o tipo sugerido não é aceito pela API
+      Beehus (${this.TIPOS_NAO_GRAVAVEIS.map(t => `<code>${t}</code>`).join(', ')}). Escolha outro tipo em
+      <em>✎ Editar</em> na coluna "Tipo sugerido" e implemente de novo.
+      <ul class="list-disc ml-4 mt-1">${itens}</ul>${lista.length > 10 ? `<div>… e mais ${lista.length - 10}.</div>` : ''}
+    </div>`;
   },
 
   // Effective derived value coerced to a number, or null when not applicable /
@@ -5338,7 +5611,10 @@ const IdentifyTxn = {
     const extras = this._buildExecExtras();
     const nExec = extras.execPrices.length, nTax = extras.taxes.length;
     if (!patches.length && !nExec && !nTax) {
-      alert('Nenhuma alteração efetiva nas linhas selecionadas — preencha o tipo/security ou um preço de execução / IRRF antes de implementar.');
+      const nNao = (this._skippedRows || []).length;
+      alert(nNao
+        ? `Nada a gravar: ${nNao} linha(s) têm tipo sugerido que a API Beehus não aceita (${this.TIPOS_NAO_GRAVAVEIS.join(', ')}). Escolha outro tipo em ✎ Editar e implemente de novo.`
+        : 'Nenhuma alteração efetiva nas linhas selecionadas — preencha o tipo/security ou um preço de execução / IRRF antes de implementar.');
       return;
     }
     const securityNameById = new Map(this._securities.map(s => [s.id, s.name]));
@@ -5374,7 +5650,7 @@ const IdentifyTxn = {
         <td>${this._escape(x._sec)}</td>
         <td class="text-right">${fmt(x.balance)}</td>
       </tr>`).join('');
-    document.getElementById('i-apply-confirm-body').innerHTML = `
+    document.getElementById('i-apply-confirm-body').innerHTML = this._avisoNaoGravaveisHtml() + `
       <div class="text-[11px] text-gray-600 mb-2">
         <strong>${patches.length}</strong> de ${ids.length} transações selecionadas
         serão atualizadas. Linhas sem alteração efetiva são ignoradas.
@@ -5411,6 +5687,7 @@ const IdentifyTxn = {
       </div>` : ''}`;
     this._pendingPatches = patches;
     this._pendingExtras = extras;
+    this._pendingNaoGravaveis = (this._skippedRows || []).length;   // vai para o log do Implementar
     document.getElementById('i-apply-confirm-modal').classList.add('show');
   },
 
@@ -5533,7 +5810,12 @@ const IdentifyTxn = {
     const mongoTail = mongoStale
       ? ` ⚠ ${mongoStale} sem espelho local — atualize via re-busca após o próximo sync.`
       : '';
-    alert(`Concluído: ${ok} atualizadas, ${fail} falhas.${execMsg}${tail}${mongoTail} Veja o Log para detalhes.`);
+    // [SWAT-01] o resultado vai para o log da tela (antes era um alert).
+    const nNaoGravadas = this._pendingNaoGravaveis || 0;
+    this._pendingNaoGravaveis = 0;
+    ActionLog.registrar('i', {acao: 'Implementar', empresa: this._rotuloEmpresas(),
+      contagens: `${ok} atualizada(s), ${fail} falha(s)`
+        + (nNaoGravadas ? `, ${nNaoGravadas} não gravada(s) (tipo sugerido não aceito pela API)` : ''), status: `concluído${execMsg}${tail}${mongoTail}`.trim(), ok: !fail});
     // Refresh from Mongo so the just-implemented rows reflect the new DB values
     // (or drop out of "Não identificadas") and any new IRRF `taxes` row shows
     // up; keep the existing classifier output for surviving rows so the operator
@@ -5937,13 +6219,20 @@ const IdentifyTxn = {
       return `<input type="text" class="input" id="${idAttr}" data-old="${escAttr(oldValue)}" value="${escAttr(cur)}" />`;
     }
     if (f.kind === 'type') {
-      const opts = this._editTypes().map(t => `<option value="${t}" ${t===cur?'selected':''}>${this._escape(t)}</option>`).join('');
+      const opts = this._opcoesTipoGravavel(cur);   // [A6]
       return `<select class="input" id="${idAttr}" data-old="${escAttr(oldValue)}">
                 <option value="">(manter)</option>${opts}
               </select>`;
     }
     if (f.kind === 'entity') {
-      const opts = this._entities.map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
+      // [SWAT-06] com várias empresas, só as entidades da empresa das linhas com esse valor.
+      const lista = this._entidadesParaValorAntigo(oldValue);
+      if (!lista) {
+        return `<select class="input" id="${idAttr}" data-old="${escAttr(oldValue)}" disabled>
+                  <option value="">(linhas de várias empresas — edite por linha)</option>
+                </select>`;
+      }
+      const opts = lista.map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
       return `<select class="input" id="${idAttr}" data-old="${escAttr(oldValue)}">
                 <option value="">(manter)</option>${opts}
               </select>`;
@@ -6071,11 +6360,12 @@ const IdentifyTxn = {
       return `<input type="text" class="input" ${css} ${handler} value="${escAttr(cur)}" />`;
     }
     if (f.kind === 'type') {
-      const opts = this._editTypes().map(tp => `<option value="${tp}" ${tp===cur?'selected':''}>${this._escape(tp)}</option>`).join('');
+      const opts = this._opcoesTipoGravavel(cur);   // [A6]
       return `<select class="input" ${css} ${handler}>${opts}</select>`;
     }
     if (f.kind === 'entity') {
-      const opts = this._entities.map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
+      // [SWAT-06] entidades da empresa desta linha (com várias empresas na busca).
+      const opts = this._entidadesParaTxn(t).map(e => `<option value="${e.id}" ${e.id===cur?'selected':''}>${this._escape(e.name)}</option>`).join('');
       return `<select class="input" ${css} ${handler}>${opts}</select>`;
     }
     if (f.kind === 'security') {
@@ -6410,7 +6700,8 @@ const IdentifyTxn = {
       hideBusy();
     }
     Token.refresh();
-    alert(`Concluído: ${ok} editadas, ${fail} falhas. Veja o Log para detalhes.`);
+    ActionLog.registrar('i', {acao: 'Editar transações', empresa: this._rotuloEmpresas(),
+      contagens: `${ok} editada(s), ${fail} falha(s)`, status: 'concluído', ok: !fail});   // [SWAT-01] era alert
     this._pendingEditPatches = null;
     this._edits = {};
     this._tempEdits = {};
@@ -6448,13 +6739,14 @@ const IdentifyTxn = {
       hideBusy();
     }
     Token.refresh();
-    alert(`Concluído: ${ok} excluídas, ${fail} falhas. Veja o Log para detalhes.`);
+    ActionLog.registrar('i', {acao: 'Excluir transações', empresa: this._rotuloEmpresas(),
+      contagens: `${ok} excluída(s), ${fail} falha(s)`, status: 'concluído', ok: !fail});   // [SWAT-01] era alert
     const idSet = new Set(ids);
     const deletedCount = this._txns.filter(t => idSet.has(t.id)).length;
     this._txns = this._txns.filter(t => !idSet.has(t.id));
     // Pruned locally (no re-search), so the batch counters from the last
     // search response would overstate what's left — bring them down by the
-    // same amount so the "500 de N" / pending-batch banner stays accurate.
+    // same amount so the "250 de N" / pending-batch banner stays accurate.
     this._batch.total -= deletedCount;
     this._batch.returned -= deletedCount;
     this._batch.hasMore = this._batch.total > this._batch.returned;
@@ -7735,13 +8027,16 @@ function makeDatesPipeline(cfg) {
       }
     },
 
-    _renderDayRows(days) {
+    // [SWAT-06] `cids` (várias empresas): uma linha por dia × empresa, com data-day="dia|empresa".
+    _renderDayRows(days, cids) {
       const root = $('days');
       root.classList.remove('hidden');
       const stepLabel = _resolveCfg('stepLabel', '');
-      root.innerHTML = days.map(d => `
+      const linhas = cids ? days.flatMap(d => cids.map(c => ({chave: `${d}|${c}`, rotulo: `${d} · ${this._nomeEmpresa(c)}`})))
+                          : days.map(d => ({chave: d, rotulo: d}));
+      root.innerHTML = linhas.map(({chave: d, rotulo}) => `
         <li data-day="${d}">
-          <span class="day-date">${d}</span>
+          <span class="day-date" title="${_escDP(rotulo)}">${_escDP(rotulo)}</span>
           <span class="step-row">
             <span class="step-icon" data-state="pending" data-key="step" title="${_escDP(stepLabel)}">·</span>
           </span>
@@ -7749,6 +8044,104 @@ function makeDatesPipeline(cfg) {
           <span class="day-elapsed text-gray-400"></span>
         </li>
       `).join('');
+    },
+
+    /* Contexto:
+       Executa UMA linha da faixa — um dia de uma empresa (SWAT-06): busca elegíveis (Publicação),
+       manda o POST e pinta a linha `chave`. É o corpo do laço de run(), sem mudar a lógica.
+       Retorna {tipo: 'ok'|'skip'|'erro', publicados, bloqueados}.
+
+       Pseudocódigo:
+         1. Publicação: busca os elegíveis do dia (na empresa); nada -> 'skip'.
+         2. POST do dia (com espera e nova tentativa em 429).
+         3. Erro: escopo vazio / skipOnError -> 'skip'; senão 'erro'.
+         4. Sucesso: pinta a linha (publicados/bloqueados) -> 'ok'. */
+    async _executarUmDia(chave, day, cid, ctx) {
+      const dayT0 = performance.now();
+      const rotulo = (chave === day) ? day : `${day} · ${this._nomeEmpresa(cid)}`;
+      this._scrollDayIntoView(chave);
+      let ids;
+      if (cfg.kind === 'publish') {
+        const lookupVerb = (ctx.eligPub === 'true') ? 'publicados' : 'não publicados';
+        this._setDayStep(chave, 'running', `${rotulo} · buscando ${lookupVerb}…`);
+        const lookup = await this._apiComEspera('GET',
+          `/api/beehus/filters/groupings-by-publish-state` +
+          `?companyId=${encodeURIComponent(cid)}` +
+          `&positionDate=${encodeURIComponent(day)}` +
+          `&published=${ctx.eligPub}`);
+        if (!lookup.ok) {
+          this._setDayStep(chave, 'error', `lookup falhou em ${rotulo}: ${(lookup.body && lookup.body.error) || 'HTTP ' + lookup.status}`);
+          return {tipo: 'erro'};
+        }
+        ids = (lookup.body || []).map(g => g.id);
+        // Seleção do seletor (só com 1 empresa — com várias ele fica desativado).
+        if (this._selectedIds && this._selectedIds.size > 0) {
+          const want = this._selectedIds;
+          ids = ids.filter(id => want.has(id));
+        }
+        if (ids.length === 0) {
+          this._setDayStep(chave, 'skipped', `${rotulo} · nada a ${ctx.verbPast.startsWith('des') ? 'despublicar' : 'publicar'}`);
+          this._setDayElapsed(chave, performance.now() - dayT0);
+          return {tipo: 'skip'};
+        }
+      } else {
+        ids = Array.from(this._selectedIds);
+      }
+
+      this._setDayStep(chave, 'running', `${rotulo} · ${ctx.stepLabel}…`);
+      const t0 = performance.now();
+      const payload = {companyId: cid, positionDate: day, [cfg.payloadKey]: ids, ...ctx.extraPayload};
+      const r = await this._apiComEspera('POST', ctx.endpoint, payload);
+      const ms = Math.round(performance.now() - t0);
+      Token.refresh();
+      if (!r.ok) {
+        // Painéis Template: dia sem carteira/agrupamento do escopo é pulado (_scope_empty_error).
+        if (r.body && r.body.scopeEmpty) {
+          const noun = r.body.scopeKind === 'agrupamento' ? 'agrupamento' : 'carteira';
+          this._setDayStep(chave, 'skipped', `${rotulo} · nenhum(a) ${noun} do Template com SLA nesta data`);
+          this._setDayElapsed(chave, performance.now() - dayT0);
+          return {tipo: 'skip'};
+        }
+        // Pipeline-specific "soft errors" — skip, não para (cfg.skipOnError).
+        const skip = cfg.skipOnError && cfg.skipOnError(r.body);
+        if (skip) {
+          this._setDayStep(chave, 'skipped', `${rotulo} · ${skip.reason}`);
+          this._setDayElapsed(chave, performance.now() - dayT0);
+          return {tipo: 'skip'};
+        }
+        // [2026-09-28] mostra também o que o Beehus respondeu (antes só "failed: 500").
+        const corpo = r.body && r.body.upstream_body ? ` — resposta do Beehus: ${String(r.body.upstream_body).slice(0, 200)}` : '';
+        this._setDayStep(chave, 'error', `${rotulo} · falhou (${ms}ms)${r.body && r.body.error ? ': ' + r.body.error : ''}${corpo}`);
+        return {tipo: 'erro'};
+      }
+      // Publicação: o servidor devolve o que publicou e o que a trava de |Δ| barrou.
+      const blocked = (r.body && Array.isArray(r.body.blocked)) ? r.body.blocked : [];
+      // [2026-09-28] agrupamentos que o Beehus recusou (isolados pelo servidor; os outros publicaram).
+      const recusados = (r.body && Array.isArray(r.body.recusados)) ? r.body.recusados : [];
+      const nPub = (r.body && Array.isArray(r.body.publishedIds)) ? r.body.publishedIds.length : ids.length;
+      const detail = (cfg.kind === 'publish')
+        ? `${rotulo} · ${nPub} ${ctx.verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '')
+          + (recusados.length ? ` · ${recusados.length} recusado(s) pelo Beehus` : '') + ` (${ms}ms)`
+        : `${rotulo} concluído (${ms}ms)`;
+      this._setDayStep(chave, recusados.length ? 'error' : ((nPub === 0 && blocked.length) ? 'skipped' : 'done'), detail);
+      this._setDayBlocked(chave, blocked);
+      this._setDayRecusados(chave, recusados);
+      this._setDayElapsed(chave, performance.now() - dayT0);
+      return {tipo: 'ok', publicados: (cfg.kind === 'publish') ? nPub : 0, bloqueados: blocked.length};
+    },
+
+    /* Contexto:
+       `api()` com espera em 429 (SWAT-06: várias empresas em sequência batiam no limite de
+       taxa — o log de 25/09 mostra 6 companies com 429). Retorna o mesmo {ok, status, body}.
+       Pseudocódigo: 1. Delega para apiComEspera429 (função comum desde 27/09). */
+    async _apiComEspera(metodo, url, corpo) {
+      return apiComEspera429(metodo, url, corpo);
+    },
+
+    /* Contexto: nome de uma empresa pelo <select> da ferramenta (rótulo das linhas). */
+    _nomeEmpresa(cid) {
+      const opt = Array.from($('company').options).find(o => o.value === cid);
+      return opt ? opt.textContent.trim() : cid;
     },
 
     _setDayStep(day, state, msg = '') {
@@ -7782,14 +8175,33 @@ function makeDatesPipeline(cfg) {
         : (v * 100).toLocaleString('pt-BR', {minimumFractionDigits: 4, maximumFractionDigits: 4}) + '%';
       const linhas = blocked.map(b => {
         const quem = b.carteira ? `carteira ${_escDP(b.carteira)}` : 'o próprio agrupamento';
-        const motivo = (b.motivo === 'sem_delta')
+        // [2026-09-28] retido porque a carteira é compartilhada com agrupamento(s) fora desta publicação
+        // (o Beehus exige os parceiros na mesma chamada).
+        const parceiros = (b.parceiros || []).map(x => _escDP(x.nome || x.groupingId)).join(', ');
+        const motivo = (b.motivo === 'carteira_compartilhada')
+          ? `carteira ${_escDP(b.carteira || b.walletId)} também está em ${parceiros || 'outro agrupamento'}, que não vai nesta publicação (bloqueado ou fora da seleção) — o Beehus exige publicar juntos`
+          : (b.motivo === 'sem_delta')
           ? `sem Δ calculado (${quem})`
           : `|Δ| ${pct(b.delta)} ≥ limite ${b.entidade === 'carteira' ? 'da carteira' : 'do agrupamento'} ${pct(b.limite)} (${quem})`;
         return `<li><strong>${_escDP(b.nome || b.groupingId)}</strong> — ${motivo}</li>`;
       }).join('');
       const box = document.createElement('details');
       box.className = 'day-blocked';
-      box.innerHTML = `<summary>ver ${blocked.length} bloqueado(s) pela trava |Δ|</summary><ul>${linhas}</ul>`;
+      const nRetidos = blocked.filter(b => b.motivo === 'carteira_compartilhada').length;
+      box.innerHTML = `<summary>ver ${blocked.length} bloqueado(s) pela trava |Δ|${nRetidos ? ` (${nRetidos} por carteira compartilhada)` : ''}</summary><ul>${linhas}</ul>`;
+      li.appendChild(box);
+    },
+    /* Contexto: lista, na linha do dia, os agrupamentos que o Beehus recusou ao publicar (com a
+       mensagem dele) [2026-09-28]. Os outros do dia foram publicados. Não retorna nada. */
+    _setDayRecusados(day, recusados) {
+      const li = document.querySelector(`#${id('days')} li[data-day="${day}"]`);
+      if (!li || !recusados || !recusados.length) return;
+      const linhas = recusados.map(x => `<li><strong>${_escDP(x.nome || x.groupingId)}</strong> — `
+        + `HTTP ${_escDP(x.upstream_status == null ? '?' : x.upstream_status)}: ${_escDP(x.erro || '(sem mensagem)')}</li>`).join('');
+      const box = document.createElement('details');
+      box.className = 'day-blocked day-recusados';
+      box.open = true;
+      box.innerHTML = `<summary>ver ${recusados.length} recusado(s) pelo Beehus (os demais foram publicados)</summary><ul>${linhas}</ul>`;
       li.appendChild(box);
     },
     _scrollDayIntoView(day) {
@@ -7808,11 +8220,14 @@ function makeDatesPipeline(cfg) {
       $('run-btn').disabled = true;
       $('reset-btn').disabled = true;
 
-      const cid    = $('company').value;
+      // [2026-09-25, SWAT-06] Várias empresas: `_empresasMulti` (>= 2 ids) vira um laço
+      // dia × empresa; com 1 empresa tudo segue exatamente como antes.
+      const cids   = (this._empresasMulti && this._empresasMulti.length > 1) ? this._empresasMulti.slice() : [$('company').value];
+      const multi  = cids.length > 1;
       const days   = this._resolveDays();
       const status = $('status');
 
-      this._renderDayRows(days);
+      this._renderDayRows(days, multi ? cids : null);
       const explicit = this._useDateList && this._selectedDates.size > 0;
       status.textContent = explicit
         ? `Iniciando — ${days.length} data(s) explícitas…`
@@ -7833,94 +8248,31 @@ function makeDatesPipeline(cfg) {
       const extraPayload = _resolveCfg('extraPayload', null) || {};
 
       let stoppedAt = null;
-      let totalSkipped = 0, totalRun = 0, totalBlocked = 0;
+      let totalSkipped = 0, totalRun = 0, totalBlocked = 0, totalPublished = 0, totalFalhas = 0;
+      const ctx = {endpoint, stepLabel, verbPast, eligPub, extraPayload};
       outer: for (const day of days) {
-        const dayT0 = performance.now();
-        this._scrollDayIntoView(day);
-
-        let ids;
-        if (cfg.kind === 'publish') {
-          // Per-day eligibility lookup: groupings in the opposite of the
-          // target state (so we don't re-publish what's already published,
-          // and don't unpublish what isn't published).
-          const lookupVerb = (eligPub === 'true') ? 'publicados' : 'não publicados';
-          this._setDayStep(day, 'running', `${day} · buscando ${lookupVerb}…`);
-          const lookup = await api(
-            'GET',
-            `/api/beehus/filters/groupings-by-publish-state` +
-            `?companyId=${encodeURIComponent(cid)}` +
-            `&positionDate=${encodeURIComponent(day)}` +
-            `&published=${eligPub}`,
-          );
-          if (!lookup.ok) {
-            this._setDayStep(day, 'error', `lookup falhou em ${day}: ${(lookup.body && lookup.body.error) || 'HTTP ' + lookup.status}`);
+        for (const cid of cids) {
+          const chave = multi ? `${day}|${cid}` : day;
+          const r = await this._executarUmDia(chave, day, cid, ctx);
+          if (r.tipo === 'skip') { totalSkipped++; continue; }
+          if (r.tipo === 'erro') {
+            // [SWAT-06] com várias empresas, a falha marca a linha e o laço SEGUE com as
+            // outras (antes: break outer). Com 1 empresa, para como sempre parou.
+            if (multi) { totalFalhas++; continue; }
             stoppedAt = {day};
             break outer;
           }
-          ids = (lookup.body || []).map(g => g.id);
-          // If the operator pre-selected a subset of groupings via the
-          // picker, restrict per-day action to that intersection. Empty
-          // selection = act on everything eligible (legacy behavior).
-          if (this._selectedIds && this._selectedIds.size > 0) {
-            const want = this._selectedIds;
-            ids = ids.filter(id => want.has(id));
-          }
-          if (ids.length === 0) {
-            this._setDayStep(day, 'skipped', `${day} · nada a ${verbPast.startsWith('des') ? 'despublicar' : 'publicar'}`);
-            this._setDayElapsed(day, performance.now() - dayT0);
-            totalSkipped++;
-            continue;
-          }
-        } else {
-          ids = Array.from(this._selectedIds);
+          totalBlocked += r.bloqueados;
+          totalPublished += r.publicados;
+          totalRun++;
         }
-
-        this._setDayStep(day, 'running', `${day} · ${stepLabel}…`);
-        const t0 = performance.now();
-        const payload = {companyId: cid, positionDate: day, [cfg.payloadKey]: ids, ...extraPayload};
-        const r = await api('POST', endpoint, payload);
-        const ms = Math.round(performance.now() - t0);
-        Token.refresh();
-        if (!r.ok) {
-          // Painéis Template: dia sem carteira/agrupamento do escopo (no
-          // Somente SLA, sem nenhuma selecionada com SLA nesse dia) é pulado,
-          // não interrompe a faixa — ver _scope_empty_error no backend.
-          if (r.body && r.body.scopeEmpty) {
-            const noun = r.body.scopeKind === 'agrupamento' ? 'agrupamento' : 'carteira';
-            this._setDayStep(day, 'skipped', `${day} · nenhum(a) ${noun} do Template com SLA nesta data`);
-            this._setDayElapsed(day, performance.now() - dayT0);
-            totalSkipped++;
-            continue;
-          }
-          // Pipeline-specific "soft errors" — treated as a skip, not a stop.
-          // Each pipeline opts in via cfg.skipOnError(body) → {skip, reason}|null.
-          const skip = cfg.skipOnError && cfg.skipOnError(r.body);
-          if (skip) {
-            this._setDayStep(day, 'skipped', `${day} · ${skip.reason}`);
-            this._setDayElapsed(day, performance.now() - dayT0);
-            totalSkipped++;
-            continue;
-          }
-          this._setDayStep(day, 'error', `falhou (${ms}ms)`);
-          stoppedAt = {day};
-          break outer;
-        }
-        // Publicação: o servidor devolve o que publicou e o que a trava de
-        // |Δ| barrou NESTE dia (publishedIds/blocked). Despublicar não tem trava.
-        const blocked = (r.body && Array.isArray(r.body.blocked)) ? r.body.blocked : [];
-        const nPub = (r.body && Array.isArray(r.body.publishedIds)) ? r.body.publishedIds.length : ids.length;
-        const detail = (cfg.kind === 'publish')
-          ? `${day} · ${nPub} ${verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '') + ` (${ms}ms)`
-          : `${day} concluído (${ms}ms)`;
-        this._setDayStep(day, (nPub === 0 && blocked.length) ? 'skipped' : 'done', detail);
-        this._setDayBlocked(day, blocked);
-        this._setDayElapsed(day, performance.now() - dayT0);
-        totalBlocked += blocked.length;
-        totalRun++;
       }
 
       if (stoppedAt) {
         status.textContent = `Interrompido em ${stoppedAt.day} — veja o Log.`;
+      } else if (multi) {
+        status.textContent = `Concluído — ${cids.length} empresas × ${days.length} dia(s): ${totalRun} ok, ` +
+          `${totalSkipped} ignorado(s), ${totalFalhas} falha(s)` + (totalBlocked ? `, ${totalBlocked} bloqueado(s) pela trava |Δ|.` : '.');
       } else if (cfg.kind === 'publish') {
         status.textContent = `Concluído — ${totalRun} dia(s) ${verbPast}(s), ${totalSkipped} ignorado(s)` +
           (totalBlocked ? `, ${totalBlocked} agrupamento(s) bloqueado(s) pela trava |Δ| (veja cada dia).` : '.');
@@ -7929,6 +8281,18 @@ function makeDatesPipeline(cfg) {
       } else {
         status.textContent = `Concluído em ${days.length} dia(s) úteis.`;
       }
+      // [SWAT-01] entrada no log de negócio da ferramenta, com o horário de término.
+      ActionLog.registrar(px, {
+        acao: stepLabel || cfg.kind,
+        empresa: multi ? `${cids.length} empresas` : ActionLog.empresaDe(id('company')),
+        faixa: days.length > 1 ? `${days[0]} → ${days[days.length - 1]} (${days.length} dias)` : (days[0] || ''),
+        contagens: [`${totalRun} ok`, totalSkipped ? `${totalSkipped} pulado(s)` : '', stoppedAt ? '1 falha' : '',
+                    totalFalhas ? `${totalFalhas} falha(s)` : '',
+                    cfg.kind === 'publish' ? `${totalPublished} publicado(s)` : '',
+                    totalBlocked ? `${totalBlocked} bloqueado(s)` : ''].filter(Boolean).join(', '),
+        status: stoppedAt ? `interrompido em ${stoppedAt.day}` : 'concluído',
+        ok: !stoppedAt && !totalFalhas,
+      });
 
       this._running = false;
       $('run-btn').disabled = false;
@@ -9641,6 +10005,349 @@ Token.refresh();
 // this iframe via `contentWindow.IdentifyTxn` to drive the TXN drill-down, so
 // expose it explicitly.
 window.IdentifyTxn = IdentifyTxn;
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-25, SWAT-01, pedido do usuário: "Gerar um Log Temporário na tela do que foi
+   feito, horário que foi finalizado… Limpar tela de datas do Executar e LOG do que foi
+   feito ao selecionar outra Company ou mudar algo"] Log de NEGÓCIO por ferramenta (não é o
+   ApiLog técnico): uma caixa logo abaixo do botão Executar (D5), só em memória, entrada
+   mais recente no topo. Cada entrada: horário de término HH:MM:SS, ação, empresa, faixa,
+   contagens e status. Some ao trocar de empresa (e pela barra de escopo do Painel).
+═════════════════════════════════════════════════════════════════════════════ */
+const ActionLog = {
+  _entradas: {},        // prefixo -> [{hora, acao, empresa, faixa, contagens, status, ok}]
+  MAX_ENTRADAS: 30,
+  // Onde a caixa entra em cada ferramenta (id do elemento-âncora; a caixa vai logo depois
+  // da linha que o contém). Ferramentas da fábrica: o botão Executar (`<px>-run-btn`).
+  _ancora(prefixo) {
+    if (prefixo === 'i') return document.getElementById('i-search-summary');
+    return document.getElementById(`${prefixo}-run-btn`);
+  },
+
+  /* Contexto: acha (ou cria 1x) a caixa do log de uma ferramenta. Retorna o elemento ou null.
+     Pseudocódigo: 1. Já existe -> devolve. 2. Senão cria depois da linha da âncora. */
+  _caixa(prefixo) {
+    let caixa = document.getElementById(`${prefixo}-action-log`);
+    if (caixa) return caixa;
+    const ancora = this._ancora(prefixo);
+    if (!ancora) return null;
+    const linha = ancora.closest('div') || ancora.parentElement;
+    caixa = document.createElement('div');
+    caixa.id = `${prefixo}-action-log`;
+    caixa.className = 'action-log hidden';
+    linha.insertAdjacentElement('afterend', caixa);
+    return caixa;
+  },
+
+  /* Contexto: registra uma entrada no log de uma ferramenta e redesenha. Não retorna nada.
+     Pseudocódigo: 1. Carimba o horário de término. 2. Põe no topo (limite de 30). 3. Desenha. */
+  registrar(prefixo, entrada) {
+    const agora = new Date();
+    const hora = [agora.getHours(), agora.getMinutes(), agora.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
+    const lista = this._entradas[prefixo] || (this._entradas[prefixo] = []);
+    lista.unshift({hora, ...entrada});
+    lista.length = Math.min(lista.length, this.MAX_ENTRADAS);
+    this._desenhar(prefixo);
+  },
+
+  /* Contexto: apaga o log de uma ferramenta (troca de empresa / escopo / botão). Não retorna nada. */
+  limpar(prefixo) {
+    this._entradas[prefixo] = [];
+    this._desenhar(prefixo);
+  },
+
+  /* Contexto: desenha a caixa do log de uma ferramenta. Não retorna nada.
+     Pseudocódigo: 1. Sem entradas -> esconde. 2. Senão lista "hora · ação · empresa · faixa ·
+       contagens · status" e o botão "limpar log". */
+  _desenhar(prefixo) {
+    const caixa = this._caixa(prefixo);
+    if (!caixa) return;
+    const lista = this._entradas[prefixo] || [];
+    caixa.classList.toggle('hidden', lista.length === 0);
+    const e = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    caixa.innerHTML = `<div class="action-log-cab"><span>Log desta sessão (some ao trocar de empresa)</span>
+        <button type="button" class="action-log-limpar" onclick="ActionLog.limpar('${prefixo}')">limpar log</button></div>
+      <ul>${lista.map(x => `<li class="${x.ok === false ? 'al-falha' : ''}"><span class="al-hora">${e(x.hora)}</span>
+        <strong>${e(x.acao)}</strong>${x.empresa ? ` · ${e(x.empresa)}` : ''}${x.faixa ? ` · ${e(x.faixa)}` : ''}${x.contagens ? ` · ${e(x.contagens)}` : ''}
+        ${x.status ? ` — <em>${e(x.status)}</em>` : ''}</li>`).join('')}</ul>`;
+  },
+
+  /* Contexto: nome da empresa escolhida num <select> (texto da opção). Retorna string. */
+  empresaDe(idSelect) {
+    const sel = document.getElementById(idSelect);
+    return (sel && sel.value && sel.selectedOptions[0]) ? sel.selectedOptions[0].textContent.trim() : '';
+  },
+};
+
+/* Contexto: limpeza ao trocar de empresa (SWAT-01/D5) nas ferramentas de datas e no
+   Transações — apaga o log, a lista de dias e o status; as datas voltam ao padrão pelo
+   envelope da FaixaPadrao (SWAT-08). E, nos painéis Template, a barra de escopo do Painel
+   avisa por postMessage: cada ferramenta recarrega a lista de empresas (que respeita o
+   escopo — hipótese A do SWAT-04) e limpa o log. Não retorna nada. */
+(function _instalarLimpezaPorEmpresa() {
+  const ferramentas = [
+    [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
+    [typeof NavWalletsDates   !== 'undefined' ? NavWalletsDates   : null, 'nwd'],
+    [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
+    [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
+    [typeof DeletePos         !== 'undefined' ? DeletePos         : null, 'dp'],
+    [typeof ExplosionProp     !== 'undefined' ? ExplosionProp     : null, 'ep'],
+    [typeof IdentifyTxn       !== 'undefined' ? IdentifyTxn       : null, 'i'],
+  ];
+  const limparTela = (prefixo) => {
+    ActionLog.limpar(prefixo);
+    const dias = document.getElementById(`${prefixo}-days`);
+    if (dias) { dias.innerHTML = ''; dias.classList.add('hidden'); }
+    const status = document.getElementById(`${prefixo}-status`);
+    if (status) status.textContent = '';
+  };
+  for (const [obj, prefixo] of ferramentas) {
+    if (!obj || typeof obj.onCompanyChange !== 'function') continue;
+    const original = obj.onCompanyChange.bind(obj);
+    obj.onCompanyChange = function (...args) {
+      if (!obj._running) limparTela(prefixo);
+      return original(...args);
+    };
+  }
+  window.addEventListener('message', async (ev) => {
+    if (ev.origin !== location.origin || !ev.data || ev.data.type !== 'swat-escopo-empresa') return;
+    for (const [obj, prefixo] of ferramentas) {
+      if (!obj || obj._running) continue;
+      limparTela(prefixo);
+      const sel = document.getElementById(prefixo === 'i' ? 'i-company' : `${prefixo}-company`);
+      if (!sel || !sel.options.length || typeof obj.init !== 'function') continue;
+      const antes = sel.value;
+      try { await obj.init(); } catch (e) { continue; }
+      if (antes && sel.value !== antes && typeof obj.onCompanyChange === 'function') obj.onCompanyChange();
+    }
+  });
+})();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-25, SWAT-08, pedido do usuário: "Trazer as datas preenchidas na seleção
+   faixa, default data inicial como D-7 e data final como D-1 em Processar, NAV
+   Wallets, NAV Groupings, Publicação e Transação"] Faixa padrão D-7 → D-1 em DIAS
+   ÚTEIS ANBIMA (vem do servidor: /api/beehus/util/default-range — o front só conhece
+   seg–sex). Preenche ao escolher "Faixa de datas", no Limpar e ao trocar de empresa
+   (se a ferramenta estiver em faixa). Grava também o defaultValue, para o
+   _isPristine do Painel continuar tratando o campo como "intocado".
+═════════════════════════════════════════════════════════════════════════════ */
+const FaixaPadrao = {
+  _promessa: null,
+
+  /* Contexto: busca (1x por carregamento) a faixa padrão no servidor. Retorna
+     Promise<{ini, fin}|null>.
+     Pseudocódigo: 1. Reusa a promessa já feita. 2. Falha -> null (campos ficam como estão). */
+  obter() {
+    if (!this._promessa) {
+      this._promessa = fetch('/api/beehus/util/default-range')
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+    }
+    return this._promessa;
+  },
+
+  /* Contexto: preenche os campos inicial/final de uma ferramenta com a faixa padrão.
+     `aoPreencher` (opcional) roda depois (ex.: Publicação recarrega o seletor).
+     Não retorna nada.
+     Pseudocódigo: 1. Obtém a faixa. 2. Escreve value e defaultValue nos dois campos.
+       3. Chama aoPreencher. */
+  async aplicar(idInicial, idFinal, aoPreencher) {
+    const inicio = performance.now();
+    const faixa = await this.obter();
+    if (!faixa || !faixa.ini || !faixa.fin) return;
+    let preencheu = false;
+    for (const [id, valor] of [[idInicial, faixa.ini], [idFinal, faixa.fin]]) {
+      const el = document.getElementById(id);
+      // [SWAT-06, achado no teste] a resposta é assíncrona: se a pessoa digitou no campo
+      // DEPOIS que o preenchimento começou, o padrão não pode atropelar o que ela digitou.
+      if (!el || (el._editadoEm || 0) > inicio) continue;
+      el.value = valor; el.defaultValue = valor; preencheu = true;
+    }
+    if (preencheu && typeof aoPreencher === 'function') aoPreencher();
+  },
+};
+// Marca quando um campo de data foi editado pela pessoa (usado pelo FaixaPadrao.aplicar).
+['input', 'change'].forEach(tipo => document.addEventListener(tipo, (ev) => {
+  if (ev.target && ev.target.type === 'date') ev.target._editadoEm = performance.now();   // o próprio aplicar() não dispara eventos
+}, true));
+
+/* Contexto: liga a faixa padrão nas 4 ferramentas de datas (makeDatesPipeline) e no
+   Transações (IdentifyTxn), envolvendo onModeChange / reset / onCompanyChange depois
+   que todos os add-ons já se instalaram. Não retorna nada.
+   Pseudocódigo:
+     1. Para cada ferramenta, guarda os métodos originais.
+     2. onModeChange('range') -> aplica a faixa padrão.
+     3. reset / onCompanyChange -> se a ferramenta estiver em faixa, aplica de novo. */
+(function _instalarFaixaPadrao() {
+  const ferramentas = [
+    [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
+    [typeof NavWalletsDates   !== 'undefined' ? NavWalletsDates   : null, 'nwd'],
+    [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
+    [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
+    [typeof IdentifyTxn       !== 'undefined' ? IdentifyTxn       : null, 'i'],
+  ];
+  for (const [obj, prefixo] of ferramentas) {
+    if (!obj) continue;
+    const emFaixa = () => (prefixo === 'i')
+      ? !document.getElementById('i-finalDate-wrap').classList.contains('hidden')
+      : obj._mode === 'range';
+    const preencher = () => FaixaPadrao.aplicar(`${prefixo}-initialDate`, `${prefixo}-finalDate`,
+      // Publicação: recarregar o seletor para a data inicial nova (esperado — ver escopo SWAT-08).
+      () => { if (obj.onRangeChange) obj.onRangeChange(); });
+    for (const metodo of ['onModeChange', 'reset', 'onCompanyChange']) {
+      if (typeof obj[metodo] !== 'function') continue;
+      const original = obj[metodo].bind(obj);
+      obj[metodo] = function (...args) {
+        const retorno = original(...args);
+        const querFaixa = (metodo === 'onModeChange') ? args[0] === 'range' : emFaixa();
+        if (querFaixa) preencher();
+        return retorno;
+      };
+    }
+  }
+})();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-25, SWAT-06, pedido do usuário: "Permitir seleção de todas Empresas ou
+   selecionar > 1 em Processar, NAV Wallets, NAV Groupings, Publicação"] Botão
+   "várias empresas ▾" ao lado da empresa: lista com "Todas" (= as empresas do <select>,
+   que já respeitam o escopo do painel). Com 2+ marcadas, o run() vira dia × empresa e os
+   seletores de carteira/agrupamento ficam desativados ("todas de cada empresa"). Com 0/1
+   marcada, a ferramenta volta ao normal. (Transações: segunda etapa — esforço G.)
+═════════════════════════════════════════════════════════════════════════════ */
+/* Contexto:
+   Monta o botão "várias empresas ▾" + a lista com "Todas" ao lado de um <select> de empresa.
+   Usado pelas 4 ferramentas por datas e por Transações [2026-09-27, SWAT-06: extraído do
+   instalador das 4 para Transações reaproveitar]. "Todas" = as opções do <select>, que já
+   respeitam o escopo do painel. Retorna {painel}.
+   Pseudocódigo:
+     1. Cria a caixa (botão, resumo #<px>-multi-resumo, painel) logo depois do <select>.
+     2. Clique no botão abre/fecha o painel (se podeAbrir()); clique fora dele fecha.
+     3. Marcar/desmarcar chama definir(ids) na ordem do <select>. */
+function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
+  const esc = (t) => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const caixa = document.createElement('div');
+  caixa.className = 'multi-empresas';
+  caixa.innerHTML = `<button type="button" class="multi-empresas-btn" id="${px}-multi-btn">várias empresas ▾</button>
+    <span class="multi-empresas-resumo" id="${px}-multi-resumo"></span>
+    <div class="multi-empresas-painel hidden" id="${px}-multi-painel"></div>`;
+  sel.insertAdjacentElement('afterend', caixa);
+  const painel = caixa.querySelector('.multi-empresas-painel');
+  const opcoes = () => Array.from(sel.options).filter(o => o.value);
+  const desenhar = () => {
+    const marcadas = new Set(obter());
+    const todas = opcoes().length > 0 && opcoes().every(o => marcadas.has(o.value));
+    painel.innerHTML = `<label class="me-todas"><input type="checkbox" data-todas ${todas ? 'checked' : ''}> <b>Todas</b> (${opcoes().length})</label>` +
+      opcoes().map(o => `<label><input type="checkbox" value="${esc(o.value)}" ${marcadas.has(o.value) ? 'checked' : ''}> ${esc(o.textContent)}</label>`).join('');
+  };
+  caixa.querySelector('.multi-empresas-btn').addEventListener('click', () => {
+    if (!podeAbrir()) return;
+    painel.classList.toggle('hidden');
+    if (!painel.classList.contains('hidden')) desenhar();
+  });
+  painel.addEventListener('change', (ev) => {
+    const alvo = ev.target;
+    let ids;
+    if (alvo.hasAttribute('data-todas')) {
+      ids = alvo.checked ? opcoes().map(o => o.value) : [];
+    } else {
+      const set = new Set(obter());
+      alvo.checked ? set.add(alvo.value) : set.delete(alvo.value);
+      ids = opcoes().map(o => o.value).filter(v => set.has(v));   // ordem do <select>
+    }
+    definir(ids);
+    desenhar();
+  });
+  // Clique fora fecha o painel (aberto, ele cobre os botões logo abaixo, como o Buscar).
+  document.addEventListener('click', (ev) => {
+    if (!painel.classList.contains('hidden') && !caixa.contains(ev.target)) painel.classList.add('hidden');
+  });
+  return {painel};
+}
+
+(function _instalarVariasEmpresas() {
+  const ferramentas = [
+    [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
+    [typeof NavWalletsDates   !== 'undefined' ? NavWalletsDates   : null, 'nwd'],
+    [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
+    [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
+  ];
+  for (const [obj, px] of ferramentas) {
+    if (!obj) continue;
+    const sel = document.getElementById(`${px}-company`);
+    if (!sel) continue;
+    obj._empresasMulti = [];
+    const opcoes = () => Array.from(sel.options).filter(o => o.value);
+    // Seletores de carteira/agrupamento da view (menos a lista de datas específicas).
+    const seletores = () => Array.from(document.querySelectorAll(
+      `#${px}-available, #${px}-selected, #${px}-grouping, #${px}-pkr-available, #${px}-pkr-selected`))
+      .map(el => el.closest('section') || el).filter((el, i, a) => a.indexOf(el) === i && !el.id.endsWith('dates-card'));
+
+    /* Aplica o estado "várias empresas" na tela e no objeto da ferramenta. */
+    const aplicar = () => {
+      const ids = obj._empresasMulti;
+      const multi = ids.length > 1;
+      sel.disabled = multi;
+      if (multi) {
+        sel.value = ids[0];
+        obj._selectedIds = new Set();
+        if (obj._groupingSelectedIds) obj._groupingSelectedIds = new Set();
+      }
+      seletores().forEach(el => el.classList.toggle('multi-desativado', multi));
+      document.getElementById(`${px}-multi-resumo`).textContent = multi
+        ? `${ids.length} empresas — seletores de carteira/agrupamento desativados (todas de cada empresa)` : '';
+      if (!multi && ids.length === 1 && sel.value !== ids[0]) { sel.value = ids[0]; obj.onCompanyChange(); }
+    };
+    const {painel} = montarSeletorVariasEmpresas(sel, px, {
+      obter: () => obj._empresasMulti,
+      definir: (ids) => { obj._empresasMulti = ids; aplicar(); },
+      podeAbrir: () => !obj._running,
+    });
+    // Confirmação mostra as empresas.
+    const confirmarOriginal = obj.confirm.bind(obj);
+    obj.confirm = function (...a) {
+      const retorno = confirmarOriginal(...a);
+      const alvo = document.getElementById(`${px}-confirm-company`);
+      if (alvo && obj._empresasMulti.length > 1) {
+        const nomes = obj._empresasMulti.map(c => (opcoes().find(o => o.value === c) || {}).textContent || c);
+        alvo.textContent = `${nomes.length} empresas: ${nomes.slice(0, 5).join(', ')}${nomes.length > 5 ? '…' : ''}`;
+      }
+      return retorno;
+    };
+    // Limpar volta para 1 empresa.
+    const resetOriginal = obj.reset.bind(obj);
+    obj.reset = function (...a) {
+      if (!obj._running) { obj._empresasMulti = []; painel.classList.add('hidden'); aplicar(); }
+      return resetOriginal(...a);
+    };
+  }
+})();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-27, SWAT-06 — Transações, 2ª etapa] "várias empresas ▾" no Identificar Transações.
+   Mesmo painel das 4 ferramentas por datas (montarSeletorVariasEmpresas); quem aplica o estado
+   na tela é IdentifyTxn.aplicarVariasEmpresas(). Limpar volta para 1 empresa.
+═════════════════════════════════════════════════════════════════════════════ */
+(function _instalarVariasEmpresasTransacoes() {
+  const sel = document.getElementById('i-company');
+  if (!sel || typeof IdentifyTxn === 'undefined') return;
+  const {painel} = montarSeletorVariasEmpresas(sel, 'i', {
+    obter: () => IdentifyTxn._empresasMulti,
+    definir: (ids) => { IdentifyTxn._empresasMulti = ids; IdentifyTxn.aplicarVariasEmpresas(); },
+    podeAbrir: () => true,
+  });
+  const resetOriginal = IdentifyTxn.reset.bind(IdentifyTxn);
+  IdentifyTxn.reset = function (...a) {
+    const tinhaVarias = this._empresasMulti.length > 0;
+    this._empresasMulti = [];
+    this._colunaEmpresa = false;
+    painel.classList.add('hidden');
+    const retorno = resetOriginal(...a);
+    if (tinhaVarias) this.aplicarVariasEmpresas();
+    return retorno;
+  };
+})();
 
 const _initialView = location.hash.slice(1);
 const _allowed = ['identify', 'delete-prov', 'delete-pos', 'explosion-prop', 'unpublish-nav', 'process-dates', 'nav-wallets-dates', 'nav-groupings-dates', 'publish-dates'];

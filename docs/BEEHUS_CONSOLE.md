@@ -110,7 +110,7 @@ Used by the cascading dropdowns and the eligibility-based pickers.
 | `POST /api/beehus/transactions` | `POST /beehus/financial/transactions` | Create a financial transaction |
 | `DELETE /api/beehus/transactions/<id>` | `DELETE /beehus/financial/transactions/<id>` | Delete one transaction |
 | `PATCH /api/beehus/transactions/<id>` | `PATCH /beehus/financial/transactions/<id>` | Partial update — body keys filtered to the patchable set (`balance`, `beehusTransactionType`, `currencyId`, `description`, `entityId`, `liquidationDate`, `operationDate`, `securityId`); unknown keys are dropped server-side |
-| `POST /api/beehus/transactions/search` | `GET /beehus/financial/transactions` (endpoint G, via `beehus_catalog.transactions_search`) | Search for the Editar Transações and Identificar Transações tables. Accepts `groupingIds[]` (preferred, multi) or legacy `groupingId` (str), plus an optional `identified` filter (`'true'` = `beehusTransactionType` filled, `'false'` = empty/missing, anything else = both buckets). **Grouping scope is a union, not a narrowing:** a row matches if its `walletId` is in the (grouping-narrowed) wallet set **OR** its own `groupingId` is one of the selected groupings — so transactions attached directly to a grouping (whose `walletId` is outside the grouping's members, or null) are listed alongside the wallet-level rows. The endpoint ANDs its filters, so the wallet⋁grouping OR is run as two searches unioned by `_id`; the type/`identified`/`trashed` predicates, the `liquidationDate`-desc sort and the cap are reapplied client-side. Selected groupings are validated against the company via `get_grouping_index()`; the `groupingId` IN-clause spans both string and ObjectId representations (the field is stored as ObjectId in production). **`walletIds` is chunked to 150/request** in `list_transactions` (like the positions client) — an empty `walletIds` widens to the company's full wallet set (often hundreds–thousands of ids), whose CSV would otherwise blow the URL limit and the host would drop the connection (HTTP 414-class), silently returning `[]`. Optional body field **`limit`** (int) switches the route into batched mode for the Identificar view (500/batch): the date range is walked **oldest-first** in 90-day windows, stopping as soon as `limit` rows are collected — avoids one giant upstream fetch for a wide range when only the first batch is needed. Response then carries `total` (exact count, or `null` if the range wasn't fully scanned yet), `returned` and `hasMore`. Without `limit` (legacy callers, e.g. Repetir Posições): whole range fetched in one shot, sort **`liquidationDate` desc** (most recent settlement first), cap 10 000 rows (`truncated`/`hasMore: true` when reached) |
+| `POST /api/beehus/transactions/search` | `GET /beehus/financial/transactions` (endpoint G, via `beehus_catalog.transactions_search`) | Search for the Editar Transações and Identificar Transações tables. Accepts `groupingIds[]` (preferred, multi) or legacy `groupingId` (str), plus an optional `identified` filter (`'true'` = `beehusTransactionType` filled, `'false'` = empty/missing, anything else = both buckets). **Grouping scope is a union, not a narrowing:** a row matches if its `walletId` is in the (grouping-narrowed) wallet set **OR** its own `groupingId` is one of the selected groupings — so transactions attached directly to a grouping (whose `walletId` is outside the grouping's members, or null) are listed alongside the wallet-level rows. The endpoint ANDs its filters, so the wallet⋁grouping OR is run as two searches unioned by `_id`; the type/`identified`/`trashed` predicates, the `liquidationDate`-desc sort and the cap are reapplied client-side. Selected groupings are validated against the company via `get_grouping_index()`; the `groupingId` IN-clause spans both string and ObjectId representations (the field is stored as ObjectId in production). **`walletIds` is chunked to 150/request** in `list_transactions` (like the positions client) — an empty `walletIds` widens to the company's full wallet set (often hundreds–thousands of ids), whose CSV would otherwise blow the URL limit and the host would drop the connection (HTTP 414-class), silently returning `[]`. Optional body field **`limit`** (int) switches the route into batched mode for the Identificar view (**250/batch** since 2026-09-25, SWAT-07 — was 500; `IdentifyTxn.BATCH_LIMIT`; `_TXN_SEARCH_CAP` and the Painel's `_PTX_MAX_ROWS` unchanged, D8): the date range is walked **oldest-first** in 90-day windows, stopping as soon as `limit` rows are collected — avoids one giant upstream fetch for a wide range when only the first batch is needed. Response then carries `total` (exact count, or `null` if the range wasn't fully scanned yet), `returned` and `hasMore`. Without `limit` (legacy callers, e.g. Repetir Posições): whole range fetched in one shot, sort **`liquidationDate` desc** (most recent settlement first), cap 10 000 rows (`truncated`/`hasMore: true` when reached) |
 | `GET / PUT /api/beehus/identify-transactions/config` | — | Load / replace the `typesNeedingSecurity[]` list used by Identificar Transações to decide whether each row's security cell is editable. GET also returns `allTypes[]` (the full known catalogue of `beehusTransactionType` values) so the config modal can render every checkbox without a second round-trip. Persisted to `data/identify_transactions_config.json` via the same atomic-replace helper used by `conciliacao_config.json` |
 | `POST /api/beehus/identify-transactions/identify` | — | Body `{transactionIds: [str]}` (cap 5000). Returns one suggestion per id `{transactionId, beehusTransactionType, securityId, needsSecurity, securityAlternatives:[...]}`. Each alternative carries `source ∈ {level1, level2, collection}` so the security-edit modal can split them into three groups (L1 = carteira em T, L2 = carteira em T-1/T-2, L3 = cadastro completo). The identification heuristic itself is currently a **stub** — see `_suggest_for_transaction` in `pages/beehus_console.py`. Each suggestion is also enriched (one batch pass, `_compute_execution_extras`) with the **Preço exec. / IRRF** fields `{executionPrice, irrf, pu, amountDifference, securityType, formerDate, withinGate, execGroupKey}` — see the *Preço de execução & IRRF* subsection below |
 | `POST /api/beehus/identify-transactions/execution-extras` | `POST /beehus/financial/execution-prices` + `POST /beehus/financial/transactions` | Fired by **Implementar** after the per-row PATCHes. Body `{executionPrices:[{walletId, securityId, positionDate, executionPrice}], taxes:[{sourceTransactionId, balance}]}`. `companyId` is resolved server-side from the wallet (transactions carry none); each IRRF item creates a new `taxes` transaction copying entity/wallet/security/dates/currency from its source. Returns `{execOk, execFail, taxOk, taxFail, errors[]}`; an upstream 401 aborts the rest |
@@ -695,7 +695,107 @@ Dia sem NAV continua `[]` com 200 (não é erro). Hipóteses A (company desatual
 painéis Template) e C (índice de agrupamentos parcial após 429) não eram a causa deste relato e não
 foram alteradas.
 
+> **[2026-09-25, SWAT-09] Transações com uma rolagem só.** A tabela de resultados do Identificar/Editar
+> (`#i-result .table-wrap`) não tem mais rolagem vertical própria (`max-height: none`, só `overflow-x`)
+> — a vertical é a da página, como Issues/Strip no Painel. O cabeçalho da tabela deixa de grudar ao
+> rolar (efeito aceito no escopo).
+
 ### Pipelines "por datas" (single-step)
+
+> **[2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com "PATCH .../publish
+> failed: 500"] Publicação isola os agrupamentos que o Beehus recusa.** Desde o SWAT-05 o servidor manda a lista
+> explícita dos liberados pela trava (antes, com a seleção vazia, mandava `[]` e o Beehus escolhia). Um agrupamento
+> que o Beehus não consegue publicar derrubava o lote de 50 inteiro e a faixa parava. Agora
+> `_publicar_isolando_recusas` divide o lote que falha ao meio até isolar os recusados, publica os demais e devolve
+> `recusados` (nome, HTTP e a mensagem do Beehus) com 200 — a linha do dia mostra "N recusado(s) pelo Beehus" com a
+> lista aberta e a faixa segue. Tudo recusado = 502 com a mensagem; token rejeitado = 401 sem dividir. O erro do dia
+> passou a mostrar também o corpo da resposta do Beehus. A trava |Δ| não muda: só vão ao Beehus os liberados.
+>
+> **[2026-09-28, mesmo dia] Leituras da Publicação com cache curto.** Ao abrir, a tela pede o Δ de ~30 dias de
+> uma vez (`grouping-return-deltas`) + a lista do dia (`groupings-by-publish-state`); desde o SWAT-05/SWAT-04 cada uma
+> ia direto ao /results e, com o Painel aberto em outra aba, o Beehus devolvia 429 até esgotar as 5 tentativas (~23 s)
+> — a lista do dia virava "falha ao consultar o Beehus". `beehus_catalog.nav_results_leitura`: cache de 90 s por
+> (empresa, dia), 1 busca por chave mesmo com pedidos simultâneos e no máximo 3 consultas ao mesmo tempo; erro não
+> entra no cache e continua subindo (SWAT-04). `invalidate_nav` (publicar/despublicar/Atualizar) limpa junto. **A
+> trava de publicação (`nav_publish`) continua lendo o /results AO VIVO.**
+>
+> **[2026-09-28, mesmo dia — a causa real do 500 da Blue3] Carteiras compartilhadas entre agrupamentos.** A
+> resposta do Beehus: "As seguintes carteiras estão compartilhadas em agrupamentos que não estão sendo publicados ou
+> despublicados". O Beehus só publica um agrupamento se TODO agrupamento não publicado que compartilha carteira com ele
+> vier na MESMA chamada. Antes do SWAT-05 a lista ia vazia ("todos") e isso nunca aparecia; com a lista explícita em
+> lotes de 50, parceiros caíam em lotes diferentes e todo lote falhava. Agora (`publicacao_divergencia.py`):
+> `reter_por_carteira_compartilhada` tira da publicação quem compartilha carteira com agrupamento não publicado que não
+> vai junto (bloqueado pela trava ou fora da seleção) — aparece entre os bloqueados com motivo `carteira_compartilhada`,
+> a carteira e os parceiros; parceiro já publicado não prende. `lotes_por_carteira_compartilhada` monta os lotes sem
+> separar componentes ligados por carteira (componente maior que 50 vai sozinho), e o isolamento de recusas divide por
+> componente. Teto de 20 falhas por dia ao isolar (falha geral = para e mostra a resposta do Beehus). Limite: parceiros
+> vêm do /results + membros do cadastro ativos na data; agrupamento que não está no /results da data não é considerado.
+
+> **[2026-09-27, achado A6] Tipo `other` não grava mais (Identificar Transações e a cópia da
+> conciliação).** A API recusa `other` ao gravar transação (POST/PATCH). `TIPOS_NAO_GRAVAVEIS` tira o
+> tipo da edição (por linha e por valor), do modal de sugestão e do reforço (`_editTypes`,
+> `_opcoesTipoGravavel` — numa transação antiga `other`, o atual aparece desabilitado); o filtro da busca
+> continua com ele. `PATCH /api/beehus/transactions/<id>` recusa `other` com 400 claro antes de chamar a
+> API. **Sugestão `other` do classificador** [27/09, decisão do usuário]: a célula "Tipo sugerido" mostra
+> "⚠ não gravável", `_computePatches` deixa a linha INTEIRA de fora (`_skippedRows` — nem o security vai),
+> a confirmação lista essas linhas em vermelho (`_avisoNaoGravaveisHtml`), só `other` dá o alerta "Nada a
+> gravar" e o log do Implementar conta as não gravadas. A cópia da tela
+> de conciliação no swat recebeu a mesma regra de `conciliacao` (`_erro_tipo_transacao`).
+
+> **[2026-09-25, SWAT-06] Várias empresas / "Todas".** Em Processar, NAV Wallets, NAV Groupings e
+> Publicação, o link **"várias empresas ▾"** ao lado da empresa abre a lista com **Todas** (= as
+> empresas do `<select>`, que já respeitam o escopo do painel). Com 2+ marcadas: o `run()` vira
+> **dia × empresa**, uma chamada por vez (`_executarUmDia`, o antigo corpo do laço, sem mudar a
+> lógica), uma linha por par (`data-day="dia|empresa"`); uma **falha marca a linha e o laço segue**
+> (com 1 empresa continua parando como antes); **429 espera 2/4/8 s e tenta de novo**
+> (`_apiComEspera`); os seletores de carteira/agrupamento ficam desativados ("todas de cada
+> empresa"); confirmação, status e log dizem "N empresas". Limpar volta para 1 empresa. Publicação
+> com várias empresas usa a trava do servidor (SWAT-05) em cada empresa/dia. Transações entrou na
+> segunda etapa (abaixo). Achado no teste: o
+> preenchimento da faixa padrão (SWAT-08) é assíncrono — agora não atropela um campo de data que a
+> pessoa editou depois que ele começou.
+>
+> **[2026-09-27, SWAT-06 — Transações (2ª etapa)]** O Identificar Transações ganhou o mesmo
+> **"várias empresas ▾"** (o painel virou `montarSeletorVariasEmpresas()`, usado pelas 5; clique fora
+> fecha). Com 2+ empresas:
+> - **Buscar** faz 1 `POST /transactions/search` por empresa, em sequência, com o mesmo filtro
+>   (datas, tipos, securities, identificadas) e `apiComEspera429()` (a espera do 429 saiu da fábrica
+>   para ser comum). As listas são juntadas numa tabela só, com a coluna **Empresa**; uma empresa
+>   que falha entra no log e as outras seguem. O lote de 250 é **por empresa** — o aviso de lote diz
+>   quais ficaram com mais transações fora do lote.
+> - **Desativados** (são por empresa): Groupings & Wallets e o filtro de Entidades. O backend não
+>   mudou.
+> - **Identificar, Implementar, Editar e Excluir não mudaram**: já trabalham por id de transação
+>   (e os extras de execução por carteira), então valem para as linhas de qualquer empresa.
+> - **Edição de Entidade**: por linha, oferece as entidades da empresa daquela linha; o mapeamento por
+>   valor ("de X para Y") só é oferecido quando todas as linhas com aquele valor são da mesma
+>   empresa (senão aparece "linhas de várias empresas — edite por linha").
+> - Log e resumo da busca dizem "N empresas". Limpar e o atalho do Painel (`prefillFromPainel`)
+>   voltam para 1 empresa.
+> - Testado com Playwright e API simulada (21 checks: 3 empresas, 429 com nova tentativa, 1 empresa
+>   falhando, coluna, aviso de lote, entidades por empresa, Identificar/Excluir por id, volta para 1
+>   empresa sem coluna); SWAT-01/05/06/07/08/09 sem regressão.
+>
+> **[2026-09-25, SWAT-01] Log temporário na tela + limpeza ao trocar de empresa.** `ActionLog` (fim do
+> script do console): uma caixa por ferramenta logo **abaixo do botão Executar** (D5), só em memória,
+> entrada mais recente no topo — horário de término `HH:MM:SS`, ação, empresa, faixa, contagens (ok /
+> pulados / falha / publicados / bloqueados) e status. Grava no fim do `run()` da fábrica (Processar,
+> NAV Wallets, NAV Groupings, Publicação, Excluir Posições, Explosão) e no Transações (busca,
+> Identificar, Implementar, Editar, Excluir — estes três **substituíram o `alert` de "Concluído"**).
+> Trocar de empresa limpa o log, a lista de dias e o status (as datas voltam ao padrão pelo SWAT-08).
+> Nos painéis Template, `ScopeBar.setCompany` avisa os iframes abertos (`postMessage
+> swat-escopo-empresa`): cada ferramenta recarrega a lista de empresas (que respeita o escopo) e limpa
+> o log — é a correção da hipótese A do SWAT-04 (ferramenta presa na empresa antiga).
+>
+> **[2026-09-25, SWAT-08] Faixa padrão D-7 → D-1 (dias úteis ANBIMA).** Ao escolher "Faixa de
+> datas", no Limpar e ao trocar de empresa (se em faixa), Processar, NAV Wallets, NAV Groupings,
+> Publicação e Transações preenchem inicial = hoje − 7 du e final = hoje − 1 du, calculados no
+> servidor (`GET /api/beehus/util/default-range` → `wallet_scope.deslocar_du`, calendário ANBIMA —
+> o front só conhece seg–sex). Um único envelope (`_instalarFaixaPadrao`, fim do script) envolve
+> `onModeChange`/`reset`/`onCompanyChange` das 5 ferramentas depois dos add-ons. O padrão é gravado
+> também em `defaultValue`, e o `Funcoes._isPristine` do Painel passou a tratar valor == padrão como
+> intocado (senão a limpeza de iframes ociosos pararia). Na Publicação o preenchimento dispara o
+> `onRangeChange` (o seletor recarrega — esperado).
 
 > **Removido (jun/2026):** as pipelines multi-step **Fluxo diário**, **Reverter
 > dia**, **Fluxo por datas** e **Reverter por datas** (grupo "Rotina Diária")

@@ -412,6 +412,46 @@ const res = await fetch('/api/my-feature/save', {
 });
 ```
 
+### Modais: fundo que fecha × arrastar seleção (TRV-02, 2026-09-25)
+
+- Fundo que fecha no clique segue o padrão `onclick="if(event.target===this) fechar()"`.
+  Mouse que desce num campo e sobe no fundo gera um `click` no fundo (ancestral comum) e fechava
+  o modal no meio da seleção. **`static/js/utils/guarda_arrasto.js`** (fase de captura, carregado
+  no `<head>` do `base.html` — as 14 páginas — **e** do `shell.html`, que é outro documento)
+  cancela só esse clique: começou em `input/textarea/select/[contenteditable]` ou selecionou texto
+  durante o arrasto, alvo diferente, e o alvo do click contém o do mousedown. Clique normal
+  (inclusive botão com `<span>`) passa. Mesmo arquivo nos 3 projetos (conciliacao, ControleCargas).
+  Modal novo não precisa de nada: basta o padrão acima.
+- A guarda local de `.modal-overlay` que já existia em `beehus_console.html` e o `_guardedClose` de
+  `precificacao.html` continuam lá (cobrem o mesmo caso; não conflitam).
+- **D12:** modais de **token** (shell, Funções, Painel, Correções) e de **edição de transação**
+  (Funções: editar tipo / security / campo; Conciliação mov.: transação, provisão, preço de execução)
+  **não fecham com clique no fundo** — só pelos botões ou **Esc**. Os demais mantêm o clique no fundo.
+
+### Token Beehus vencido → pop-up na hora (TRV-01, 2026-09-25)
+
+- **Servidor** — `token_expirado.py` (raiz, instalado no `app.py`): toda resposta `/api/*` (menos
+  `/api/beehus/token`) sai com **`X-Beehus-Token: expired`** enquanto `token_status()` disser sem
+  token, vencido (`exp`) ou rejeitado (último 401). Cobre as ~39 rotas que devolvem 502 ou 200 com o
+  erro no corpo e o que o `beehus_catalog` engole. O **401 do login local** (sem cookie) não é
+  marcado. Os helpers de 401 (`beehus_console._api_error_response`, `conciliacao._beehus_error_response`)
+  mandam `error_code: "BEEHUS_TOKEN_EXPIRED"`; há `errorhandler(BeehusAuthError)` de reserva.
+- **403 não é mais "token rejeitado"** (`beehus_api/client.py`): medido — token com assinatura
+  inválida, ausente ou lixo → 401. 403 é permissão.
+- **Tela** — `static/js/utils/beehus_token_guard.js` (no `<head>` do `base.html` e do `shell.html`,
+  ANTES do wrapper de escopo `X-Swat-*`, que passa a envolver o fetch já guardado — os dois se
+  compõem, então não foi preciso reescrever o wrapper). Qualquer iframe (inclusive a ferramenta
+  aberta DENTRO do Painel) avisa `window.top` por `postMessage`; o shell abre o modal com o campo
+  vazio e "Seu token expirou, cole um novo.". Página aberta fora do shell abre o próprio modal de
+  token (Funções, Painel, Correções registram o seu). Não reabre com o modal aberto nem 20 s depois
+  de fechado; depois de salvar, "Token salvo. Repita a ação." (nada é repetido sozinho — D11).
+- **Campo token sempre vazio** (TRV-03): shell e modais avulsos (Funções, Painel, Correções) limpam o
+  campo no abrir e no fechar e o input tem `autocomplete="new-password" data-lpignore data-1p-ignore
+  spellcheck="false"` — antes uma colagem que falhou reaparecia e o gerenciador de senha preenchia.
+- Saíram os 4 `alert("Token Beehus não está carregado…")` do Painel (atalho Publicar, aplicar
+  mapeamento, cadastrar ativos, processar todas) — o pop-up cobre. Os laços que param no 1º 401
+  (Identificar, Correções, Exceções, Strip) continuam parando.
+
 ### Colour coding conventions
 
 | Meaning | Tailwind classes |

@@ -1730,6 +1730,7 @@ def invalidate_nav(company_id=None):
             _nav_cache.pop(company_id, None)
         else:
             _nav_cache.clear()
+    invalidar_results_leitura(company_id)   # [2026-09-28] cache de leitura da Publicação junto
 
 
 def refresh(company_id=None):
@@ -1862,6 +1863,61 @@ def nav_results(company_id, date):
     except (BeehusAPIError, BeehusAuthError, Exception):  # noqa: BLE001
         pass
     return {}
+
+
+# [2026-09-28, relato do usuário: na Publicação da Blue3 a lista de agrupamentos mostrava "falha ao
+# consultar o Beehus"] Desde o SWAT-05/SWAT-04 as rotas de LEITURA da Publicação (lista do dia e Δ
+# por agrupamento) vão direto ao /results. Ao abrir a tela ela pede o Δ de ~30 dias de uma vez; com o
+# Painel aberto em outra aba, o Beehus devolveu 429 até as 5 tentativas do cliente acabarem (~23 s) e
+# a lista do dia caiu em 502. Aqui: cache curto por (empresa, dia), 1 busca por chave mesmo com
+# pedidos simultâneos, e no máximo _RESULTS_LEITURA_MAX_SIMULTANEAS consultas ao Beehus ao mesmo
+# tempo. Só para LEITURA da tela: a trava de publicação (nav_publish) continua lendo AO VIVO, e
+# invalidate_nav() limpa este cache junto (publicar/despublicar/Atualizar).
+_RESULTS_LEITURA_TTL_S = 90
+_RESULTS_LEITURA_MAX_SIMULTANEAS = 3
+_results_leitura_cache = {}            # (company_id, 'AAAA-MM-DD') -> (inserido_monotonic, dict)
+_results_leitura_lock = threading.Lock()
+_results_leitura_chaves = {}           # (company_id, dia) -> Lock (1 busca por chave)
+_results_leitura_semaforo = threading.BoundedSemaphore(_RESULTS_LEITURA_MAX_SIMULTANEAS)
+
+
+def nav_results_leitura(company_id, date):
+    """Contexto:
+    /results da empresa+data para as rotas de LEITURA da Publicação, com cache curto e teto de
+    consultas simultâneas (ver bloco acima). Diferente de nav_results(), NÃO engole erro: a falha sobe
+    como BeehusAPIError/BeehusAuthError (SWAT-04 — a tela precisa distinguir "falhou" de "vazio").
+    Retorna dict.
+
+    Pseudocódigo:
+      1. Cache válido (< TTL) -> devolve.
+      2. Trava da chave: se outro pedido já está buscando o mesmo dia, espera e reaproveita.
+      3. Busca com o semáforo (no máximo N ao mesmo tempo); guarda só resposta boa (erro não entra).
+    """
+    chave = (company_id, str(date)[:10])
+    with _results_leitura_lock:
+        achado = _results_leitura_cache.get(chave)
+        if achado and time.monotonic() - achado[0] < _RESULTS_LEITURA_TTL_S:
+            return achado[1]
+        trava_chave = _results_leitura_chaves.setdefault(chave, threading.Lock())
+    with trava_chave:
+        with _results_leitura_lock:
+            achado = _results_leitura_cache.get(chave)
+            if achado and time.monotonic() - achado[0] < _RESULTS_LEITURA_TTL_S:
+                return achado[1]
+        with _results_leitura_semaforo:
+            resultado = get_nav_results(company_id=company_id, position_date=chave[1])
+        resultado = resultado if isinstance(resultado, dict) else {}
+        with _results_leitura_lock:
+            _results_leitura_cache[chave] = (time.monotonic(), resultado)
+        return resultado
+
+
+def invalidar_results_leitura(company_id=None):
+    """Contexto: limpa o cache de nav_results_leitura (de uma empresa, ou tudo). Chamada por
+    invalidate_nav(). Não retorna nada."""
+    with _results_leitura_lock:
+        for chave in [k for k in _results_leitura_cache if company_id is None or k[0] == company_id]:
+            _results_leitura_cache.pop(chave, None)
 
 
 def nav_results_many(company_ids, date):

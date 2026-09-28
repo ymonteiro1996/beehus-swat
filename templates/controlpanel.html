@@ -1324,7 +1324,8 @@ try {
 
 
 <!-- ─── Modal: Bearer Token (mirrors /beehus) ────────────────────────────── -->
-<div id="token-modal" class="modal-overlay" onclick="if(event.target===this) Token.close()">
+<!-- TRV-02/D12: modal de token não fecha com clique no fundo — só Fechar ou Esc. -->
+<div id="token-modal" class="modal-overlay">
   <div class="modal-card" style="width: min(640px, 90vw)">
     <div class="px-5 py-3 border-b flex items-center justify-between">
       <h3 class="font-semibold text-sm text-gray-700">Bearer Token (diário)</h3>
@@ -1336,7 +1337,7 @@ try {
         próximo restart. É o mesmo token usado na página Funções.
       </p>
       <div class="flex gap-2">
-        <input id="token-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..."
+        <input id="token-input" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIs..."
                class="ec-input flex-1" />
         <button onclick="Token.save()"  class="ec-btn ec-btn-primary">Salvar</button>
         <button onclick="Token.clear()" class="ec-btn ec-btn-muted">Limpar</button>
@@ -1433,6 +1434,13 @@ try {
       const sel = document.getElementById("scope-company");
       if (sel && sel.value !== (companyId || "")) sel.value = companyId || "";
       if (_gridDate) selectDate(_gridDate);
+      // [2026-09-25, SWAT-01/SWAT-04 A] As ferramentas abertas (iframes que continuam vivos)
+      // carregaram a lista de empresas uma vez só: avisa para recarregarem (a lista respeita
+      // o escopo) e limparem log/datas — senão pediam dados da empresa antiga com o escopo novo.
+      try {
+        const frames = (typeof Funcoes !== "undefined" && Funcoes._frames) ? Object.values(Funcoes._frames) : [];
+        frames.forEach(f => { try { f.contentWindow.postMessage({type: "swat-escopo-empresa"}, location.origin); } catch (e) {} });
+      } catch (e) {}
     },
   };
 
@@ -2631,10 +2639,7 @@ try {
         companyId: data.companyId, positionDate: data.date, groupingIds: [groupingId],
       });
       if (r.status === 401) {
-        alert(
-          "Token Beehus não está carregado ou foi rejeitado.\n" +
-          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
-        );
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         btn.disabled = false;
         btn.innerHTML = orig;
         return;
@@ -3670,10 +3675,7 @@ try {
           });
       const data = r.body || {};
       if (r.status === 401) {
-        alert(
-          "Token Beehus não está carregado ou foi rejeitado.\n" +
-          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
-        );
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         return;
       }
       if (!r.ok) {
@@ -5038,7 +5040,7 @@ try {
       const r = await api("POST", "/api/controlpanel/create-securities",
         { companyId: _currentCompanyId || "", items });
       if (r.status === 401) {
-        alert("Token Beehus não está carregado ou foi rejeitado.\nClique no badge \"Token\" no topo desta página e cole o token do dia.");
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         return;
       }
       if (!r.ok) {
@@ -6354,10 +6356,7 @@ try {
       const r = await api("POST", "/api/controlpanel/process-all-wallets", { date: _gridDate });
       const data = r.body || {};
       if (r.status === 401) {
-        alert(
-          "Token Beehus não está carregado ou foi rejeitado.\n" +
-          "Clique no badge \"Token\" no topo desta página e cole o token do dia."
-        );
+        // [TRV-01] 401 = token Beehus: o pop-up de colar token já abre sozinho (beehus_token_guard.js).
         return;
       }
       if (!r.ok) {
@@ -6530,10 +6529,11 @@ try {
 
   const Token = {
     open()  {
+      document.getElementById('token-input').value = '';   // [TRV-03] sempre abre vazio
       document.getElementById('token-modal').classList.add('show');
       setTimeout(() => document.getElementById('token-input').focus(), 0);
     },
-    close() { document.getElementById('token-modal').classList.remove('show'); },
+    close() { document.getElementById('token-input').value = ''; document.getElementById('token-modal').classList.remove('show'); },   // [TRV-03] limpa ao fechar
     async refresh() {
       const r = await api('GET', '/api/beehus/token');
       const s = r.body || {};
@@ -6586,6 +6586,17 @@ try {
       this.refresh();
     },
   };
+  // [2026-09-25, TRV-01] Página aberta FORA do shell (janela de cima): o beehus_token_guard.js
+  // abre ESTE modal quando uma resposta vem com X-Beehus-Token: expired. Dentro do shell, quem
+  // abre é o modal do shell. Campo sempre vazio; fechar liga a espera de 20 s (anti-loop).
+  if (window.top === window && window.BeehusTokenGuard && document.getElementById('token-modal')) {
+    const _fecharTokenOriginal = Token.close.bind(Token);
+    Token.close = function () { _fecharTokenOriginal(); BeehusTokenGuard.marcarFechado(); };
+    BeehusTokenGuard.registrarModal({
+      abrir: () => { const campo = document.getElementById('token-input'); if (campo) campo.value = ''; Token.open(); },
+      estaAberto: () => document.getElementById('token-modal').classList.contains('show'),
+    });
+  }
 
   // ESC closes the new beehus modals before falling through to the Painel
   // de Controle modal stack — listener is a separate one (capture phase) so it runs
@@ -6802,7 +6813,9 @@ try {
           'input[type=text], input[type=number], input[type=date], input[type=search], input[type=email], input[type=tel], textarea'
         );
         for (const el of textInputs) {
-          if ((el.value || '').trim()) return false;
+          // [SWAT-08] valor igual ao padrão (defaultValue — ex.: a faixa D-7→D-1
+          // pré-preenchida) conta como intocado.
+          if ((el.value || '').trim() && el.value !== el.defaultValue) return false;
         }
         // Selects: any non-default selection
         for (const sel of doc.querySelectorAll('select')) {

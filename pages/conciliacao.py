@@ -736,7 +736,9 @@ def _beehus_error_response(e, auth_status=401, api_status=502):
     status = auth_status if isinstance(e, BeehusAuthError) else api_status
     return jsonify({"error": str(e),
                     "upstream_status": getattr(e, "status", None),
-                    "upstream_body": getattr(e, "body", None)}), status
+                    "upstream_body": getattr(e, "body", None),
+                    # [TRV-01] código estável p/ o front reconhecer token vencido.
+                    **({"error_code": "BEEHUS_TOKEN_EXPIRED"} if isinstance(e, BeehusAuthError) else {})}), status
 
 
 def _txn_belongs_to_wallet(company_id, wallet_id, txn_id, op_date, liq_date):

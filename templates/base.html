@@ -6,6 +6,10 @@
   <title>{% block title %}Beehus{% endblock %}</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- TRV-02: arrastar seleção de um campo até o fundo não fecha modal (vale p/ as 14 páginas). -->
+  <script src="/static/js/utils/guarda_arrasto.js"></script>
+  <!-- TRV-01: resposta /api/* com X-Beehus-Token: expired abre o pop-up de colar token na hora. -->
+  <script src="/static/js/utils/beehus_token_guard.js"></script>
 
   <style>
     @keyframes spin { to { transform: rotate(360deg); } }
