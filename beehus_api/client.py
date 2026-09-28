@@ -236,10 +236,36 @@ def _headers(*, json_body: bool = True) -> dict:
     return h
 
 
+# [2026-09-27, achado A7 — decisão do usuário: "trate o 429 limite excedido como token rejeitado"]
+# Sem token, ou com token inválido/vencido, a API cai num balde ANÔNIMO de 20 req/min e, quando ele
+# esgota, responde 429 {"userType": "default", "retryAfterSeconds": 60, ...} em vez de 401. Retentar
+# isso só prendia a tela ~60 s em "Validando token..." e o pop-up de token nunca abria. Só ESSE 429 vira
+# token rejeitado: o 429 de token válido (rate limit real, comum num Atualizar grande) segue com retry.
+_USER_TYPE_LIMITE_ANONIMO = "default"
+
+
+def _e_limite_anonimo(r) -> bool:
+    """Contexto: a resposta é o 429 do balde anônimo (token ausente/inválido)? Usada por request() e
+    request_multipart() para tratá-la como token rejeitado, sem retry. Retorna bool.
+
+    Pseudocódigo:
+      1. Status diferente de 429 -> False.
+      2. Corpo JSON com userType == "default" -> True; corpo ilegível ou outro userType -> False.
+    """
+    if r.status_code != 429:
+        return False
+    try:
+        corpo = r.json()
+    except ValueError:
+        return False
+    return isinstance(corpo, dict) and corpo.get("userType") == _USER_TYPE_LIMITE_ANONIMO
+
+
 def request(method: str, path: str, *, json=None, params=None, timeout: int | None = None):
     """Send a request to the Beehus API and return the parsed JSON body.
 
-    Raises BeehusAuthError on 401, BeehusAPIError on any other non-2xx.
+    Raises BeehusAuthError on 401 (and on the anonymous-bucket 429, A7), BeehusAPIError on any
+    other non-2xx.
     """
     url = f"{BASE_URL}{path}"
     # Retry on 429 (rate limit) with backoff — the bulk warm of the navPackages
@@ -266,7 +292,7 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
         if _timing_on:
             _record_timing(method, path, params, r.status_code,
                            (time.monotonic() - _t0) * 1000.0)
-        if r.status_code == 429 and attempt <= 5:
+        if r.status_code == 429 and attempt <= 5 and not _e_limite_anonimo(r):   # [A7]
             ra = r.headers.get("Retry-After")
             try:
                 delay = float(ra) if ra else min(0.5 * (2 ** attempt), 8.0)
@@ -276,10 +302,11 @@ def request(method: str, path: str, *, json=None, params=None, timeout: int | No
             continue
         break
 
-    # [2026-09-25, TRV-01] Só 401 é token rejeitado. Medido contra a API: token com
+    # [2026-09-25, TRV-01] 401 é token rejeitado. Medido contra a API: token com
     # assinatura inválida, ausente ou lixo -> 401. 403 é falta de PERMISSÃO — tratá-lo
     # como token vencido abriria o pop-up "cole um token novo" à toa.
-    if r.status_code == 401:
+    # [2026-09-27, A7] ...e o 429 do balde anônimo também (ver _e_limite_anonimo).
+    if r.status_code == 401 or _e_limite_anonimo(r):
         _state["rejected"] = True  # atomic dict set under the GIL
         raise BeehusAuthError(
             f"Token rejected ({r.status_code}). Re-paste today's token on /beehus.",
@@ -331,10 +358,11 @@ def request_multipart(method: str, path: str, *, files, data=None,
         _record_timing(method, path, params, r.status_code,
                        (time.monotonic() - _t0) * 1000.0)
 
-    # [2026-09-25, TRV-01] Só 401 é token rejeitado. Medido contra a API: token com
+    # [2026-09-25, TRV-01] 401 é token rejeitado. Medido contra a API: token com
     # assinatura inválida, ausente ou lixo -> 401. 403 é falta de PERMISSÃO — tratá-lo
     # como token vencido abriria o pop-up "cole um token novo" à toa.
-    if r.status_code == 401:
+    # [2026-09-27, A7] ...e o 429 do balde anônimo também (ver _e_limite_anonimo).
+    if r.status_code == 401 or _e_limite_anonimo(r):
         _state["rejected"] = True  # atomic dict set under the GIL
         raise BeehusAuthError(
             f"Token rejected ({r.status_code}). Re-paste today's token on /beehus.",

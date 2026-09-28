@@ -707,7 +707,10 @@ foram alteradas.
 > tipo da edição (por linha e por valor), do modal de sugestão e do reforço (`_editTypes`,
 > `_opcoesTipoGravavel` — numa transação antiga `other`, o atual aparece desabilitado); o filtro da busca
 > continua com ele. `PATCH /api/beehus/transactions/<id>` recusa `other` com 400 claro antes de chamar a
-> API (uma sugestão `other` do classificador falha com essa mensagem no Implementar). A cópia da tela
+> API. **Sugestão `other` do classificador** [27/09, decisão do usuário]: a célula "Tipo sugerido" mostra
+> "⚠ não gravável", `_computePatches` deixa a linha INTEIRA de fora (`_skippedRows` — nem o security vai),
+> a confirmação lista essas linhas em vermelho (`_avisoNaoGravaveisHtml`), só `other` dá o alerta "Nada a
+> gravar" e o log do Implementar conta as não gravadas. A cópia da tela
 > de conciliação no swat recebeu a mesma regra de `conciliacao` (`_erro_tipo_transacao`).
 
 > **[2026-09-25, SWAT-06] Várias empresas / "Todas".** Em Processar, NAV Wallets, NAV Groupings e
