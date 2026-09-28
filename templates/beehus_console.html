@@ -119,6 +119,16 @@
   html.dark .day-grid .day-date { color: #d1d5db; }
   .day-grid .step-row  { display: inline-flex; gap: 0.4rem; }
   .day-grid .step-row .step-icon { font-size: 0.75rem; }
+  /* SWAT-06: várias empresas. */
+  .multi-empresas { margin-top: 0.25rem; font-size: 0.6875rem; position: relative; }
+  .multi-empresas-btn { color: #2563eb; text-decoration: underline; }
+  .multi-empresas-resumo { color: #92400e; margin-left: 0.4rem; }
+  .multi-empresas-painel { position: absolute; z-index: 30; background: #fff; border: 1px solid #d1d5db; border-radius: 0.5rem;
+                           padding: 0.4rem 0.6rem; max-height: 260px; overflow-y: auto; min-width: 260px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .multi-empresas-painel label { display: block; padding: 0.1rem 0; white-space: nowrap; }
+  .multi-empresas-painel .me-todas { border-bottom: 1px solid #e5e7eb; margin-bottom: 0.2rem; }
+  html.dark .multi-empresas-painel { background: #1f2937; border-color: #374151; }
+  .multi-desativado { opacity: 0.45; pointer-events: none; }
   /* SWAT-01: log de negócio por ferramenta (ActionLog), abaixo do botão Executar. */
   .action-log { margin-top: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.6875rem; max-height: 220px; overflow-y: auto; }
   .action-log ul { margin: 0.25rem 0 0; }
@@ -7775,13 +7785,16 @@ function makeDatesPipeline(cfg) {
       }
     },
 
-    _renderDayRows(days) {
+    // [SWAT-06] `cids` (várias empresas): uma linha por dia × empresa, com data-day="dia|empresa".
+    _renderDayRows(days, cids) {
       const root = $('days');
       root.classList.remove('hidden');
       const stepLabel = _resolveCfg('stepLabel', '');
-      root.innerHTML = days.map(d => `
+      const linhas = cids ? days.flatMap(d => cids.map(c => ({chave: `${d}|${c}`, rotulo: `${d} · ${this._nomeEmpresa(c)}`})))
+                          : days.map(d => ({chave: d, rotulo: d}));
+      root.innerHTML = linhas.map(({chave: d, rotulo}) => `
         <li data-day="${d}">
-          <span class="day-date">${d}</span>
+          <span class="day-date" title="${_escDP(rotulo)}">${_escDP(rotulo)}</span>
           <span class="step-row">
             <span class="step-icon" data-state="pending" data-key="step" title="${_escDP(stepLabel)}">·</span>
           </span>
@@ -7789,6 +7802,103 @@ function makeDatesPipeline(cfg) {
           <span class="day-elapsed text-gray-400"></span>
         </li>
       `).join('');
+    },
+
+    /* Contexto:
+       Executa UMA linha da faixa — um dia de uma empresa (SWAT-06): busca elegíveis (Publicação),
+       manda o POST e pinta a linha `chave`. É o corpo do laço de run(), sem mudar a lógica.
+       Retorna {tipo: 'ok'|'skip'|'erro', publicados, bloqueados}.
+
+       Pseudocódigo:
+         1. Publicação: busca os elegíveis do dia (na empresa); nada -> 'skip'.
+         2. POST do dia (com espera e nova tentativa em 429).
+         3. Erro: escopo vazio / skipOnError -> 'skip'; senão 'erro'.
+         4. Sucesso: pinta a linha (publicados/bloqueados) -> 'ok'. */
+    async _executarUmDia(chave, day, cid, ctx) {
+      const dayT0 = performance.now();
+      const rotulo = (chave === day) ? day : `${day} · ${this._nomeEmpresa(cid)}`;
+      this._scrollDayIntoView(chave);
+      let ids;
+      if (cfg.kind === 'publish') {
+        const lookupVerb = (ctx.eligPub === 'true') ? 'publicados' : 'não publicados';
+        this._setDayStep(chave, 'running', `${rotulo} · buscando ${lookupVerb}…`);
+        const lookup = await this._apiComEspera('GET',
+          `/api/beehus/filters/groupings-by-publish-state` +
+          `?companyId=${encodeURIComponent(cid)}` +
+          `&positionDate=${encodeURIComponent(day)}` +
+          `&published=${ctx.eligPub}`);
+        if (!lookup.ok) {
+          this._setDayStep(chave, 'error', `lookup falhou em ${rotulo}: ${(lookup.body && lookup.body.error) || 'HTTP ' + lookup.status}`);
+          return {tipo: 'erro'};
+        }
+        ids = (lookup.body || []).map(g => g.id);
+        // Seleção do seletor (só com 1 empresa — com várias ele fica desativado).
+        if (this._selectedIds && this._selectedIds.size > 0) {
+          const want = this._selectedIds;
+          ids = ids.filter(id => want.has(id));
+        }
+        if (ids.length === 0) {
+          this._setDayStep(chave, 'skipped', `${rotulo} · nada a ${ctx.verbPast.startsWith('des') ? 'despublicar' : 'publicar'}`);
+          this._setDayElapsed(chave, performance.now() - dayT0);
+          return {tipo: 'skip'};
+        }
+      } else {
+        ids = Array.from(this._selectedIds);
+      }
+
+      this._setDayStep(chave, 'running', `${rotulo} · ${ctx.stepLabel}…`);
+      const t0 = performance.now();
+      const payload = {companyId: cid, positionDate: day, [cfg.payloadKey]: ids, ...ctx.extraPayload};
+      const r = await this._apiComEspera('POST', ctx.endpoint, payload);
+      const ms = Math.round(performance.now() - t0);
+      Token.refresh();
+      if (!r.ok) {
+        // Painéis Template: dia sem carteira/agrupamento do escopo é pulado (_scope_empty_error).
+        if (r.body && r.body.scopeEmpty) {
+          const noun = r.body.scopeKind === 'agrupamento' ? 'agrupamento' : 'carteira';
+          this._setDayStep(chave, 'skipped', `${rotulo} · nenhum(a) ${noun} do Template com SLA nesta data`);
+          this._setDayElapsed(chave, performance.now() - dayT0);
+          return {tipo: 'skip'};
+        }
+        // Pipeline-specific "soft errors" — skip, não para (cfg.skipOnError).
+        const skip = cfg.skipOnError && cfg.skipOnError(r.body);
+        if (skip) {
+          this._setDayStep(chave, 'skipped', `${rotulo} · ${skip.reason}`);
+          this._setDayElapsed(chave, performance.now() - dayT0);
+          return {tipo: 'skip'};
+        }
+        this._setDayStep(chave, 'error', `${rotulo} · falhou (${ms}ms)${r.body && r.body.error ? ': ' + r.body.error : ''}`);
+        return {tipo: 'erro'};
+      }
+      // Publicação: o servidor devolve o que publicou e o que a trava de |Δ| barrou.
+      const blocked = (r.body && Array.isArray(r.body.blocked)) ? r.body.blocked : [];
+      const nPub = (r.body && Array.isArray(r.body.publishedIds)) ? r.body.publishedIds.length : ids.length;
+      const detail = (cfg.kind === 'publish')
+        ? `${rotulo} · ${nPub} ${ctx.verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '') + ` (${ms}ms)`
+        : `${rotulo} concluído (${ms}ms)`;
+      this._setDayStep(chave, (nPub === 0 && blocked.length) ? 'skipped' : 'done', detail);
+      this._setDayBlocked(chave, blocked);
+      this._setDayElapsed(chave, performance.now() - dayT0);
+      return {tipo: 'ok', publicados: (cfg.kind === 'publish') ? nPub : 0, bloqueados: blocked.length};
+    },
+
+    /* Contexto:
+       `api()` com espera em 429 (SWAT-06: várias empresas em sequência batiam no limite de
+       taxa — o log de 25/09 mostra 6 companies com 429). Retorna o mesmo {ok, status, body}.
+       Pseudocódigo: 1. Chama. 2. 429 -> espera 2 s, 4 s, 8 s e tenta de novo (até 3 vezes). */
+    async _apiComEspera(metodo, url, corpo) {
+      let r = await api(metodo, url, corpo);
+      for (let tentativa = 0; r.status === 429 && tentativa < 3; tentativa++) {
+        await new Promise(ok => setTimeout(ok, 2000 * (2 ** tentativa)));
+        r = await api(metodo, url, corpo);
+      }
+      return r;
+    },
+
+    /* Contexto: nome de uma empresa pelo <select> da ferramenta (rótulo das linhas). */
+    _nomeEmpresa(cid) {
+      const opt = Array.from($('company').options).find(o => o.value === cid);
+      return opt ? opt.textContent.trim() : cid;
     },
 
     _setDayStep(day, state, msg = '') {
@@ -7848,11 +7958,14 @@ function makeDatesPipeline(cfg) {
       $('run-btn').disabled = true;
       $('reset-btn').disabled = true;
 
-      const cid    = $('company').value;
+      // [2026-09-25, SWAT-06] Várias empresas: `_empresasMulti` (>= 2 ids) vira um laço
+      // dia × empresa; com 1 empresa tudo segue exatamente como antes.
+      const cids   = (this._empresasMulti && this._empresasMulti.length > 1) ? this._empresasMulti.slice() : [$('company').value];
+      const multi  = cids.length > 1;
       const days   = this._resolveDays();
       const status = $('status');
 
-      this._renderDayRows(days);
+      this._renderDayRows(days, multi ? cids : null);
       const explicit = this._useDateList && this._selectedDates.size > 0;
       status.textContent = explicit
         ? `Iniciando — ${days.length} data(s) explícitas…`
@@ -7873,95 +7986,31 @@ function makeDatesPipeline(cfg) {
       const extraPayload = _resolveCfg('extraPayload', null) || {};
 
       let stoppedAt = null;
-      let totalSkipped = 0, totalRun = 0, totalBlocked = 0, totalPublished = 0;
+      let totalSkipped = 0, totalRun = 0, totalBlocked = 0, totalPublished = 0, totalFalhas = 0;
+      const ctx = {endpoint, stepLabel, verbPast, eligPub, extraPayload};
       outer: for (const day of days) {
-        const dayT0 = performance.now();
-        this._scrollDayIntoView(day);
-
-        let ids;
-        if (cfg.kind === 'publish') {
-          // Per-day eligibility lookup: groupings in the opposite of the
-          // target state (so we don't re-publish what's already published,
-          // and don't unpublish what isn't published).
-          const lookupVerb = (eligPub === 'true') ? 'publicados' : 'não publicados';
-          this._setDayStep(day, 'running', `${day} · buscando ${lookupVerb}…`);
-          const lookup = await api(
-            'GET',
-            `/api/beehus/filters/groupings-by-publish-state` +
-            `?companyId=${encodeURIComponent(cid)}` +
-            `&positionDate=${encodeURIComponent(day)}` +
-            `&published=${eligPub}`,
-          );
-          if (!lookup.ok) {
-            this._setDayStep(day, 'error', `lookup falhou em ${day}: ${(lookup.body && lookup.body.error) || 'HTTP ' + lookup.status}`);
+        for (const cid of cids) {
+          const chave = multi ? `${day}|${cid}` : day;
+          const r = await this._executarUmDia(chave, day, cid, ctx);
+          if (r.tipo === 'skip') { totalSkipped++; continue; }
+          if (r.tipo === 'erro') {
+            // [SWAT-06] com várias empresas, a falha marca a linha e o laço SEGUE com as
+            // outras (antes: break outer). Com 1 empresa, para como sempre parou.
+            if (multi) { totalFalhas++; continue; }
             stoppedAt = {day};
             break outer;
           }
-          ids = (lookup.body || []).map(g => g.id);
-          // If the operator pre-selected a subset of groupings via the
-          // picker, restrict per-day action to that intersection. Empty
-          // selection = act on everything eligible (legacy behavior).
-          if (this._selectedIds && this._selectedIds.size > 0) {
-            const want = this._selectedIds;
-            ids = ids.filter(id => want.has(id));
-          }
-          if (ids.length === 0) {
-            this._setDayStep(day, 'skipped', `${day} · nada a ${verbPast.startsWith('des') ? 'despublicar' : 'publicar'}`);
-            this._setDayElapsed(day, performance.now() - dayT0);
-            totalSkipped++;
-            continue;
-          }
-        } else {
-          ids = Array.from(this._selectedIds);
+          totalBlocked += r.bloqueados;
+          totalPublished += r.publicados;
+          totalRun++;
         }
-
-        this._setDayStep(day, 'running', `${day} · ${stepLabel}…`);
-        const t0 = performance.now();
-        const payload = {companyId: cid, positionDate: day, [cfg.payloadKey]: ids, ...extraPayload};
-        const r = await api('POST', endpoint, payload);
-        const ms = Math.round(performance.now() - t0);
-        Token.refresh();
-        if (!r.ok) {
-          // Painéis Template: dia sem carteira/agrupamento do escopo (no
-          // Somente SLA, sem nenhuma selecionada com SLA nesse dia) é pulado,
-          // não interrompe a faixa — ver _scope_empty_error no backend.
-          if (r.body && r.body.scopeEmpty) {
-            const noun = r.body.scopeKind === 'agrupamento' ? 'agrupamento' : 'carteira';
-            this._setDayStep(day, 'skipped', `${day} · nenhum(a) ${noun} do Template com SLA nesta data`);
-            this._setDayElapsed(day, performance.now() - dayT0);
-            totalSkipped++;
-            continue;
-          }
-          // Pipeline-specific "soft errors" — treated as a skip, not a stop.
-          // Each pipeline opts in via cfg.skipOnError(body) → {skip, reason}|null.
-          const skip = cfg.skipOnError && cfg.skipOnError(r.body);
-          if (skip) {
-            this._setDayStep(day, 'skipped', `${day} · ${skip.reason}`);
-            this._setDayElapsed(day, performance.now() - dayT0);
-            totalSkipped++;
-            continue;
-          }
-          this._setDayStep(day, 'error', `falhou (${ms}ms)`);
-          stoppedAt = {day};
-          break outer;
-        }
-        // Publicação: o servidor devolve o que publicou e o que a trava de
-        // |Δ| barrou NESTE dia (publishedIds/blocked). Despublicar não tem trava.
-        const blocked = (r.body && Array.isArray(r.body.blocked)) ? r.body.blocked : [];
-        const nPub = (r.body && Array.isArray(r.body.publishedIds)) ? r.body.publishedIds.length : ids.length;
-        const detail = (cfg.kind === 'publish')
-          ? `${day} · ${nPub} ${verbPast}(s)` + (blocked.length ? ` · ${blocked.length} bloqueado(s)` : '') + ` (${ms}ms)`
-          : `${day} concluído (${ms}ms)`;
-        this._setDayStep(day, (nPub === 0 && blocked.length) ? 'skipped' : 'done', detail);
-        this._setDayBlocked(day, blocked);
-        this._setDayElapsed(day, performance.now() - dayT0);
-        totalBlocked += blocked.length;
-        totalPublished += (cfg.kind === 'publish') ? nPub : 0;
-        totalRun++;
       }
 
       if (stoppedAt) {
         status.textContent = `Interrompido em ${stoppedAt.day} — veja o Log.`;
+      } else if (multi) {
+        status.textContent = `Concluído — ${cids.length} empresas × ${days.length} dia(s): ${totalRun} ok, ` +
+          `${totalSkipped} ignorado(s), ${totalFalhas} falha(s)` + (totalBlocked ? `, ${totalBlocked} bloqueado(s) pela trava |Δ|.` : '.');
       } else if (cfg.kind === 'publish') {
         status.textContent = `Concluído — ${totalRun} dia(s) ${verbPast}(s), ${totalSkipped} ignorado(s)` +
           (totalBlocked ? `, ${totalBlocked} agrupamento(s) bloqueado(s) pela trava |Δ| (veja cada dia).` : '.');
@@ -7973,13 +8022,14 @@ function makeDatesPipeline(cfg) {
       // [SWAT-01] entrada no log de negócio da ferramenta, com o horário de término.
       ActionLog.registrar(px, {
         acao: stepLabel || cfg.kind,
-        empresa: ActionLog.empresaDe(id('company')),
+        empresa: multi ? `${cids.length} empresas` : ActionLog.empresaDe(id('company')),
         faixa: days.length > 1 ? `${days[0]} → ${days[days.length - 1]} (${days.length} dias)` : (days[0] || ''),
         contagens: [`${totalRun} ok`, totalSkipped ? `${totalSkipped} pulado(s)` : '', stoppedAt ? '1 falha' : '',
+                    totalFalhas ? `${totalFalhas} falha(s)` : '',
                     cfg.kind === 'publish' ? `${totalPublished} publicado(s)` : '',
                     totalBlocked ? `${totalBlocked} bloqueado(s)` : ''].filter(Boolean).join(', '),
         status: stoppedAt ? `interrompido em ${stoppedAt.day}` : 'concluído',
-        ok: !stoppedAt,
+        ok: !stoppedAt && !totalFalhas,
       });
 
       this._running = false;
@@ -9841,15 +9891,24 @@ const FaixaPadrao = {
      Pseudocódigo: 1. Obtém a faixa. 2. Escreve value e defaultValue nos dois campos.
        3. Chama aoPreencher. */
   async aplicar(idInicial, idFinal, aoPreencher) {
+    const inicio = performance.now();
     const faixa = await this.obter();
     if (!faixa || !faixa.ini || !faixa.fin) return;
+    let preencheu = false;
     for (const [id, valor] of [[idInicial, faixa.ini], [idFinal, faixa.fin]]) {
       const el = document.getElementById(id);
-      if (el) { el.value = valor; el.defaultValue = valor; }
+      // [SWAT-06, achado no teste] a resposta é assíncrona: se a pessoa digitou no campo
+      // DEPOIS que o preenchimento começou, o padrão não pode atropelar o que ela digitou.
+      if (!el || (el._editadoEm || 0) > inicio) continue;
+      el.value = valor; el.defaultValue = valor; preencheu = true;
     }
-    if (typeof aoPreencher === 'function') aoPreencher();
+    if (preencheu && typeof aoPreencher === 'function') aoPreencher();
   },
 };
+// Marca quando um campo de data foi editado pela pessoa (usado pelo FaixaPadrao.aplicar).
+['input', 'change'].forEach(tipo => document.addEventListener(tipo, (ev) => {
+  if (ev.target && ev.target.type === 'date') ev.target._editadoEm = performance.now();   // o próprio aplicar() não dispara eventos
+}, true));
 
 /* Contexto: liga a faixa padrão nas 4 ferramentas de datas (makeDatesPipeline) e no
    Transações (IdentifyTxn), envolvendo onModeChange / reset / onCompanyChange depois
@@ -9884,6 +9943,97 @@ const FaixaPadrao = {
         return retorno;
       };
     }
+  }
+})();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   [2026-09-25, SWAT-06, pedido do usuário: "Permitir seleção de todas Empresas ou
+   selecionar > 1 em Processar, NAV Wallets, NAV Groupings, Publicação"] Botão
+   "várias empresas ▾" ao lado da empresa: lista com "Todas" (= as empresas do <select>,
+   que já respeitam o escopo do painel). Com 2+ marcadas, o run() vira dia × empresa e os
+   seletores de carteira/agrupamento ficam desativados ("todas de cada empresa"). Com 0/1
+   marcada, a ferramenta volta ao normal. (Transações: segunda etapa — esforço G.)
+═════════════════════════════════════════════════════════════════════════════ */
+(function _instalarVariasEmpresas() {
+  const ferramentas = [
+    [typeof ProcessDates      !== 'undefined' ? ProcessDates      : null, 'pcd'],
+    [typeof NavWalletsDates   !== 'undefined' ? NavWalletsDates   : null, 'nwd'],
+    [typeof NavGroupingsDates !== 'undefined' ? NavGroupingsDates : null, 'ngd'],
+    [typeof PublishDates      !== 'undefined' ? PublishDates      : null, 'pbd'],
+  ];
+  const esc = (t) => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  for (const [obj, px] of ferramentas) {
+    if (!obj) continue;
+    const sel = document.getElementById(`${px}-company`);
+    if (!sel) continue;
+    obj._empresasMulti = [];
+    const caixa = document.createElement('div');
+    caixa.className = 'multi-empresas';
+    caixa.innerHTML = `<button type="button" class="multi-empresas-btn" id="${px}-multi-btn">várias empresas ▾</button>
+      <span class="multi-empresas-resumo" id="${px}-multi-resumo"></span>
+      <div class="multi-empresas-painel hidden" id="${px}-multi-painel"></div>`;
+    sel.insertAdjacentElement('afterend', caixa);
+    const painel = caixa.querySelector('.multi-empresas-painel');
+    const opcoes = () => Array.from(sel.options).filter(o => o.value);
+    // Seletores de carteira/agrupamento da view (menos a lista de datas específicas).
+    const seletores = () => Array.from(document.querySelectorAll(
+      `#${px}-available, #${px}-selected, #${px}-grouping, #${px}-pkr-available, #${px}-pkr-selected`))
+      .map(el => el.closest('section') || el).filter((el, i, a) => a.indexOf(el) === i && !el.id.endsWith('dates-card'));
+
+    /* Aplica o estado "várias empresas" na tela e no objeto da ferramenta. */
+    const aplicar = () => {
+      const ids = obj._empresasMulti;
+      const multi = ids.length > 1;
+      sel.disabled = multi;
+      if (multi) {
+        sel.value = ids[0];
+        obj._selectedIds = new Set();
+        if (obj._groupingSelectedIds) obj._groupingSelectedIds = new Set();
+      }
+      seletores().forEach(el => el.classList.toggle('multi-desativado', multi));
+      document.getElementById(`${px}-multi-resumo`).textContent = multi
+        ? `${ids.length} empresas — seletores de carteira/agrupamento desativados (todas de cada empresa)` : '';
+      if (!multi && ids.length === 1 && sel.value !== ids[0]) { sel.value = ids[0]; obj.onCompanyChange(); }
+    };
+    const desenhar = () => {
+      const marcadas = new Set(obj._empresasMulti);
+      const todas = opcoes().length > 0 && opcoes().every(o => marcadas.has(o.value));
+      painel.innerHTML = `<label class="me-todas"><input type="checkbox" data-todas ${todas ? 'checked' : ''}> <b>Todas</b> (${opcoes().length})</label>` +
+        opcoes().map(o => `<label><input type="checkbox" value="${esc(o.value)}" ${marcadas.has(o.value) ? 'checked' : ''}> ${esc(o.textContent)}</label>`).join('');
+    };
+    caixa.querySelector('.multi-empresas-btn').addEventListener('click', () => {
+      if (obj._running) return;
+      painel.classList.toggle('hidden');
+      if (!painel.classList.contains('hidden')) desenhar();
+    });
+    painel.addEventListener('change', (ev) => {
+      const alvo = ev.target;
+      if (alvo.hasAttribute('data-todas')) {
+        obj._empresasMulti = alvo.checked ? opcoes().map(o => o.value) : [];
+      } else {
+        const set = new Set(obj._empresasMulti);
+        alvo.checked ? set.add(alvo.value) : set.delete(alvo.value);
+        obj._empresasMulti = opcoes().map(o => o.value).filter(v => set.has(v));   // ordem do <select>
+      }
+      desenhar(); aplicar();
+    });
+    // Confirmação mostra as empresas.
+    const confirmarOriginal = obj.confirm.bind(obj);
+    obj.confirm = function (...a) {
+      const retorno = confirmarOriginal(...a);
+      const alvo = document.getElementById(`${px}-confirm-company`);
+      if (alvo && obj._empresasMulti.length > 1) {
+        const nomes = obj._empresasMulti.map(c => (opcoes().find(o => o.value === c) || {}).textContent || c);
+        alvo.textContent = `${nomes.length} empresas: ${nomes.slice(0, 5).join(', ')}${nomes.length > 5 ? '…' : ''}`;
+      }
+      return retorno;
+    };
+    // Limpar volta para 1 empresa.
+    const resetOriginal = obj.reset.bind(obj);
+    obj.reset = function (...a) {
+      if (!obj._running) { obj._empresasMulti = []; painel.classList.add('hidden'); aplicar(); }
+      return resetOriginal(...a);
+    };
   }
 })();
 

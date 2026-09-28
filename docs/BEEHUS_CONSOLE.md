@@ -702,6 +702,19 @@ foram alteradas.
 
 ### Pipelines "por datas" (single-step)
 
+> **[2026-09-25, SWAT-06] Várias empresas / "Todas".** Em Processar, NAV Wallets, NAV Groupings e
+> Publicação, o link **"várias empresas ▾"** ao lado da empresa abre a lista com **Todas** (= as
+> empresas do `<select>`, que já respeitam o escopo do painel). Com 2+ marcadas: o `run()` vira
+> **dia × empresa**, uma chamada por vez (`_executarUmDia`, o antigo corpo do laço, sem mudar a
+> lógica), uma linha por par (`data-day="dia|empresa"`); uma **falha marca a linha e o laço segue**
+> (com 1 empresa continua parando como antes); **429 espera 2/4/8 s e tenta de novo**
+> (`_apiComEspera`); os seletores de carteira/agrupamento ficam desativados ("todas de cada
+> empresa"); confirmação, status e log dizem "N empresas". Limpar volta para 1 empresa. Publicação
+> com várias empresas usa a trava do servidor (SWAT-05) em cada empresa/dia. **Transações ficou para
+> uma segunda etapa** (esforço G: as listas de edição são por empresa). Achado no teste: o
+> preenchimento da faixa padrão (SWAT-08) é assíncrono — agora não atropela um campo de data que a
+> pessoa editou depois que ele começou.
+>
 > **[2026-09-25, SWAT-01] Log temporário na tela + limpeza ao trocar de empresa.** `ActionLog` (fim do
 > script do console): uma caixa por ferramenta logo **abaixo do botão Executar** (D5), só em memória,
 > entrada mais recente no topo — horário de término `HH:MM:SS`, ação, empresa, faixa, contagens (ok /
