@@ -129,6 +129,14 @@
   .multi-empresas-painel .me-todas { border-bottom: 1px solid #e5e7eb; margin-bottom: 0.2rem; }
   html.dark .multi-empresas-painel { background: #1f2937; border-color: #374151; }
   .multi-desativado { opacity: 0.45; pointer-events: none; }
+  /* [2026-09-28, pedido do usuário: "mostrando mensagem de carregando lista"] aviso fixo enquanto
+     alguma lista (/api/beehus/filters/*) está sendo buscada + linha "carregando" dentro dos seletores. */
+  .carregando-listas { position: fixed; top: 10px; right: 16px; z-index: 70; background: #eff6ff; color: #1d4ed8;
+    border: 1px solid #bfdbfe; border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+  html.dark .carregando-listas { background: #1e3a8a; color: #dbeafe; border-color: #1d4ed8; }
+  .picker-row-carregando { color: #1d4ed8; font-style: italic; cursor: default; }
+  html.dark .picker-row-carregando { color: #93c5fd; }
   /* SWAT-01: log de negócio por ferramenta (ActionLog), abaixo do botão Executar. */
   .action-log { margin-top: 0.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.6875rem; max-height: 220px; overflow-y: auto; }
   .action-log ul { margin: 0.25rem 0 0; }
@@ -3107,8 +3115,58 @@ function hideBusy() {
   if (el) el.classList.remove('show');
 }
 
+/* Contexto:
+   Aviso fixo "⏳ Carregando lista…" enquanto houver alguma busca de lista (/api/beehus/filters/*) em
+   andamento — vale para todas as ferramentas da página sem mexer em cada uma [2026-09-28, pedido do
+   usuário: "mostrando mensagem de carregando lista"]. Só aparece se a busca passar de 300 ms (evita
+   piscar nas rápidas). Chamado por api(). */
+const IndicadorCarregando = {
+  _emAndamento: 0,
+  _timer: null,
+  /* Contexto: o elemento do aviso (criado 1x). Retorna o elemento. */
+  _el() {
+    let el = document.getElementById('carregando-listas');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'carregando-listas';
+      el.className = 'carregando-listas hidden';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+      document.body.appendChild(el);
+    }
+    return el;
+  },
+  /* Contexto: uma busca de lista começou. Pseudocódigo: 1. conta; 2. mostra depois de 300 ms. */
+  inicio() {
+    this._emAndamento++;
+    if (this._timer) return;
+    this._timer = setTimeout(() => {
+      this._timer = null;
+      if (this._emAndamento > 0) this._mostrar();
+    }, 300);
+  },
+  /* Contexto: uma busca de lista terminou. Pseudocódigo: 1. desconta; 2. zerou -> esconde. */
+  fim() {
+    this._emAndamento = Math.max(0, this._emAndamento - 1);
+    if (this._emAndamento === 0) {
+      if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+      this._el().classList.add('hidden');
+    } else if (!this._el().classList.contains('hidden')) {
+      this._mostrar();
+    }
+  },
+  _mostrar() {
+    const el = this._el();
+    el.textContent = this._emAndamento > 1 ? `⏳ Carregando listas… (${this._emAndamento})` : '⏳ Carregando lista…';
+    el.classList.remove('hidden');
+  },
+};
+
 async function api(method, path, body) {
   const t0 = performance.now();
+  // [2026-09-28] buscas de lista acendem o aviso "Carregando lista…" (IndicadorCarregando).
+  const ehLista = method === 'GET' && typeof path === 'string' && path.startsWith('/api/beehus/filters/');
+  if (ehLista) IndicadorCarregando.inicio();
   const opts = {method, headers: {'Content-Type': 'application/json'}};
   if (body !== undefined) opts.body = JSON.stringify(body);
   let status = 0, respBody = null;
@@ -3121,6 +3179,7 @@ async function api(method, path, body) {
     respBody = {error: String(e)};
     return {ok: false, status: 0, body: respBody};
   } finally {
+    if (ehLista) IndicadorCarregando.fim();
     ApiLog.add(method, path, status, respBody, Math.round(performance.now() - t0));
   }
 }
@@ -3494,8 +3553,12 @@ const IdentifyTxn = {
   aplicarVariasEmpresas() {
     const multi = this._emVariasEmpresas();
     const sel = document.getElementById('i-company');
-    const estavaTravado = sel.disabled;
-    sel.disabled = multi;
+    const estavaTravado = sel.disabled || sel.value === VALOR_TODAS_EMPRESAS;
+    // [2026-09-28] Todas -> o <select> mostra "★ Todas as empresas" e fica ativo.
+    const reais = Array.from(sel.options).filter(o => o.value && o.value !== VALOR_TODAS_EMPRESAS);
+    const todas = multi && this._empresasMulti.length === reais.length && emPainelTemplate();
+    sel.disabled = multi && !todas;
+    if (!multi && sel.value === VALOR_TODAS_EMPRESAS) sel.value = '';
     const porEmpresa = [document.getElementById('i-card-groupings'), document.getElementById('i-card-wallets'),
       document.getElementById('i-toggle-advanced'), (document.getElementById('i-entity-add') || {}).parentElement];
     porEmpresa.filter(Boolean).forEach(el => el.classList.toggle('multi-desativado', multi));
@@ -3503,7 +3566,7 @@ const IdentifyTxn = {
     if (resumo) resumo.textContent = multi
       ? `${this._empresasMulti.length} empresas — agrupamentos, carteiras e filtro de entidade desativados (todas de cada empresa)` : '';
     if (multi) {
-      sel.value = this._empresasMulti[0];
+      sel.value = todas ? VALOR_TODAS_EMPRESAS : this._empresasMulti[0];
       this._groupingSelectedIds = new Set();
       this._walletSelectedIds = new Set();
       this._entityIds = new Set();
@@ -3621,6 +3684,13 @@ const IdentifyTxn = {
     this._renderEntities();
     this._renderSecurities();
     if (!cid) return;
+    // [2026-09-28] "Carregando" nos 4 seletores até as listas da empresa chegarem.
+    const carregando = (id, texto) => { const el = document.getElementById(id); if (el) { el.innerHTML = `<option value="" disabled>${texto}</option>`; el.disabled = true; } };
+    carregando('i-grp-available', '⏳ Carregando agrupamentos…');
+    carregando('i-available', '⏳ Carregando carteiras…');
+    carregando('i-entity-add', '⏳ Carregando entidades…');
+    carregando('i-security-add', '⏳ Carregando securities…');
+    ['i-grp-available-count', 'i-available-count'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '…'; });
 
     const [groupings, wallets, entities, securities] = await Promise.all([
       api('GET', `/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`),
@@ -3632,6 +3702,7 @@ const IdentifyTxn = {
     this._wallets    = wallets.body    || [];
     this._entities   = entities.body   || [];
     this._securities = securities.body || [];
+    ['i-grp-available', 'i-available'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
     this._renderGroupingPanes();
     this._renderPanes();
     this._renderEntities();
@@ -7681,6 +7752,9 @@ function makeDatesPipeline(cfg) {
       this._groupings = [];
       this._selectedIds = new Set();
       this._filterIds = null;
+      // [2026-09-28] lista vazia durante a busca parecia "empresa sem nada" — mostra "Carregando".
+      this._carregandoLista = !!cid && cfg.kind !== 'publish';
+      this._renderPanes();
 
       if (cfg.kind === 'wallets') {
         if (!cid) {
@@ -7688,6 +7762,7 @@ function makeDatesPipeline(cfg) {
           this._renderPanes();
           return;
         }
+        fillSelect('grouping', [], 'Carregando agrupamentos…', {disabled: true});
         const [groupings, wallets] = await Promise.all([
           api('GET', `/api/beehus/filters/groupings?companyId=${encodeURIComponent(cid)}`),
           api('GET', `/api/beehus/filters/wallets?companyId=${encodeURIComponent(cid)}`),
@@ -7704,6 +7779,7 @@ function makeDatesPipeline(cfg) {
       }
       // 'publish': no picker, per-day eligibility is fetched in run()
 
+      this._carregandoLista = false;
       this._renderPanes();
     },
 
@@ -7718,6 +7794,11 @@ function makeDatesPipeline(cfg) {
 
     _renderPanes() {
       if (cfg.kind === 'publish') return;
+      if (this._carregandoLista) {   // [2026-09-28] busca em andamento (onCompanyChange)
+        $('available').innerHTML = '<option value="" disabled>⏳ Carregando lista…</option>';
+        $('available-count').textContent = '…';
+        return;
+      }
       const items     = (cfg.kind === 'wallets') ? this._wallets : this._groupings;
       const filterIds = (cfg.kind === 'wallets') ? this._filterIds : null;
 
@@ -7746,7 +7827,7 @@ function makeDatesPipeline(cfg) {
     },
     addAll() {
       if (cfg.kind === 'publish') return;
-      Array.from($('available').options).forEach(o => this._selectedIds.add(o.value));
+      Array.from($('available').options).forEach(o => { if (o.value && !o.disabled) this._selectedIds.add(o.value); });
       this._renderPanes();
     },
     removeSelected() {
@@ -9339,7 +9420,8 @@ const PublishDates = makeDatesPipeline({
     },
 
     async _refreshPicker() {
-      const cid = $$('company').value;
+      // [2026-09-28] "Todas as empresas" no <select> não é uma empresa: o seletor fica desativado.
+      const cid = ($$('company').value === '__todas__') ? '' : $$('company').value;
       const dt  = $$('initialDate').value;
       const noDate = $$('pkr-no-date');
       const isUnpub = (this._action === 'unpublish');
@@ -9357,6 +9439,8 @@ const PublishDates = makeDatesPipeline({
         return;
       }
       if (noDate) noDate.classList.add('hidden');
+      this._carregandoPicker = true;   // [2026-09-28] "Carregando lista de agrupamentos…" até a resposta
+      this._renderPickerPanes();
 
       if (isUnpub) {
         const r = await api('GET',
@@ -9395,6 +9479,7 @@ const PublishDates = makeDatesPipeline({
       for (const id of Array.from(this._selectedIds)) {
         if (!eligibleIds.has(id)) this._selectedIds.delete(id);
       }
+      this._carregandoPicker = false;
       this._renderPickerPanes();
     },
 
@@ -9413,6 +9498,13 @@ const PublishDates = makeDatesPipeline({
       const avail = $$('pkr-available');
       const sel   = $$('pkr-selected');
       if (!avail || !sel) return;
+      if (this._carregandoPicker) {   // [2026-09-28] busca em andamento (_refreshPicker)
+        avail.innerHTML = '<div class="picker-row picker-row-carregando">⏳ Carregando lista de agrupamentos…</div>';
+        $$('pkr-available-count').textContent = '…';
+        const fb = $$('pkr-filter-summary'); if (fb) fb.classList.add('hidden');
+        const vazio = $$('pkr-all-published'); if (vazio) vazio.classList.add('hidden');
+        return;
+      }
 
       // [2026-09-25, SWAT-05] Mesma regra da trava do servidor (_regraTrava).
       const regra = this._regraTrava();
@@ -9528,7 +9620,10 @@ const PublishDates = makeDatesPipeline({
         // agrupamento não publicado" (= tudo já publicado): diz que falhou.
         const L = this.ACTION_LABELS[isUnpub ? 'unpublish' : 'publish'];
         const falhou = !isUnpub && !!this._erroPicker;
-        allPub.textContent = falhou ? 'falha ao consultar o Beehus (veja o Log)' : L.emptyBadge;
+        // [2026-09-28] a lista é a da DATA INICIAL: o aviso diz qual (os outros dias da faixa são
+        // checados na hora de publicar e podem ter agrupamentos).
+        const dataRef = (!isUnpub && dt) ? ` em ${dt.slice(8, 10)}/${dt.slice(5, 7)}` : '';
+        allPub.textContent = falhou ? 'falha ao consultar o Beehus (veja o Log)' : `${L.emptyBadge}${dataRef}`;
         allPub.title       = falhou ? this._erroPicker : L.emptyBadgeTitle;
         allPub.classList.toggle('badge-erro', falhou);
         allPub.classList.toggle('hidden', !(empty || falhou));
@@ -10225,6 +10320,44 @@ const FaixaPadrao = {
      1. Cria a caixa (botão, resumo #<px>-multi-resumo, painel) logo depois do <select>.
      2. Clique no botão abre/fecha o painel (se podeAbrir()); clique fora dele fecha.
      3. Marcar/desmarcar chama definir(ids) na ordem do <select>. */
+/* Contexto:
+   Opção "★ Todas as empresas (N)" no topo do <select> de empresa [2026-09-28, pedido do usuário:
+   "poder selecionar todas as Empresas para processar"] — o mesmo que marcar "Todas" no "várias
+   empresas ▾", mas à vista. SÓ nos painéis Template (emPainelTemplate). Mantém a opção mesmo quando o <select> é recarregado (init/escopo).
+   Quem instala trata a escolha no onCompanyChange (valor '__todas__'). Não retorna nada.
+   Pseudocódigo: 1. Garante a opção logo depois do placeholder, com a contagem das empresas reais.
+   2. Observa o <select>: lista recarregada -> garante de novo. */
+const VALOR_TODAS_EMPRESAS = '__todas__';
+
+/* Contexto:
+   A ferramenta está aberta dentro do Painel · Template ou do Painel · Template (SLA)? [2026-09-28,
+   pedido do usuário: "vamos deixar a seleção de todas empresas somente no Painel - Template e Painel -
+   Template (SLA)"] Lá o <select> já é recortado pelo escopo do Template, então "todas" = as empresas do
+   Template; no Painel de Controle normal "todas" seriam todas as que o token enxerga. O escopo vem do
+   painel-pai (window.swatResolveScope, base.html). Retorna bool. */
+function emPainelTemplate() {
+  try { return typeof window.swatResolveScope === 'function' && !!window.swatResolveScope(); }
+  catch (e) { return false; }
+}
+
+function instalarOpcaoTodasEmpresas(sel) {
+  const garantir = () => {
+    const reais = Array.from(sel.options).filter(o => o.value && o.value !== VALOR_TODAS_EMPRESAS);
+    let opt = sel.querySelector(`option[value="${VALOR_TODAS_EMPRESAS}"]`);
+    if (!reais.length || !emPainelTemplate()) { if (opt) opt.remove(); return; }   // só nos painéis Template
+    const texto = `★ Todas as empresas (${reais.length})`;
+    if (!opt) {
+      opt = document.createElement('option');
+      opt.value = VALOR_TODAS_EMPRESAS;
+      const placeholder = Array.from(sel.options).find(o => !o.value);
+      sel.insertBefore(opt, placeholder ? placeholder.nextSibling : sel.firstChild);
+    }
+    if (opt.textContent !== texto) opt.textContent = texto;
+  };
+  new MutationObserver(garantir).observe(sel, {childList: true});
+  garantir();
+}
+
 function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
   const esc = (t) => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const caixa = document.createElement('div');
@@ -10234,11 +10367,14 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     <div class="multi-empresas-painel hidden" id="${px}-multi-painel"></div>`;
   sel.insertAdjacentElement('afterend', caixa);
   const painel = caixa.querySelector('.multi-empresas-painel');
-  const opcoes = () => Array.from(sel.options).filter(o => o.value);
+  const opcoes = () => Array.from(sel.options).filter(o => o.value && o.value !== VALOR_TODAS_EMPRESAS);
   const desenhar = () => {
     const marcadas = new Set(obter());
     const todas = opcoes().length > 0 && opcoes().every(o => marcadas.has(o.value));
-    painel.innerHTML = `<label class="me-todas"><input type="checkbox" data-todas ${todas ? 'checked' : ''}> <b>Todas</b> (${opcoes().length})</label>` +
+    // [2026-09-28] "Todas" só nos painéis Template; fora deles, escolhe-se empresa por empresa.
+    const linhaTodas = emPainelTemplate()
+      ? `<label class="me-todas"><input type="checkbox" data-todas ${todas ? 'checked' : ''}> <b>Todas</b> (${opcoes().length})</label>` : '';
+    painel.innerHTML = linhaTodas +
       opcoes().map(o => `<label><input type="checkbox" value="${esc(o.value)}" ${marcadas.has(o.value) ? 'checked' : ''}> ${esc(o.textContent)}</label>`).join('');
   };
   caixa.querySelector('.multi-empresas-btn').addEventListener('click', () => {
@@ -10278,19 +10414,34 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
     const sel = document.getElementById(`${px}-company`);
     if (!sel) continue;
     obj._empresasMulti = [];
-    const opcoes = () => Array.from(sel.options).filter(o => o.value);
+    const opcoes = () => Array.from(sel.options).filter(o => o.value && o.value !== VALOR_TODAS_EMPRESAS);
+    instalarOpcaoTodasEmpresas(sel);
     // Seletores de carteira/agrupamento da view (menos a lista de datas específicas).
+    // [2026-09-28] A seção que contém o seletor de EMPRESA nunca é desativada inteira: no Processar o
+    // #pcd-grouping (select escondido, legado) mora no 1º cartão, junto com empresa, modo e datas — e
+    // desativar a seção travava o "Faixa de datas" e as datas com várias empresas. Ali, select
+    // escondido é ignorado e campo visível desativa só o próprio bloco.
     const seletores = () => Array.from(document.querySelectorAll(
       `#${px}-available, #${px}-selected, #${px}-grouping, #${px}-pkr-available, #${px}-pkr-selected`))
-      .map(el => el.closest('section') || el).filter((el, i, a) => a.indexOf(el) === i && !el.id.endsWith('dates-card'));
+      .map(el => {
+        const secao = el.closest('section');
+        if (secao && secao.contains(sel)) return el.classList.contains('hidden') ? null : (el.parentElement || el);
+        return secao || el;
+      })
+      .filter((el, i, a) => el && a.indexOf(el) === i && !(el.id || '').endsWith('dates-card'));
 
     /* Aplica o estado "várias empresas" na tela e no objeto da ferramenta. */
     const aplicar = () => {
       const ids = obj._empresasMulti;
       const multi = ids.length > 1;
-      sel.disabled = multi;
+      // [2026-09-28] Todas marcadas -> o <select> mostra "★ Todas as empresas" e fica ativo (escolher
+      // uma empresa volta ao normal); subconjunto -> como antes (travado na 1ª).
+      // (só nos painéis Template existe a opção "★ Todas"; fora deles, todas marcadas uma a uma = como antes)
+      const todas = multi && ids.length === opcoes().length && emPainelTemplate();
+      sel.disabled = multi && !todas;
+      if (!multi && sel.value === VALOR_TODAS_EMPRESAS) sel.value = '';
       if (multi) {
-        sel.value = ids[0];
+        sel.value = todas ? VALOR_TODAS_EMPRESAS : ids[0];
         obj._selectedIds = new Set();
         if (obj._groupingSelectedIds) obj._groupingSelectedIds = new Set();
       }
@@ -10304,6 +10455,14 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
       definir: (ids) => { obj._empresasMulti = ids; aplicar(); },
       podeAbrir: () => !obj._running,
     });
+    // [2026-09-28] "★ Todas as empresas" escolhida no próprio <select> = marcar "Todas"; uma empresa
+    // escolhida com várias marcadas volta para 1 empresa.
+    const trocaOriginal = obj.onCompanyChange.bind(obj);
+    obj.onCompanyChange = function (...a) {
+      if (sel.value === VALOR_TODAS_EMPRESAS) { obj._empresasMulti = opcoes().map(o => o.value); aplicar(); return; }
+      if (obj._empresasMulti.length > 1) { obj._empresasMulti = []; aplicar(); }
+      return trocaOriginal(...a);
+    };
     // Confirmação mostra as empresas.
     const confirmarOriginal = obj.confirm.bind(obj);
     obj.confirm = function (...a) {
@@ -10332,6 +10491,14 @@ function montarSeletorVariasEmpresas(sel, px, {obter, definir, podeAbrir}) {
 (function _instalarVariasEmpresasTransacoes() {
   const sel = document.getElementById('i-company');
   if (!sel || typeof IdentifyTxn === 'undefined') return;
+  instalarOpcaoTodasEmpresas(sel);
+  const trocaOriginal = IdentifyTxn.onCompanyChange.bind(IdentifyTxn);
+  IdentifyTxn.onCompanyChange = function (...a) {   // [2026-09-28] "★ Todas as empresas" no <select>
+    const reais = Array.from(sel.options).filter(o => o.value && o.value !== VALOR_TODAS_EMPRESAS).map(o => o.value);
+    if (sel.value === VALOR_TODAS_EMPRESAS) { this._empresasMulti = reais; this.aplicarVariasEmpresas(); return; }
+    if (this._empresasMulti.length > 1) { this._empresasMulti = []; this.aplicarVariasEmpresas(); }
+    return trocaOriginal(...a);
+  };
   const {painel} = montarSeletorVariasEmpresas(sel, 'i', {
     obter: () => IdentifyTxn._empresasMulti,
     definir: (ids) => { IdentifyTxn._empresasMulti = ids; IdentifyTxn.aplicarVariasEmpresas(); },

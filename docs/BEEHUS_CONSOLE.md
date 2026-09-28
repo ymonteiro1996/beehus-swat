@@ -702,6 +702,21 @@ foram alteradas.
 
 ### Pipelines "por datas" (single-step)
 
+> **[2026-09-28, pedido do usuário: "melhorar a ferramenta como um todo, mostrando mensagem de carregando lista.
+> Também poder selecionar todas as Empresas para processar" + "deixar a seleção de todas empresas somente no Painel -
+> Template e Painel - Template (SLA)"]**
+> - **Carregando:** `IndicadorCarregando` (dentro de `api()`) mostra o aviso fixo "⏳ Carregando lista…" enquanto houver
+>   busca a `/api/beehus/filters/*` com mais de 300 ms — vale para todas as ferramentas. Dentro das listas: fábrica
+>   (Processar, NAV Wallets, NAV Groupings, Excluir Pos) "Carregando lista…" / "Carregando agrupamentos…"; Publicação
+>   "Carregando lista de agrupamentos…" e o aviso de vazio diz a data da lista ("… em 17/09" — a lista é da data
+>   inicial); Transações nos 4 seletores. "»" não copia a linha de carregando.
+> - **"★ Todas as empresas (N)"** no próprio `<select>` de Processar, NAV Wallets, NAV Groupings, Publicação e Transações
+>   (`instalarOpcaoTodasEmpresas`) e a linha "Todas" do "várias empresas ▾" — **só dentro dos painéis Template**
+>   (`emPainelTemplate()` = há escopo herdado do painel-pai), onde a lista já é a das empresas do Template. No Painel de
+>   Controle normal o "várias empresas ▾" continua, empresa por empresa. Escolher uma empresa volta ao modo normal.
+> - Corrigido junto: no Processar, várias empresas desativava o cartão inteiro (empresa, modo e datas) porque o
+>   `#pcd-grouping` escondido mora nele — agora a seção do seletor de empresa nunca é desativada inteira.
+
 > **[2026-09-28, relato do usuário: publicar a Blue3 de 17 a 25/09 parava no 1º dia com "PATCH .../publish
 > failed: 500"] Publicação isola os agrupamentos que o Beehus recusa.** Desde o SWAT-05 o servidor manda a lista
 > explícita dos liberados pela trava (antes, com a seleção vazia, mandava `[]` e o Beehus escolhia). Um agrupamento
