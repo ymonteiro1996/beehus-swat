@@ -26,7 +26,14 @@ fluxos**, mas com o universo de carteiras recortado ao cadastro
   entra na sua data de SLA = execução − Defasagem (coluna I), em dias úteis
   ANBIMA (`bizdays`, mesmo calendário do ControleCargas). **"M" conta como D-1**
   (decisão do usuário em 24/09/2026; o ControleCargas usa 0). A grade tem uma
-  linha por (empresa, data de SLA), ex.: `Oikos · D-2 · 22/09`.
+  linha por EMPRESA [29/09/2026, pedido do usuário: "tirar os agrupamentos por
+  data" / "não interessa o SLA nos Homes" — antes era 1 linha por (empresa,
+  data de SLA), ex.: `Oikos · D-2 · 22/09`]: o `/rows` continua vindo por
+  (empresa, data de SLA) e o front soma as contagens por empresa (mesmas
+  regras de cor), sem etiqueta de SLA; idem no Quadro da Esteira. Clicar numa
+  célula de empresa com várias datas de SLA abre a escolha da data (só as que
+  têm algo naquela coluna; se só uma tem, abre direto) e o drill-down roda
+  nela, como antes.
 
 ## Como o escopo chega nas rotas
 

@@ -799,7 +799,7 @@ try {
                contam com ISSUE_TYPES = 6 (2+4) e EXTRA_COLS = 5 (3+2) — se essas listas
                mudarem de tamanho em pages/controlpanel.py, ajustar aqui também. -->
           <tr class="text-[9px]">
-            <th rowspan="2" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 {% if panel_mode == 'template_sla' %}w-[190px]{% else %}w-[140px]{% endif %} tracking-wide align-bottom normal-case text-gray-500">{% if panel_mode == 'template_sla' %}Empresa · data SLA{% else %}Empresa{% endif %}</th>
+            <th rowspan="2" class="px-2 py-2.5 text-left sticky left-0 bg-gray-50 z-10 w-[140px] tracking-wide align-bottom normal-case text-gray-500">Empresa</th>
             <th colspan="2" class="px-1 py-1 text-center font-semibold tracking-wide bg-slate-100 text-slate-500 border-r-2 border-white" title="Carteira precisa existir e ter posição bruta carregada antes de qualquer outra etapa.">Pré-requisito</th>
             <th colspan="4" class="px-1 py-1 text-center font-semibold tracking-wide bg-blue-50 text-blue-500 border-r-2 border-white" title="Ativos precisam estar mapeados, classificados e com preço antes do processamento da posição.">Processamento das Carteiras</th>
             <th colspan="1" class="px-1 py-1 text-center font-semibold tracking-wide bg-purple-50 text-purple-500 border-r-2 border-white" title="Transações não identificadas — checagem em paralelo, não bloqueia o resto da esteira.">Reconciliação</th>
@@ -1389,6 +1389,111 @@ try {
   function _focusRowDate(date) { if (date) _currentDate = date; }
   function _fmtBr(iso) { return iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : ""; }
 
+  // [2026-09-29, pedido do usuário: "em todos beehus swat do home, tirar os agrupamentos por data" +
+  // "não interessa o SLA nos Homes"] Somente SLA: o /rows segue vindo 1 linha por (empresa, data de
+  // SLA) — é a unidade dos drill-downs —, mas a grade e o Quadro da Esteira mostram 1 linha por
+  // EMPRESA, sem etiqueta de carência/data, somando as contagens (mesmas regras de cor do servidor:
+  // _cell_cls/_extra_cell). As linhas por data ficam em `subRows`; clicar numa célula de empresa com
+  // mais de uma data abre a escolha da data (só as datas com algo naquela coluna — se só uma tem, vai
+  // direto).
+  let _gridTxnPorData = {};   // Somente SLA: "companyId|data" -> TXN não identificadas
+
+  function _clsPendencia(n) {   // espelha _cell_cls (pages/controlpanel.py)
+    if (n <= 0) return "text-gray-400";
+    return n < 10 ? "bg-amber-100 text-amber-700 font-medium" : "bg-red-100 text-red-700 font-medium";
+  }
+  function _celulaExtra(count, total) {   // espelha _extra_cell (total null = modo "count", GAP)
+    if (total == null) return {count, total: null, label: String(count), cls: count > 0 ? "bg-red-100 text-red-700 font-medium" : "text-gray-400"};
+    if (total <= 0)     return {count, total, label: "—", cls: "text-gray-400"};
+    const cls = count >= total ? "bg-green-100 text-green-700 font-medium"
+      : count === 0 ? "bg-red-100 text-red-700 font-medium" : "bg-amber-100 text-amber-700 font-medium";
+    return {count, total, label: `${count}/${total}`, cls};
+  }
+
+  /* Contexto: 1 linha por empresa a partir das linhas (empresa, data de SLA) do /rows. Retorna
+     [linha], cada uma com subRows (as originais, data mais recente primeiro); `date` só quando a
+     empresa tem 1 data de SLA (senão null — o clique pergunta a data). */
+  function _juntarLinhasPorEmpresa(rows) {
+    const porEmpresa = new Map();
+    rows.forEach(r => {
+      if (!porEmpresa.has(r.companyId)) porEmpresa.set(r.companyId, []);
+      porEmpresa.get(r.companyId).push(r);
+    });
+    return [...porEmpresa.values()].map(subs => {
+      subs = subs.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+      const base = subs[0];
+      if (subs.length === 1) return {...base, rowKey: base.companyId, subRows: subs};
+      const cells = base.cells.map((c, i) => {
+        const n = subs.reduce((t, r) => t + (r.cells[i]?.count || 0), 0);
+        return {...c, count: n, label: n > 0 ? String(n) : "—", cls: _clsPendencia(n)};
+      });
+      const extras = (base.extras || []).map((e, i) => {
+        const n = subs.reduce((t, r) => t + (r.extras[i]?.count || 0), 0);
+        const tot = e.total == null ? null : subs.reduce((t, r) => t + (r.extras[i]?.total || 0), 0);
+        return {...e, ..._celulaExtra(n, tot)};
+      });
+      return {companyId: base.companyId, company: base.company, date: null, rowKey: base.companyId,
+              cells, extras, txn: base.txn, subRows: subs};
+    });
+  }
+
+  // Valor de uma linha (por data) numa coluna — mostra na escolha da data e decide quais datas entram.
+  function _valorNaColuna(sub, tipo, chave) {
+    if (tipo === "issue") { const c = (sub.cells || []).find(x => x.type === chave); const n = c ? c.count : 0; return {tem: n > 0, texto: String(n)}; }
+    if (tipo === "txn")   { const n = _gridTxnPorData[_rowKeyOf(sub)] || 0; return {tem: n > 0, texto: String(n)}; }
+    const e = (sub.extras || []).find(x => x.key === chave);
+    return {tem: !!(e && e.total > 0), texto: e ? e.label : "—"};
+  }
+
+  /* Contexto: roda `acao(data)` na data de SLA certa da linha `rowKey`. Com várias datas, as que têm
+     algo na coluna: 1 -> direto; 2+ -> escolha (perto de `ancora`). _currentDate vira a data. */
+  function _comDataDaLinha(rowKey, ancora, tipo, chave, acao) {
+    const r = _gridRows.find(x => _rowKeyOf(x) === rowKey);
+    const subs = (r && r.subRows) || [];
+    if (!IS_SLA || subs.length <= 1) {
+      const d = (r && (r.date || (subs[0] && subs[0].date))) || _currentDate;
+      _focusRowDate(d); acao(d); return;
+    }
+    let opcoes = subs.filter(x => _valorNaColuna(x, tipo, chave).tem);
+    if (!opcoes.length) opcoes = subs;
+    if (opcoes.length === 1) { _focusRowDate(opcoes[0].date); acao(opcoes[0].date); return; }
+    _escolherDataSla(ancora, r, opcoes, tipo, chave, d => { _focusRowDate(d); acao(d); });
+  }
+
+  function _escolherDataSla(ancora, r, opcoes, tipo, chave, aoEscolher) {
+    let box = document.getElementById("sla-escolha-data");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "sla-escolha-data";
+      box.className = "fixed bg-white border border-gray-200 rounded-lg shadow-lg p-1 text-[11px] text-gray-700";
+      box.style.zIndex = "1000";
+      box.style.minWidth = "210px";
+      document.body.appendChild(box);
+      document.addEventListener("click", ev => { if (!box.contains(ev.target)) box.style.display = "none"; }, true);
+      document.addEventListener("keydown", ev => { if (ev.key === "Escape") box.style.display = "none"; });
+    }
+    box.innerHTML = `<div class="px-2 py-1 text-[10px] uppercase tracking-wide text-gray-400">${_escHtml(r.company)} — escolha a data</div>`
+      + opcoes.map((x, i) => `<button type="button" data-i="${i}" class="w-full flex items-center justify-between gap-3 px-2 py-1 rounded hover:bg-blue-50 text-left">
+           <span>${_escHtml(_fmtBr(x.date))}</span>
+           <span class="font-mono text-gray-500">${_escHtml(_valorNaColuna(x, tipo, chave).texto)}</span></button>`).join("");
+    box.querySelectorAll("button[data-i]").forEach(b => b.addEventListener("click", () => {
+      box.style.display = "none";
+      aoEscolher(opcoes[Number(b.dataset.i)].date);
+    }));
+    const rect = ancora ? ancora.getBoundingClientRect() : {left: innerWidth / 2, bottom: innerHeight / 2, top: innerHeight / 2};
+    box.style.display = "block";
+    const w = box.offsetWidth, h = box.offsetHeight;
+    box.style.left = Math.max(8, Math.min(rect.left, innerWidth - w - 8)) + "px";
+    box.style.top  = (rect.bottom + 4 + h > innerHeight ? Math.max(8, rect.top - h - 4) : rect.bottom + 4) + "px";
+  }
+  // Quadro da Esteira: card (1 por empresa) -> mesma escolha da data.
+  function _acaoEsteira(rowKey, kind, key, ancora) {
+    const r = _gridRows.find(x => _rowKeyOf(x) === rowKey);
+    if (!r) return;
+    _comDataDaLinha(rowKey, ancora, kind === "issue" ? "issue" : "cell", key, () =>
+      kind === "issue" ? openModal(r.companyId, r.company, key) : openCellDetail(r.companyId, r.company, key));
+  }
+
   const ScopeBar = {
     _key() { return "controlpanel.scopeCompany." + PANEL_MODE; },
     async init() {
@@ -1516,6 +1621,19 @@ try {
       .then(r => r.json())
       .then(({ items }) => {
         if (seq !== _gridSeq) return;   // usuário trocou de data/empresa — descarta
+        // [2026-09-29] Somente SLA: a grade é por empresa — soma as datas de SLA de cada uma e
+        // guarda o valor de cada data (escolha da data no clique).
+        if (IS_SLA) {
+          _gridTxnPorData = {};
+          const porEmpresa = {};
+          (items || []).forEach(it => {
+            const n = it.txn?.count || 0;
+            _gridTxnPorData[_rowKeyOf(it)] = n;
+            const acc = porEmpresa[it.companyId] || (porEmpresa[it.companyId] = {companyId: it.companyId, company: it.company, rowKey: it.companyId, n: 0});
+            acc.n += n;
+          });
+          items = Object.values(porEmpresa).map(a => ({...a, txn: {count: a.n, label: a.n > 0 ? String(a.n) : "—", cls: _clsPendencia(a.n)}}));
+        }
         const byId = {};
         (items || []).forEach(it => { byId[_rowKeyOf(it)] = it; });
         // 1) Atualiza as células TXN das linhas já renderizadas.
@@ -1642,6 +1760,8 @@ try {
     fetch(`/api/controlpanel/rows?${params}`).then(r => r.json()).then(({ rows }) => {
       if (seq !== _gridSeq) return;   // chegou resposta de um carregamento anterior
       rows = rows || [];
+      // [2026-09-29] Somente SLA: 1 linha por empresa (ver _juntarLinhasPorEmpresa).
+      if (IS_SLA) rows = _juntarLinhasPorEmpresa(rows);
       _gridRows = rows;
       if (!rows.length && PANEL_MODE) {
         // (Painel normal segue igual: a coluna TXN ainda pode anexar linhas.)
@@ -1652,16 +1772,13 @@ try {
         return;
       }
       document.getElementById("tbody").innerHTML = rows.map(r => {
-        const rowDate = r.date || date;
-        // Somente SLA: 1 linha por (empresa, data de SLA) — rótulo com a
-        // defasagem e a data que aquela linha avalia.
-        // Nome trunca, etiqueta de SLA nunca (é o que diferencia as linhas).
-        const nameCell = IS_SLA
-          ? `<div class="flex items-center min-w-0">${_bottleneckBadge(r)}<span class="truncate">${_escHtml(r.company)}</span>
-               <span class="ml-1 flex-shrink-0 px-1.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-semibold" title="Carteiras ${_escHtml(r.slaLabel || "")} avaliadas em ${_escHtml(rowDate)}">${_escHtml(r.slaLabel || "")} · ${_escHtml(_fmtBr(rowDate))}</span></div>`
-          : `${_bottleneckBadge(r)}${_escHtml(r.company)}`;
+        // Somente SLA com várias datas na empresa: sem data da linha (o clique pergunta).
+        const rowDate = IS_SLA ? (r.date || "") : (r.date || date);
+        // [2026-09-29, "não interessa o SLA nos Homes"] 1 linha por empresa, só o nome (sem a
+        // etiqueta "D-n · dd/mm" que separava as linhas por data de SLA).
+        const nameCell = `${_bottleneckBadge(r)}${_escHtml(r.company)}`;
         return `<tr class="border-t border-gray-100 hover:bg-gray-50" data-company="${_escHtml(r.company.toLowerCase())}" data-company-id="${_escHtml(r.companyId)}" data-row-key="${_escHtml(_rowKeyOf(r))}" data-date="${_escHtml(rowDate)}">
-          <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(r.company)}${IS_SLA ? " — " + _escHtml(r.slaLabel || "") + " · " + _escHtml(rowDate) : ""}">${nameCell}</td>
+          <td class="sticky left-0 bg-white px-2 py-1.5 font-medium text-gray-700 z-10 truncate" title="${_escHtml(r.company)}">${nameCell}</td>
           ${r.cells.map((c, i) => {
             // Divisor de "estação da esteira" — depois da Posição (fim de
             // Pré-requisito) e depois da última (Preço para o dia, fim de
@@ -1755,24 +1872,28 @@ try {
     // Progress-column drill-down (Posições Processadas / NAV Wallet /
     // NAV Grouping / Published): open the cell-detail modal with the
     // grouping/wallet breakdown.
+    // [2026-09-29] Somente SLA (1 linha por empresa): _comDataDaLinha acha a data de SLA da coluna
+    // (ou pergunta, com várias) antes de abrir; fora dele, a data da linha, como antes.
+    const chaveLinha = rowTr ? rowTr.dataset.rowKey : "";
     const cellTd = e.target.closest("td.js-open-cell");
     if (cellTd) {
-      openCellDetail(
+      _comDataDaLinha(chaveLinha, cellTd, "cell", cellTd.dataset.column, () => openCellDetail(
         cellTd.dataset.companyId,
         cellTd.dataset.companyName,
         cellTd.dataset.column,
-      );
+      ));
       return;
     }
     // TXN drill-down: open Identificar Transações for this company+date.
     const txnTd = e.target.closest("td.js-open-txn");
     if (txnTd) {
-      _openIdentifyTxn(txnTd.dataset.companyId, txnTd.dataset.date);
+      _comDataDaLinha(chaveLinha, txnTd, "txn", "txn", d => _openIdentifyTxn(txnTd.dataset.companyId, d || txnTd.dataset.date));
       return;
     }
     const td = e.target.closest("td.js-open-modal");
     if (!td) return;
-    openModal(td.dataset.companyId, td.dataset.companyName, td.dataset.issueType);
+    _comDataDaLinha(chaveLinha, td, "issue", td.dataset.issueType,
+      () => openModal(td.dataset.companyId, td.dataset.companyName, td.dataset.issueType));
   });
 
   // Header click → mesmo modal de detalhe de sempre, só que cruzando TODAS as
@@ -6462,18 +6583,16 @@ try {
     const done = _gridRows.filter(row => !_ESTEIRA_STAGES.some(stage => _esteiraPending(row, stage)));
 
     const cardHtml = (row, stage) => {
-      // Somente SLA: o card abre o drill-down na data de SLA da própria linha.
-      const focus = `_focusRowDate('${_escJs(row.date || _gridDate || "")}');`;
+      // Somente SLA [2026-09-29]: 1 card por empresa; o clique acha a data de SLA da etapa (ou
+      // pergunta, com várias) — _acaoEsteira/_comDataDaLinha.
       const onclick = stage
-        ? (stage.kind === "issue"
-            ? `${focus}openModal('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`
-            : `${focus}openCellDetail('${_escJs(row.companyId)}','${_escJs(row.company)}','${_escJs(stage.key)}')`)
+        ? `_acaoEsteira('${_escJs(_rowKeyOf(row))}','${stage.kind === "issue" ? "issue" : "cell"}','${_escJs(stage.key)}',this)`
         : "";
       const gap = gapByCompany[_rowKeyOf(row)];
       const gapBadge = gap ? `<span class="text-amber-500 flex-shrink-0" title="${gap} carteira(s) com GAP">⚠</span>` : "";
       const countLine = stage
         ? `<span class="block text-[10px] text-gray-400 mt-0.5">${_escHtml(_esteiraCountLabel(row, stage))}</span>` : "";
-      const label = IS_SLA ? `${row.company} · ${row.slaLabel || ""} ${_fmtBr(row.date)}` : row.company;
+      const label = row.company;   // [2026-09-29] 1 card por empresa, sem SLA
       return `
         <button ${onclick ? `onclick="${onclick}"` : "disabled"}
           class="w-full text-left px-2 py-1.5 bg-white border border-gray-200 rounded text-[11px] text-gray-700 ${onclick ? "hover:border-blue-300 hover:bg-blue-50 cursor-pointer" : "cursor-default"}"
