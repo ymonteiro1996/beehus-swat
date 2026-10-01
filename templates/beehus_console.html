@@ -1212,6 +1212,10 @@
               <span id="pbd-pkr-all-published" class="hidden ml-1 px-1.5 py-0.5 rounded badge-info"
                     title="Não há agrupamentos com navPackage não-publicado nesta data — todos já estão publicados, ou ainda não houve cálculo NAV Groupings."
               >nenhum agrupamento não publicado</span>
+              <button type="button" id="pbd-pkr-copy-available"
+                      class="ml-1 px-1.5 py-0.5 rounded border border-gray-300 text-[10px] text-gray-600 hover:bg-gray-100"
+                      title="Copiar os nomes da lista Disponíveis (só os visíveis, respeitando a busca), um por linha"
+                      onclick="PublishDates.copyPickerAvailable()">⧉ Copiar</button>
             </span>
           </div>
           <div class="picker-row text-[10px] uppercase tracking-wide text-gray-400 border-b" style="cursor:default; border-radius:0;">
@@ -9765,6 +9769,37 @@ const PublishDates = makeDatesPipeline({
       this._selectedIds.clear();
       this._selHighlighted.clear();
       this._renderPickerPanes();
+    },
+    // [2026-10-01, pedido do usuário: "copiar agrupamentos disponível na lista"] Copia os nomes das
+    // linhas VISÍVEIS de "Disponíveis" (respeita a busca por nome), um por linha — cola em coluna no
+    // Excel. Inclui os "sem Δ" que aparecem na lista (mesma ordem da tela).
+    async copyPickerAvailable() {
+      const lista = $$('pkr-available');
+      const nomes = Array.from(lista ? lista.querySelectorAll('.picker-row') : [])
+        .filter(r => r.style.display !== 'none')
+        .map(r => (r.querySelector('.picker-row-name') || r).textContent.trim())
+        .filter(Boolean);
+      const btn = $$('pkr-copy-available');
+      if (!nomes.length) { alert('Nada a copiar — a lista "Disponíveis" está vazia.'); return; }
+      const text = nomes.join('\n');
+      const feito = () => {
+        if (!btn) return;
+        btn.textContent = `Copiado (${nomes.length})`;
+        setTimeout(() => { btn.textContent = '⧉ Copiar'; }, 1500);
+      };
+      try {
+        await navigator.clipboard.writeText(text);
+        feito();
+      } catch (e) {
+        // navigator.clipboard falha em http/sandbox — cai no textarea + execCommand (igual ao Log).
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) feito(); else alert('Falha ao copiar: ' + e);
+      }
     },
 
     // Bulk-upload an .xlsx of groupingIds (one per cell, no header). The
